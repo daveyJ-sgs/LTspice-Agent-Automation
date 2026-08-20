@@ -1,0 +1,9 @@
+* Native LTspice .step example
+.param RVAL=1k
+V1 in 0 AC 1
+R1 in out {RVAL}
+C1 out 0 1u
+.ac dec 10 10 1Meg
+.meas ac gain_at_1k FIND mag(V(out)) AT=1k
+.step param RVAL list 1k 2.2k 4.7k 10k 22k 47k
+.end

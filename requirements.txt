@@ -1,0 +1,2 @@
+# Optional dependency used by plotting examples and the static report images.
+matplotlib>=3.7
