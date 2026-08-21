@@ -60,26 +60,35 @@ def main() -> None:
     assert_between("fall propagation delay", abs(measurements["tpd_fall"]), 0, 5e-6)
     assert_between("rise propagation delay", abs(measurements["tpd_rise"]), 0, 5e-6)
 
-    plot_path = output_dir / "nand_transient.png"
     time_us = [value * 1e6 for value in time]
-    plt.figure(figsize=(9, 5))
-    plt.step(time_us, a, where="post", label="A", linewidth=1.5)
-    plt.step(time_us, b, where="post", label="B", linewidth=1.5)
-    plt.plot(time_us, out, label="CMOS NAND output", linewidth=2)
-    plt.plot(time_us, reference, "--", label="behavioral reference", linewidth=1)
-    plt.axhline(THRESHOLD, color="0.65", linestyle=":", linewidth=1)
-    plt.grid(True, linestyle=":")
-    plt.xlabel("Time (µs)")
-    plt.ylabel("Voltage (V)")
-    plt.title("3.3 V CMOS NAND gate transient response")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(plot_path, dpi=150)
-    plt.close()
+    plot_specs = [
+        ("nand_input_a.png", "Input A", a, "tab:blue"),
+        ("nand_input_b.png", "Input B", b, "tab:orange"),
+        ("nand_output.png", "CMOS NAND output", out, "tab:green"),
+        ("nand_behavioral_reference.png", "Behavioral reference", reference, "tab:red"),
+    ]
+    plot_paths: list[Path] = []
+    for filename, label, values, color in plot_specs:
+        plot_path = output_dir / filename
+        plt.figure(figsize=(9, 3.5))
+        draw = plt.step if label in {"Input A", "Input B"} else plt.plot
+        draw(time_us, values, label=label, color=color, linewidth=2)
+        plt.axhline(THRESHOLD, color="0.65", linestyle=":", linewidth=1)
+        plt.grid(True, linestyle=":")
+        plt.xlabel("Time (µs)")
+        plt.ylabel("Voltage (V)")
+        plt.title(f"3.3 V CMOS NAND: {label}")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(plot_path, dpi=150)
+        plt.close()
+        plot_paths.append(plot_path)
 
     print(f"Raw points: {data.points}")
     print(f"Waveform CSV: {output_dir / 'waveforms.csv'}")
-    print(f"Plot: {plot_path}")
+    print("Plots:")
+    for plot_path in plot_paths:
+        print(f"  {plot_path}")
     print(f"Truth-table samples: {observed}")
     print("PASS/FAIL: PASS")
     print(f"  tpd_fall = {measurements['tpd_fall']:.6g} s")
