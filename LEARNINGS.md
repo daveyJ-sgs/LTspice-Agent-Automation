@@ -24,6 +24,31 @@ The native Mac build tested during development behaved most consistently with
 `-b` for text netlists. `-run` can produce more interactive behavior on some
 installations, so it should be validated per target version.
 
+## LTspice 26 on macOS Tahoe
+
+During validation on an Apple Silicon Mac running macOS 26.3.1, LTspice
+26.0.2.1 repeatedly aborted during startup when invoked from the command line.
+The failure occurred before the netlist was parsed or a simulation began:
+
+- `LTspice -version` exited with `SIGABRT` / exit code `-6`.
+- Batch AC and transient runs failed in the same way, without useful LTspice
+  simulation logs.
+- The installed 26.0.2.1 executable was Intel-only and therefore ran through
+  Rosetta on this machine.
+- The identical Python wrapper and validation netlists passed after replacing
+  it with LTspice 17.2.4, whose executable was a universal x86_64/arm64 build.
+
+This is best treated as an LTspice/macOS/Rosetta compatibility regression, not
+as a netlist or wrapper failure. An Analog Devices forum report independently
+describes LTspice 26.0.2 failing to execute analyses on macOS Tahoe while
+17.2.4 works. Keep 17.2.4 as the validated macOS baseline until a newer LTspice
+release is verified on the target OS and architecture.
+
+When changing simulator versions, record the LTspice version, macOS version,
+CPU architecture, executable architecture, and a small batch regression result.
+This separates simulator startup failures from actual circuit or parser
+failures quickly.
+
 ## Logs and measurements
 
 LTspice writes `.meas` results to its log. The tested Mac installation emitted
@@ -117,6 +142,24 @@ platform-neutral. Windows-specific work is primarily executable discovery,
 path handling, model-library search paths, and validation against the target
 LTspice release. The wrapper supports an explicit executable override so the
 same automation commands can be used on both macOS and Windows.
+
+The first Windows smoke test should verify, in order:
+
+1. `LTSPICE_EXECUTABLE` resolves to the intended `LTspice.exe`.
+2. A minimal text-netlist batch run creates both `.raw` and `.log` files.
+3. The RC AC and transient examples pass their measurement checks.
+4. The CMOS NAND example produces the expected truth-table samples and delay
+   measurements.
+5. A model-library or `.asc` conversion test is run separately, since those
+   paths are more installation- and version-sensitive than text netlists.
+
+PowerShell can launch the same examples with Windows path syntax, for example:
+
+```powershell
+$env:LTSPICE_EXECUTABLE = 'C:\Program Files\ADI\LTspice\LTspice.exe'
+python examples\analyze_rc.py
+python examples\analyze_nand.py
+```
 
 ## Lessons for agent integration
 

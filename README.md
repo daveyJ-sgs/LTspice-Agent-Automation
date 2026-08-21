@@ -98,6 +98,12 @@ wrapper can attempt `.asc` schematics, but older or version-specific schematic
 files may require opening in LTspice and exporting/recreating a text netlist
 before batch execution.
 
+On macOS, validate the LTspice release itself before debugging the automation
+layer. LTspice 26.0.2.1 failed during command-line startup on one Apple Silicon
+Mac running macOS Tahoe, while the same wrapper and netlists passed with
+LTspice 17.2.4. See [LEARNINGS.md](LEARNINGS.md#ltspice-26-on-macos-tahoe) for
+the symptoms and recovery procedure.
+
 For a text-readable raw file, especially for transient analysis:
 
 ```bash
@@ -249,6 +255,12 @@ python ltspice_wrapper.py
 The wrapper uses `subprocess` and `pathlib` rather than shell-specific command
 strings. Validate model-library search paths and representative `.asc` files
 on the target LTspice version before relying on them in production.
+
+The recommended first Windows check is to run `make test`, `make ac`, and
+`make nand` with `LTSPICE_EXECUTABLE` explicitly set. Text-netlist execution,
+waveform parsing, measurements, plots, SQLite history, and the local REST API
+should be portable; executable discovery, model paths, `.asc` compatibility,
+and simulator-version behavior still need to be verified on the laptop.
 
 ## Project status
 
