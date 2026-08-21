@@ -1,7 +1,7 @@
 PYTHON ?= python3
 export PYTHONPATH := .
 
-.PHONY: test ac transient sweep monte-carlo search step dashboard api-help
+.PHONY: test ac transient nand sweep monte-carlo search step dashboard api-help
 
 test:
 	$(PYTHON) -m unittest discover -s tests -v
@@ -11,6 +11,9 @@ ac:
 
 transient:
 	$(PYTHON) examples/analyze_transient.py
+
+nand:
+	$(PYTHON) examples/analyze_nand.py
 
 sweep:
 	$(PYTHON) examples/sweep_rc.py

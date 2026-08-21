@@ -40,8 +40,12 @@ Binary:
     def test_parse_measurements(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "test.log"
-            path.write_text("gain: mag(v(out))=(-35.5dB,0°) at 1000\n", encoding="utf-16le")
-            self.assertEqual(parse_measurements(path), {"gain": -35.5})
+            path.write_text(
+                "gain: mag(v(out))=(-35.5dB,0°) at 1000\n"
+                "tpd=2.5e-9 FROM 1e-6 TO 1.0025e-6\n",
+                encoding="utf-16le",
+            )
+            self.assertEqual(parse_measurements(path), {"gain": -35.5, "tpd": 2.5e-9})
 
     def test_parse_stepped_log(self) -> None:
         log = """.step rval=1000

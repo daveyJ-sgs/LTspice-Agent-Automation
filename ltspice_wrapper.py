@@ -154,7 +154,7 @@ def parse_measurements(log_path: Path) -> dict[str, float]:
 
     measurements: dict[str, float] = {}
     pattern = re.compile(
-        r"^\s*([A-Za-z_][\w]*)\s*:.*?=\(?\s*"
+        r"^\s*([A-Za-z_][\w]*)\s*(?::.*?=\s*|=\s*)\(?\s*"
         r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)(?:[A-Za-z°]+)?",
         re.MULTILINE,
     )

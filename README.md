@@ -72,8 +72,8 @@ python3 -m pip install -r requirements.txt
 ```
 
 Common workflows are also available through `make`: `make test`, `make ac`,
-`make transient`, `make sweep`, `make monte-carlo`, `make search`, `make step`,
-and `make dashboard`.
+`make transient`, `make nand`, `make sweep`, `make monte-carlo`, `make search`,
+`make step`, and `make dashboard`.
 
 Each run gets its own timestamped directory under `runs/`. LTspice writes the
 simulation results there, including the `.raw` and `.log` files. Scalar `.meas`
@@ -162,6 +162,19 @@ and creates a distribution plot:
 ```bash
 PYTHONPATH=. python3 examples/monte_carlo_rc.py
 ```
+
+## Run the CMOS NAND experiment
+
+The NAND experiment drives a transistor-level 3.3 V CMOS NAND gate through all
+four input combinations, compares its output against a behavioral reference,
+and measures propagation delay:
+
+```bash
+PYTHONPATH=. python3 examples/analyze_nand.py
+```
+
+It writes a waveform CSV, transient plot, measurements, and manifest below
+`runs/`. The generated artifacts are intentionally ignored by Git.
 
 ## Search for a target response
 

@@ -63,6 +63,8 @@ circuits:
    component value against a requested electrical result.
 6. An intentionally invalid deck validates failed-run manifests and API error
    reporting.
+7. A transistor-level CMOS NAND validates digital truth-table behavior against
+   a behavioral reference and exercises propagation-delay measurements.
 
 The resulting data flow is:
 
