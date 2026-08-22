@@ -44,6 +44,8 @@ machine-checkable resonant peaking in its frequency response and underdamped
 ringing in its step response — dynamics a single-pole RC circuit can't
 exercise:
 
+![Sallen-Key schematic open in LTspice](docs/images/sallen-key-schematic.png)
+
 ![Sallen-Key frequency response with resonant peaking](docs/images/sallen-key-bode.png)
 
 ![Sallen-Key step response with overshoot and ringing](docs/images/sallen-key-step.png)
