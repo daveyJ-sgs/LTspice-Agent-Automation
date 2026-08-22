@@ -71,6 +71,87 @@ variable counts, point counts, and expected byte lengths rather than assuming
 one layout forever. ASCII output is slower and larger but useful when maximum
 inspectability matters.
 
+## Stepped runs: `points_per_step` of `None` is an answer, not a gap
+
+`.step` with `.ac` gives every run the same number of points, because the
+frequency axis is generated from the sweep specification. `.step` with `.tran`
+does not: the transient solver uses an **adaptive timestep**, so every run has
+a different point count, and there is no fixed stride to slice on.
+
+`_step_shape` already handles this. It finds the block boundaries by looking
+for a reset in the first, monotonic axis, and then:
+
+```python
+return len(lengths), lengths[0] if len(set(lengths)) == 1 else None
+```
+
+`points_per_step` is `None` **specifically to say the blocks are not uniform**.
+It is a positive statement about the data, not a value the parser failed to
+work out.
+
+### The failure this causes
+
+Reading that `None` as "unknown, pick something" produces:
+
+```python
+n = data.points_per_step or 0
+if not n:
+    n = data.points // data.step_count      # WRONG for a .tran
+seg = values[k * n:(k + 1) * n]
+```
+
+Every segment after the first is misaligned, and each one drifts further than
+the last. Nothing raises. The segments are still the right length, still full
+of real numbers, and still plot as smooth waveforms — they are simply cut from
+the wrong places.
+
+Measured cost on a 37-step amplitude sweep of a phono preamplifier: the
+uniform slice reported 1 dB compression at **0.162 mV** of input, which was
+*below* the circuit's normal operating level and would have meant the design
+clipped on every record. Splitting on the axis reset gave **11.0 mV**, which
+cross-checked against the supply rails to within a decibel. Same `.raw` file,
+same parser, same analysis code — only the segmentation differed.
+
+### Do this instead
+
+Split on the axis resetting, which is the real boundary and the same rule the
+parser itself uses:
+
+```python
+raw_axis = data.values[data.variables[0]]      # time, or frequency
+# AC raw files carry a COMPLEX frequency axis; comparing complex numbers
+# raises. Take the real part, the same way _step_shape does.
+axis = [float(v.real) if isinstance(v, complex) else float(v) for v in raw_axis]
+bounds = [0] + [i for i in range(1, len(axis)) if axis[i] < axis[i - 1]] + [len(axis)]
+segments = [slice(a, b) for a, b in zip(bounds, bounds[1:])]
+assert len(segments) == data.step_count
+```
+
+The assertion is worth keeping. If the segment count disagrees with
+`step_count`, the axis is not behaving the way the split assumes and the
+result should not be trusted.
+
+Run against both cases, the difference is stark:
+
+```text
+stepped .ac    step_count=300  segments=300  points_per_step=151   151 points each
+stepped .tran  step_count= 37  segments= 37  points_per_step=None  2504-2704 each
+```
+
+The transient blocks vary by 200 points. A guessed stride of 2548 -- the mean,
+which is what total/step_count gives you -- lands inside that range and matches
+almost none of them.
+
+### The general form
+
+`points_per_step is None` reads like missing information and is actually a
+constraint being communicated. Treating it as "unknown, so guess" replaced a
+correct refusal to answer with a confident wrong answer, which is the same
+failure as a helper that returns `"?"` when it cannot read a value: **the
+problem is not the absence, it is substituting a plausible value for it.**
+When a library declines to give a number, find out what the decline means
+before routing around it.
+
 ## Validated workflow capabilities
 
 The project exercises the full pipeline with small, intentionally generic
