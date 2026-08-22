@@ -28,13 +28,13 @@ validate the API and data pipeline without including any private design or
 individual test-run artifacts.
 
 ```mermaid
-flowchart LR
-    A[Agent or MCP client] --> B[Netlist generator]
-    B --> C[LTspice batch runner]
-    C --> D[Raw and log parsers]
-    D --> E[Checks, plots, SQLite, API]
-    E --> F[Electrical feedback]
-    F --> A
+flowchart TD
+    A[Agent or MCP client] -->|writes a netlist| B[Netlist generator]
+    B -->|.cir / .net| C[LTspice batch runner]
+    C -->|.raw / .log| D[Raw and log parsers]
+    D -->|vectors, measurements| E[Checks, plots, SQLite, API]
+    E -->|pass/fail, plots| F[Electrical feedback]
+    F -.->|informs the next run| A
 ```
 
 ## A first result
