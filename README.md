@@ -1,7 +1,7 @@
 # LTspice Agent Automation
 
 Python-controlled LTspice simulation, analysis, experiment history, and local
-REST automation for agent-driven electronics workflows.
+MCP and REST automation for agent-driven electronics workflows.
 
 The project treats text netlists (`.cir`/`.net`) as the reproducible execution
 boundary while keeping the tooling useful alongside human-authored LTspice
@@ -16,6 +16,7 @@ design.
 - `.meas` and native `.step` result extraction
 - Parameter sweeps, Monte Carlo analysis, and target-response search
 - Durable run manifests, SQLite history, and a static HTML dashboard
+- An MCP server exposing the toolkit as native agent tools
 - Local synchronous and asynchronous REST API
 - Unit tests and small validation circuits, from a single-pole RC divider up
   to a resonant 2nd-order active filter
@@ -209,6 +210,11 @@ The same circuit also ships as a real LTspice schematic —
 in LTspice to view or edit it graphically. Simulation still runs from the
 `.cir` netlist; see [LEARNINGS.md](LEARNINGS.md#schematic-compatibility) for
 why `.asc` files aren't batched directly.
+
+![Sallen-Key schematic open in LTspice](docs/images/sallen-key-schematic.png)
+
+*`examples/sallen_key_lowpass.asc` open in the actual LTspice editor — hand-authored
+from LTspice's own symbol library and pin geometry, not a drawing.*
 
 ## Search for a target response
 
