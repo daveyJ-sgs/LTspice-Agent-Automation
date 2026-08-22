@@ -3,6 +3,8 @@
 Python-controlled LTspice simulation, analysis, experiment history, and local
 MCP and REST automation for agent-driven electronics workflows.
 
+**[View this project on claude_projs →](https://claudeprojs.vercel.app/projects/ltspice-agent-automation)**
+
 The project treats text netlists (`.cir`/`.net`) as the reproducible execution
 boundary while keeping the tooling useful alongside human-authored LTspice
 schematics (`.asc`). It is designed to complement schematic and PCB automation
