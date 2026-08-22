@@ -32,7 +32,7 @@ def collect_records(root: Path = RUNS_DIR) -> list[dict[str, object]]:
             if path.exists():
                 relative_artifact = path.relative_to(root)
                 artifacts.append(
-                    {"name": str(name), "href": quote(str(relative_artifact), safe="/")}
+                    {"name": str(name), "href": quote(relative_artifact.as_posix(), safe="/")}
                 )
         records.append(
             {

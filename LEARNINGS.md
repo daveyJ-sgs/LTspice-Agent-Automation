@@ -180,26 +180,70 @@ pipeline at an `.asc` file and expect `-b` to netlist it.
 
 ## Windows portability
 
-The Python parser, checks, API, SQLite history, reporting, and test layers are
-platform-neutral. Windows-specific work is primarily executable discovery,
-path handling, model-library search paths, and validation against the target
-LTspice release. The wrapper supports an explicit executable override so the
-same automation commands can be used on both macOS and Windows.
+Verified on Windows 11 with LTspice 26.0.2 (2026-08-22). The full test suite
+passes 11 of 11 with no executable override, and a minimal RC AC sweep returns
+-3.00607 dB at its corner frequency against a -3.006 dB closed-form
+prediction, so parsing and measurement extraction agree with theory and not
+merely with themselves.
 
-The first Windows smoke test should verify, in order:
+The parser, checks, API, SQLite history, reporting, and test layers are
+platform-neutral and needed no changes. Four platform differences were found.
 
-1. `LTSPICE_EXECUTABLE` resolves to the intended `LTspice.exe`.
-2. A minimal text-netlist batch run creates both `.raw` and `.log` files.
-3. The RC AC and transient examples pass their measurement checks.
-4. The CMOS NAND example produces the expected truth-table samples and delay
-   measurements.
-5. A model-library or `.asc` conversion test is run separately, since those
-   paths are more installation- and version-sensitive than text netlists.
+### A first-run consent dialog blocks batch mode indefinitely
 
-PowerShell can launch the same examples with Windows path syntax, for example:
+On a fresh install, LTspice shows an "Anonymously Share LTspice Usage Data"
+dialog the first time it launches. It gates process startup, so `-b` batch mode
+hangs with no `.raw`, no `.log`, no stdout and no error:
+
+```text
+LTspice.exe   PID 1764   Window Title: "Anonymously Share LTspice Usage Data"
+```
+
+Nothing in the wrapper or the netlist is at fault and there is no diagnostic to
+find, because the simulator never reaches the deck. Launch the GUI once and
+answer the dialog before automating.
+
+This is the Windows counterpart to the macOS Tahoe startup abort described
+above, and it generalises: validate that the simulator itself runs from the
+command line before debugging the automation layer. Both failures look like
+broken automation and neither is.
+
+### Executable discovery: winget installs per-user
+
+`winget install --id AnalogDevices.LTspice` defaults to a per-user install:
+
+```text
+%LOCALAPPDATA%\Programs\ADI\LTspice\LTspice.exe
+```
+
+not `Program Files`. A Program-Files-only search misses what is probably the
+most common scripted install. Discovery now checks the machine-wide paths
+first, so existing setups resolve exactly as before, then LOCALAPPDATA, then
+the older LTspice IV location.
+
+### Failure exit codes are platform-specific
+
+A deck with no analysis in it fails differently on each platform:
+
+```text
+macOS                    exit 255
+Windows 26.0.2           exit 1     log: "No analysis specified."
+```
+
+A test asserting one platform's value fails on the other while the behaviour is
+actually correct. Assert non-zero, which is the real contract.
+
+### Log encoding is a per-build property
+
+The Mac build emitted UTF-16LE logs; the Windows build emits UTF-8. The
+parser's UTF-16LE-then-UTF-8 fallback handles both, and this is a good argument
+for keeping that fallback rather than pinning an encoding. Do not assume either
+one from the platform.
+
+The examples run under PowerShell with Windows path syntax, and the override is
+needed only for a non-standard install location:
 
 ```powershell
-$env:LTSPICE_EXECUTABLE = 'C:\Program Files\ADI\LTspice\LTspice.exe'
 python examples\analyze_rc.py
 python examples\analyze_nand.py
 ```

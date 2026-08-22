@@ -316,24 +316,37 @@ only expose it to trusted agents.
 
 ## Windows
 
-The Python analysis, parsing, API, database, and reporting code is intended to
-carry over to Windows. The wrapper checks common Windows install locations;
-set `LTSPICE_EXECUTABLE` when the local installation uses another path:
+Verified on Windows 11 with LTspice 26.0.2: the test suite passes 11 of 11 and
+the RC AC example matches its closed-form prediction. Install with:
+
+```powershell
+winget install --id AnalogDevices.LTspice
+```
+
+Then launch LTspice once from the Start menu and answer the "Anonymously Share
+LTspice Usage Data" prompt. Until it is answered, batch mode hangs with no
+output and no error; see [LEARNINGS.md](LEARNINGS.md#windows-portability).
+
+The wrapper checks the common install locations, including winget's per-user
+default at `%LOCALAPPDATA%\Programs\ADI\LTspice\LTspice.exe`. Set
+`LTSPICE_EXECUTABLE` only when the installation is somewhere else:
 
 ```powershell
 $env:LTSPICE_EXECUTABLE = 'C:\Program Files\ADI\LTspice\LTspice.exe'
 python ltspice_wrapper.py
 ```
 
-The wrapper uses `subprocess` and `pathlib` rather than shell-specific command
-strings. Validate model-library search paths and representative `.asc` files
-on the target LTspice version before relying on them in production.
+The `make` targets default to `python3`, which on Windows resolves to the
+Microsoft Store alias stub rather than an interpreter. Pass the interpreter
+explicitly:
 
-The recommended first Windows check is to run `make test`, `make ac`, and
-`make nand` with `LTSPICE_EXECUTABLE` explicitly set. Text-netlist execution,
-waveform parsing, measurements, plots, SQLite history, and the local REST API
-should be portable; executable discovery, model paths, `.asc` compatibility,
-and simulator-version behavior still need to be verified on the laptop.
+```powershell
+make PYTHON=python test
+```
+
+The wrapper uses `subprocess` and `pathlib` rather than shell-specific command
+strings. Model-library search paths and representative `.asc` files still need
+verification on the target LTspice version.
 
 ## Project status
 

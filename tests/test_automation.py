@@ -146,7 +146,10 @@ Binary:
                 run_netlist(source, output_dir=output)
             manifest = json.loads((output / "run_manifest.json").read_text())
             self.assertEqual(manifest["status"], "failed")
-            self.assertEqual(manifest["returncode"], 255)
+            # LTspice's failure exit code is platform-specific: 255 on the
+            # macOS build, 1 on LTspice 26.0.2 for Windows. The contract worth
+            # asserting is "non-zero", not one platform's particular value.
+            self.assertNotEqual(manifest["returncode"], 0)
 
 
 if __name__ == "__main__":

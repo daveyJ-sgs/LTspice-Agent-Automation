@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small LTspice batch-simulation wrapper for macOS."""
+"""Small cross-platform LTspice batch-simulation wrapper."""
 
 from __future__ import annotations
 
@@ -23,11 +23,20 @@ def _default_ltspice() -> Path:
 
     candidates = {
         "darwin": [Path("/Applications/LTspice.app/Contents/MacOS/LTspice")],
+        # Windows installs land in several places. winget's default for
+        # AnalogDevices.LTspice is a PER-USER install under LOCALAPPDATA, not
+        # Program Files, so a Program-Files-only search misses the most common
+        # scripted install. Machine-wide paths stay first so existing setups
+        # keep resolving exactly as before.
         "win32": [
             Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
             / "ADI/LTspice/LTspice.exe",
             Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
             / "LTC/LTspiceXVII/XVIIx64.exe",
+            Path(os.environ.get("LOCALAPPDATA", r"C:\Users\Default\AppData\Local"))
+            / "Programs/ADI/LTspice/LTspice.exe",
+            Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
+            / "LTC/LTspiceIV/scad3.exe",
         ],
     }.get(sys.platform, [Path("ltspice")])
     return next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
