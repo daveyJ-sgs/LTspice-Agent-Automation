@@ -90,6 +90,14 @@ circuits:
    reporting.
 7. A transistor-level CMOS NAND validates digital truth-table behavior against
    a behavioral reference and exercises propagation-delay measurements.
+8. A Sallen-Key 2nd-order active low-pass filter (ideal op-amp modeled as a
+   fixed-gain E-source, tuned to Q=2) validates resonant AC peaking and
+   underdamped step-response ringing against closed-form predictions — a
+   circuit a single-pole RC example cannot exercise. It is also the first
+   circuit in this project authored as a real, GUI-editable `.asc` schematic
+   in addition to its text netlist; see
+   [LEARNINGS.md](#schematic-compatibility) for how that schematic was built
+   and verified.
 
 The resulting data flow is:
 
@@ -126,14 +134,49 @@ artifacts.
 
 ## Schematic compatibility
 
-An agent can generate an `.asc` schematic by emitting LTspice's text schematic
-format or by using a netlist-to-schematic converter. That requires a symbol
-library/pin map and a layout strategy; the resulting schematic should be
-round-tripped back to a netlist and compared for connectivity.
+An agent can generate a real, GUI-editable `.asc` schematic from scratch,
+confirmed working end to end with `examples/sallen_key_lowpass.asc`:
 
-Existing GUI-created `.asc` files can be version- or installation-sensitive in
-batch mode. The safe cross-version workflow is to open, update, or export the
-schematic in LTspice, then batch the resulting `.net`/`.cir` file.
+- The `.asc` grammar (`SHEET`/`WIRE`/`FLAG`/`SYMBOL`/`SYMATTR`/`TEXT`) is
+  simple and line-oriented, but symbol pin geometry is not part of that
+  grammar and must not be guessed. Read the actual `.asy` file for each part
+  from the local library (`~/Library/Application Support/LTspice/lib/sym/`)
+  for its `PIN x y` offsets, and derive rotated placements (`R90`, etc.) from
+  those offsets rather than assuming a layout. For `R90`, the confirmed
+  transform is `(dx, dy) -> (-dy, dx)` added to the symbol's anchor
+  (validated against a resistor/capacitor placement in LTspice's own bundled
+  `Butterworth.asc` example before trusting it for original work).
+- A 4-terminal dependent source (`e.asy`, SPICE `E`) has two output pins
+  (`+`/`-`, vertical in `R0`) and two control pins (`P`/`N`, offset to the
+  side). No single 90°-multiple rotation lines all four up on one axis;
+  routing a short jog from the control input is normal, matches how LTspice's
+  own examples draw dependent sources, and is not a sign of a wrong layout.
+- **Verify by opening the file in the LTspice GUI, not by assuming the
+  hand-derived coordinates are correct.** `open -a LTspice file.asc` renders
+  it; a screenshot (`screencapture`, optionally cropped/zoomed with PIL) lets
+  an agent inspect pin-level connectivity precisely — confirming, for
+  example, that a dependent source's control input lands on the intended net
+  and not a visually-adjacent one.
+
+**`-b` cannot batch-convert an `.asc` schematic to a netlist on this
+platform.** Confirmed on LTspice 17.2.4/macOS with both an original `.asc`
+and LTspice's own officially bundled `Butterworth.asc` example, run from a
+plain writable directory (not just inside `runs/`): `LTspice -b file.asc`
+runs headless (no dialog) but fails immediately with `Fatal Error: Multiple
+instances of "Flag"` (or `"Symattr"`, depending on file contents) — on a
+schematic LTspice's own GUI opens and simulates without complaint. This is a
+batch-mode-specific parsing bug, not a netlist-correctness problem.
+`-netlist file.asc` (with or without `-b`) is *not* a headless alternative
+either — it always opens the interactive GUI (including LTspice's one-time
+"Welcome" dialog on a fresh install) and blocks; it must be killed
+externally (`osascript -e 'quit app "LTspice"'`) rather than waited out.
+
+The practical, verified workflow: **draft and view `.asc` schematics for
+humans and GUI editing; keep simulation on the text netlist.** Open the
+schematic in LTspice, use *File > Export netlist* (or re-derive/maintain the
+equivalent `.cir` by hand, as this project does) to get the netlist that
+`ltspice_wrapper.run_netlist()` actually batches. Do not point the automated
+pipeline at an `.asc` file and expect `-b` to netlist it.
 
 ## Windows portability
 

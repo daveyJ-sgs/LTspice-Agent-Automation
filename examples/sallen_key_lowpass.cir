@@ -1,0 +1,12 @@
+* Sallen-Key 2nd-order low-pass filter (ideal op-amp, K=2.5, Q=2, fc~1kHz)
+V1 in 0 AC 1
+R1 in n1 15.9k
+R2 n1 n2 15.9k
+C1 n1 out 10n
+C2 n2 0 10n
+Eamp out 0 n2 0 2.5
+.ac dec 200 10 100k
+.meas ac gain_dc FIND mag(V(out)) AT=10
+.meas ac gain_at_1k FIND mag(V(out)) AT=1k
+.meas ac peak_gain MAX mag(V(out))
+.end

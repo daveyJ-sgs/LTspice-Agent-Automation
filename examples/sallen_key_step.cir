@@ -1,0 +1,12 @@
+* Sallen-Key low-pass step response (K=2.5, Q=2) showing resonant ringing
+V1 in 0 PULSE(0 1 0 1u 1u 20m 40m)
+R1 in n1 15.9k
+R2 n1 n2 15.9k
+C1 n1 out 10n
+C2 n2 0 10n
+Eamp out 0 n2 0 2.5
+.tran 0 6m 0 1u
+.meas tran vout_final FIND V(out) AT=5.9m
+.meas tran vout_peak MAX V(out) FROM=0 TO=3m
+.meas tran overshoot_pct PARAM 100*(vout_peak-vout_final)/vout_final
+.end

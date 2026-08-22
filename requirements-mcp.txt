@@ -1,0 +1,7 @@
+# Optional dependency for the MCP server (mcp_server.py). Homebrew/system
+# Python is externally managed, so install into an isolated virtualenv:
+#
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r requirements-mcp.txt
+#
+mcp>=2.0
