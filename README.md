@@ -346,6 +346,23 @@ placeholder in the netlist template.
 }
 ```
 
+Phase 2B-A adds optional derived parameters without evaluating Python or shell
+expressions. Dependencies come from placeholders in each derived `template`,
+are resolved in stable topological order, and do not increase the Cartesian
+point count. Base parameters may be used only through a derived parameter:
+
+```json
+"derived_parameters": [
+  {"name": "RC", "template": "({R})*({C})", "unit": "s"},
+  {"name": "DOUBLE_RC", "template": "2*{RC}", "unit": "s"}
+]
+```
+
+Forward references are allowed. Unknown dependencies, duplicate names, cycles,
+and parameters that cannot affect the netlist are rejected before LTspice runs.
+Returned point parameters and CSV columns contain resolved derived strings in
+their original declaration order.
+
 `run_experiment` validates the complete definition before running, executes
 sequentially, and caps the Cartesian product at 1,000 points. Requirements are
 defined once and reused unchanged at every successful point. A failed

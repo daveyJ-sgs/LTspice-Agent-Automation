@@ -72,6 +72,12 @@ class ExperimentParameter(TypedDict):
     unit: NotRequired[str]
 
 
+class ExperimentDerivedParameter(TypedDict):
+    name: str
+    template: str
+    unit: NotRequired[str]
+
+
 class ExperimentWaveformAnalysis(TypedDict):
     name: str
     variable: str
@@ -110,6 +116,7 @@ class ExperimentResult(TypedDict):
     results_csv: str
     status: str
     parameter_order: list[str]
+    derived_parameter_order: list[str]
     parameter_units: dict[str, str]
     point_count: int
     completed_points: int
@@ -222,13 +229,18 @@ def _prepare_experiment(
     netlist_template: str,
     parameters: list[ExperimentParameter],
     waveform_analyses: list[ExperimentWaveformAnalysis],
-) -> tuple[list[str], list[dict[str, str]], dict[str, str]]:
+    derived_parameters: list[ExperimentDerivedParameter] | None = None,
+) -> tuple[list[str], list[str], list[dict[str, str]], dict[str, str]]:
     if not isinstance(netlist_template, str) or not netlist_template.strip():
         raise ValueError("netlist_template must be a non-empty string")
     if not isinstance(parameters, list) or not parameters:
         raise ValueError("parameters must be a non-empty list")
     if not isinstance(waveform_analyses, list):
         raise ValueError("waveform_analyses must be a list")
+    if derived_parameters is None:
+        derived_parameters = []
+    if not isinstance(derived_parameters, list):
+        raise ValueError("derived_parameters must be a list")
 
     names: list[str] = []
     value_sets: list[list[str]] = []
@@ -249,9 +261,6 @@ def _prepare_experiment(
             raise ValueError(f"parameter {name} values must be non-empty strings")
         if len(set(values)) != len(values):
             raise ValueError(f"parameter {name} values must be unique")
-        placeholder = "{" + name + "}"
-        if placeholder not in netlist_template:
-            raise ValueError(f"parameter placeholder {placeholder} is missing from netlist_template")
         unit = parameter.get("unit", "")
         if not isinstance(unit, str):
             raise ValueError(f"parameter {name} unit must be a string")
@@ -263,6 +272,89 @@ def _prepare_experiment(
             raise ValueError(
                 f"experiment is limited to {MAX_EXPERIMENT_POINTS} Cartesian points"
             )
+
+    derived_order: list[str] = []
+    derived_templates: dict[str, str] = {}
+    derived_dependencies: dict[str, list[str]] = {}
+    declared_names = set(names)
+    for parameter in derived_parameters:
+        if not isinstance(parameter, dict):
+            raise ValueError("derived_parameters must contain objects")
+        name = parameter.get("name")
+        template = parameter.get("template")
+        if not isinstance(name, str) or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None:
+            raise ValueError("derived parameter names must match [A-Za-z_][A-Za-z0-9_]*")
+        if name in declared_names:
+            raise ValueError(f"duplicate experiment parameter name: {name}")
+        if not isinstance(template, str) or not template:
+            raise ValueError(
+                f"derived parameter {name} template must be a non-empty string"
+            )
+        unit = parameter.get("unit", "")
+        if not isinstance(unit, str):
+            raise ValueError(f"derived parameter {name} unit must be a string")
+        declared_names.add(name)
+        derived_order.append(name)
+        derived_templates[name] = template
+        units[name] = unit
+
+    placeholder_pattern = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+    for name in derived_order:
+        dependencies = placeholder_pattern.findall(derived_templates[name])
+        unknown = next(
+            (dependency for dependency in dependencies if dependency not in declared_names),
+            None,
+        )
+        if unknown is not None:
+            raise ValueError(
+                f"derived parameter {name} references unknown parameter {unknown}"
+            )
+        derived_dependencies[name] = dependencies
+
+    resolution_order: list[str] = []
+    resolved_names = set(names)
+    pending = list(derived_order)
+    while pending:
+        ready = [
+            name
+            for name in pending
+            if all(dependency in resolved_names for dependency in derived_dependencies[name])
+        ]
+        if not ready:
+            cycle = _find_derived_cycle(pending, derived_dependencies)
+            raise ValueError(f"derived parameter cycle: {' -> '.join(cycle)}")
+        for name in ready:
+            resolution_order.append(name)
+            resolved_names.add(name)
+            pending.remove(name)
+
+    if not derived_order:
+        for name in names:
+            placeholder = "{" + name + "}"
+            if placeholder not in netlist_template:
+                raise ValueError(
+                    f"parameter placeholder {placeholder} is missing from netlist_template"
+                )
+    else:
+        reachable = {
+            name
+            for name in placeholder_pattern.findall(netlist_template)
+            if name in declared_names
+        }
+        changed = True
+        while changed:
+            changed = False
+            for name in derived_order:
+                if name in reachable:
+                    for dependency in derived_dependencies[name]:
+                        if dependency not in reachable:
+                            reachable.add(dependency)
+                            changed = True
+        for name in [*names, *derived_order]:
+            if name not in reachable:
+                raise ValueError(
+                    f"experiment parameter {name} is not reachable from netlist_template"
+                )
 
     analysis_names: set[str] = set()
     supported_metrics = (
@@ -326,11 +418,45 @@ def _prepare_experiment(
                 ) from exc
         analysis_names.add(name)
 
-    points = [
-        dict(zip(names, combination))
-        for combination in itertools.product(*value_sets)
-    ]
-    return names, points, units
+    points: list[dict[str, str]] = []
+    for combination in itertools.product(*value_sets):
+        base_values = dict(zip(names, combination))
+        resolved_values = dict(base_values)
+        for name in resolution_order:
+            resolved_values[name] = placeholder_pattern.sub(
+                lambda match: resolved_values[match.group(1)],
+                derived_templates[name],
+            )
+        points.append(
+            {
+                **base_values,
+                **{name: resolved_values[name] for name in derived_order},
+            }
+        )
+    return names, derived_order, points, units
+
+
+def _find_derived_cycle(
+    pending: list[str], dependencies: dict[str, list[str]]
+) -> list[str]:
+    pending_set = set(pending)
+    for start in pending:
+        path: list[str] = []
+        positions: dict[str, int] = {}
+        current = start
+        while current in pending_set:
+            if current in positions:
+                return [*path[positions[current]:], current]
+            positions[current] = len(path)
+            path.append(current)
+            next_name = next(
+                (name for name in dependencies[current] if name in pending_set),
+                None,
+            )
+            if next_name is None:
+                break
+            current = next_name
+    return [*pending, pending[0]]
 
 
 def _render_experiment_netlist(
@@ -746,22 +872,27 @@ def run_experiment(
     filename: str = "circuit.cir",
     ascii_raw: bool = False,
     timeout_seconds: int = 120,
+    derived_parameters: list[ExperimentDerivedParameter] | None = None,
 ) -> ExperimentResult:
     """Run a deterministic Cartesian experiment and reuse analyses at every point.
 
     Parameters are ordered records with a name, explicit string values, and an
     optional metadata-only unit. The corresponding template placeholder is
     `{name}`. Declaration order defines Cartesian order: the first parameter
-    changes slowest and the last changes fastest. Execution is sequential in
-    Phase 2A and is limited to 1,000 points.
+    changes slowest and the last changes fastest. Derived parameters are safe
+    textual templates resolved in dependency order; they do not increase the
+    point count. Execution is sequential and is limited to 1,000 points.
     """
     normalized_filename = _netlist_filename(filename)
     _validate_timeout(timeout_seconds)
     analyses = [] if waveform_analyses is None else waveform_analyses
-    parameter_order, combinations, parameter_units = _prepare_experiment(
-        netlist_template,
-        parameters,
-        analyses,
+    (
+        parameter_order,
+        derived_parameter_order,
+        combinations,
+        parameter_units,
+    ) = _prepare_experiment(
+        netlist_template, parameters, analyses, derived_parameters
     )
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -782,6 +913,8 @@ def run_experiment(
             "netlist_template": netlist_template,
             "parameters": parameters,
             "parameter_order": parameter_order,
+            "derived_parameters": [] if derived_parameters is None else derived_parameters,
+            "derived_parameter_order": derived_parameter_order,
             "parameter_units": parameter_units,
             "waveform_analyses": analyses,
             "filename": normalized_filename,
@@ -898,6 +1031,7 @@ def run_experiment(
         "results_csv": str(results_csv_path),
         "status": "completed",
         "parameter_order": parameter_order,
+        "derived_parameter_order": derived_parameter_order,
         "parameter_units": parameter_units,
         "point_count": len(points),
         "completed_points": completed_points,
@@ -907,7 +1041,11 @@ def run_experiment(
         "all_passed": passed_points == len(points),
         "points": points,
     }
-    _write_experiment_csv(results_csv_path, parameter_order, points)
+    _write_experiment_csv(
+        results_csv_path,
+        [*parameter_order, *derived_parameter_order],
+        points,
+    )
     _write_json(results_json_path, result)
 
     manifest.update(

@@ -107,9 +107,20 @@ Generalize single-value parameter substitution into durable experiments with:
 
 #### Phase 2B: Durable experiment jobs — planned
 
-- Parameter dependencies and derived values
+##### Phase 2B-A: Dependent and derived parameters — complete
+
+- Safe textual derived-parameter templates with inferred dependencies
+- Stable topological resolution, forward references, and cycle detection
+- Base-only Cartesian cardinality with resolved per-point provenance
+
+##### Phase 2B-B: Persistent bounded-concurrency jobs — planned
+
 - Bounded concurrency, progress, cancellation, and resumable jobs
+
+##### Phase 2B-C: MCP job lifecycle — planned
+
 - `define_experiment`, `get_experiment`, and `cancel_experiment` lifecycle tools
+- Explicit `start_experiment` operation so definition does not launch work
 
 #### Phase 2C: Execution efficiency and reporting — planned
 

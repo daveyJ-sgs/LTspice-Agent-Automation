@@ -563,6 +563,105 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(persisted["parameter_units"]["A"], "Ω")
         self.assertEqual(rows[0]["parameter.A"], "{B}µ")
 
+    def test_run_experiment_resolves_derived_parameters_topologically(self) -> None:
+        rendered_netlists: list[str] = []
+
+        def execute(
+            netlist: str,
+            filename: str,
+            ascii_raw: bool,
+            timeout: int,
+            dest: Path,
+        ) -> Path:
+            rendered_netlists.append(netlist)
+            dest.mkdir(parents=True)
+            return dest
+
+        with (
+            patch.object(mcp_server, "_run_netlist_text", side_effect=execute),
+            patch.object(
+                mcp_server,
+                "_summarize_run",
+                return_value={"status": "completed", "measurements": {}},
+            ),
+        ):
+            result = mcp_server.run_experiment(
+                ".param doubled {DOUBLE}\n.end\n",
+                [
+                    {"name": "R", "values": ["1k", "2k"], "unit": "ohm"},
+                    {"name": "C", "values": ["10n", "22n"], "unit": "F"},
+                ],
+                derived_parameters=[
+                    {"name": "DOUBLE", "template": "2*{RC}", "unit": "s"},
+                    {"name": "RC", "template": "({R})*({C})", "unit": "s"},
+                ],
+            )
+
+        self.assertEqual(
+            rendered_netlists,
+            [
+                ".param doubled 2*(1k)*(10n)\n.end\n",
+                ".param doubled 2*(1k)*(22n)\n.end\n",
+                ".param doubled 2*(2k)*(10n)\n.end\n",
+                ".param doubled 2*(2k)*(22n)\n.end\n",
+            ],
+        )
+        self.assertEqual(result["point_count"], 4)
+        self.assertEqual(result["parameter_order"], ["R", "C"])
+        self.assertEqual(result["derived_parameter_order"], ["DOUBLE", "RC"])
+        self.assertEqual(
+            result["points"][0]["parameters"],
+            {"R": "1k", "C": "10n", "DOUBLE": "2*(1k)*(10n)", "RC": "(1k)*(10n)"},
+        )
+        manifest = json.loads(Path(result["manifest"]).read_text(encoding="utf-8"))
+        with Path(result["results_csv"]).open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(
+            manifest["definition"]["derived_parameters"][0]["name"],
+            "DOUBLE",
+        )
+        self.assertEqual(rows[0]["parameter.DOUBLE"], "2*(1k)*(10n)")
+        self.assertEqual(rows[0]["parameter.RC"], "(1k)*(10n)")
+
+    def test_derived_parameter_validation_precedes_execution(self) -> None:
+        invalid_definitions = [
+            (
+                [{"name": "D", "template": "{UNKNOWN}"}],
+                "derived parameter D references unknown parameter UNKNOWN",
+            ),
+            (
+                [{"name": "R", "template": "{R}"}],
+                "duplicate experiment parameter name: R",
+            ),
+            (
+                [
+                    {"name": "A", "template": "{B}"},
+                    {"name": "B", "template": "{A}"},
+                ],
+                "derived parameter cycle: A -> B -> A",
+            ),
+            (
+                [{"name": "D", "template": "{D}"}],
+                "derived parameter cycle: D -> D",
+            ),
+            (
+                [{"name": "D", "template": "{R}"}],
+                "experiment parameter D is not reachable",
+            ),
+        ]
+        with patch.object(mcp_server, "_run_netlist_text") as execution:
+            for derived_parameters, message in invalid_definitions:
+                netlist = "R1 in out {R}\nA={A}\n.end\n"
+                with self.subTest(message=message), self.assertRaisesRegex(
+                    ValueError, message
+                ):
+                    mcp_server.run_experiment(
+                        netlist,
+                        [{"name": "R", "values": ["1k"]}],
+                        derived_parameters=derived_parameters,
+                    )
+        execution.assert_not_called()
+
     def test_run_experiment_isolates_simulation_and_analysis_errors(self) -> None:
         def execute(
             netlist: str,
@@ -685,17 +784,22 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(parameter["properties"]["name"]["type"], "string")
         self.assertEqual(parameter["properties"]["values"]["items"]["type"], "string")
         self.assertEqual(parameter["properties"]["unit"]["type"], "string")
+        self.assertIn("derived_parameters", tool.input_schema["properties"])
         self.assertIn("requirements", analysis["properties"])
         self.assertEqual(
             requirement["properties"]["maximum_harmonic"]["type"],
             "integer",
         )
         self.assertIn("point_count", tool.output_schema["properties"])
+        self.assertIn("derived_parameter_order", tool.output_schema["properties"])
 
     def test_run_experiment_through_mcp_protocol(self) -> None:
         arguments = {
-            "netlist_template": "R1 in out {R}\n.end\n",
+            "netlist_template": ".param doubled {DOUBLE}\n.end\n",
             "parameters": [{"name": "R", "values": ["1k"]}],
+            "derived_parameters": [
+                {"name": "DOUBLE", "template": "2*{R}", "unit": "ohm"}
+            ],
         }
         with (
             patch.object(
@@ -713,6 +817,10 @@ class MCPServerTests(unittest.TestCase):
 
         self.assertFalse(result.is_error)
         self.assertEqual(result.structured_content["point_count"], 1)
+        self.assertEqual(
+            result.structured_content["points"][0]["parameters"]["DOUBLE"],
+            "2*1k",
+        )
         self.assertTrue(result.structured_content["all_passed"])
 
     def test_history_dashboard_and_examples(self) -> None:
