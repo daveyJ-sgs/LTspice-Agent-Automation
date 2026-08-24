@@ -56,6 +56,7 @@ _prepare_experiment = experiment_engine._prepare_experiment
 _render_experiment_netlist = experiment_engine._render_experiment_netlist
 _netlist_filename = experiment_engine._netlist_filename
 _validate_timeout = experiment_engine._validate_timeout
+_validate_reuse_cache = experiment_engine._validate_reuse_cache
 
 mcp = MCPServer(
     name="ltspice",
@@ -96,6 +97,15 @@ def _resolve_run_dir(run_dir: str) -> Path:
     return path
 
 
+def _simulation_cache_dir() -> Path:
+    cache_dir = (RUNS_DIR / "cache").resolve()
+    try:
+        cache_dir.relative_to(RUNS_DIR.resolve())
+    except ValueError as exc:
+        raise ValueError("Simulation cache must be inside the runs directory") from exc
+    return cache_dir
+
+
 def _find_raw(run_dir: Path, raw_filename: str | None) -> Path:
     if raw_filename:
         if Path(raw_filename).name != raw_filename or "/" in raw_filename or "\\" in raw_filename:
@@ -127,21 +137,30 @@ def _summarize_run(output_dir: Path) -> dict[str, object]:
         "duration_seconds": manifest.get("duration_seconds"),
         "measurements": measurements,
         "result_files": manifest.get("result_files", []),
+        "execution_source": manifest.get("execution_source", "simulator"),
+        "cache": manifest.get("cache"),
     }
 
 
 def _run_netlist_text(
-    netlist: str, filename: str, ascii_raw: bool, timeout_seconds: int, dest_dir: Path
+    netlist: str,
+    filename: str,
+    ascii_raw: bool,
+    timeout_seconds: int,
+    dest_dir: Path,
+    reuse_cache: bool = False,
 ) -> Path:
     filename = _netlist_filename(filename)
     with tempfile.TemporaryDirectory(prefix="mcp-input-") as tmp:
         source_path = Path(tmp) / filename
-        source_path.write_text(netlist)
+        source_path.write_text(netlist, encoding="utf-8")
         return wrapper.run_netlist(
             source_path,
             output_dir=dest_dir,
             timeout_seconds=timeout_seconds,
             ascii_raw=ascii_raw,
+            reuse_cache=reuse_cache,
+            cache_dir=_simulation_cache_dir() if reuse_cache else None,
         )
 
 
@@ -157,6 +176,7 @@ def _execute_experiment_point(
     timeout_seconds: int,
     analyses: list[ExperimentWaveformAnalysis],
     cancel_event: threading.Event | None = None,
+    reuse_cache: bool = False,
 ) -> ExperimentPointResult:
     point: ExperimentPointResult = {
         "index": index,
@@ -176,12 +196,11 @@ def _execute_experiment_point(
 
     rendered = _render_experiment_netlist(netlist_template, combination)
     try:
-        output_dir = _run_netlist_text(
-            rendered,
-            filename,
-            ascii_raw,
-            timeout_seconds,
-            point_dir,
+        arguments = (rendered, filename, ascii_raw, timeout_seconds, point_dir)
+        output_dir = (
+            _run_netlist_text(*arguments, True)
+            if reuse_cache
+            else _run_netlist_text(*arguments)
         )
         summary = _summarize_run(output_dir)
     except (FileNotFoundError, RuntimeError) as exc:
@@ -198,6 +217,11 @@ def _execute_experiment_point(
         point["measurements"] = {
             str(name): float(value) for name, value in measurements.items()
         }
+    cache = summary.get("cache")
+    if isinstance(cache, dict):
+        point["cache_hit"] = cache.get("hit") is True
+        cache_key = cache.get("key")
+        point["cache_key"] = cache_key if isinstance(cache_key, str) else None
 
     if cancel_event is not None and cancel_event.is_set():
         point["error"] = "experiment cancelled before waveform analysis"
@@ -277,6 +301,7 @@ def run_netlist(
     filename: str = "circuit.cir",
     ascii_raw: bool = False,
     timeout_seconds: int = 120,
+    reuse_cache: bool = False,
 ) -> dict[str, object]:
     """Run LTspice in batch mode on netlist text and return status and measurements.
 
@@ -286,9 +311,19 @@ def run_netlist(
     to get_measurements, get_waveform, or export_waveform_csv.
     """
     _validate_timeout(timeout_seconds)
+    _validate_reuse_cache(reuse_cache)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    output_dir = _run_netlist_text(
-        netlist, filename, ascii_raw, timeout_seconds, RUNS_DIR / f"mcp-{stamp}"
+    arguments = (
+        netlist,
+        filename,
+        ascii_raw,
+        timeout_seconds,
+        RUNS_DIR / f"mcp-{stamp}",
+    )
+    output_dir = (
+        _run_netlist_text(*arguments, True)
+        if reuse_cache
+        else _run_netlist_text(*arguments)
     )
     return _summarize_run(output_dir)
 
@@ -299,9 +334,11 @@ def run_netlist_file(
     output_dir: str | None = None,
     ascii_raw: bool = False,
     timeout_seconds: int = 120,
+    reuse_cache: bool = False,
 ) -> dict[str, object]:
     """Run an existing .cir/.net file; any explicit output_dir must be under runs/."""
     _validate_timeout(timeout_seconds)
+    _validate_reuse_cache(reuse_cache)
     netlist_path = Path(path).expanduser()
     if netlist_path.suffix.lower() not in (".cir", ".net"):
         raise ValueError("path must identify a .cir or .net file")
@@ -311,6 +348,8 @@ def run_netlist_file(
         output_dir=resolved_output,
         timeout_seconds=timeout_seconds,
         ascii_raw=ascii_raw,
+        reuse_cache=reuse_cache,
+        cache_dir=_simulation_cache_dir() if reuse_cache else None,
     )
     return _summarize_run(result_dir)
 
@@ -561,6 +600,7 @@ def run_parameter_sweep(
     placeholder: str = "{value}",
     filename: str = "circuit.cir",
     timeout_seconds: int = 120,
+    reuse_cache: bool = False,
 ) -> dict[str, object]:
     """Run one LTspice simulation per value, substituting `placeholder` in the template.
 
@@ -575,6 +615,7 @@ def run_parameter_sweep(
         raise ValueError("placeholder must occur in netlist_template")
     _netlist_filename(filename)
     _validate_timeout(timeout_seconds)
+    _validate_reuse_cache(reuse_cache)
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     sweep_dir = RUNS_DIR / f"mcp-sweep-{stamp}"
@@ -583,7 +624,12 @@ def run_parameter_sweep(
         rendered = netlist_template.replace(placeholder, str(value))
         point_dir = sweep_dir / f"point-{index:03d}"
         try:
-            output_dir = _run_netlist_text(rendered, filename, False, timeout_seconds, point_dir)
+            arguments = (rendered, filename, False, timeout_seconds, point_dir)
+            output_dir = (
+                _run_netlist_text(*arguments, True)
+                if reuse_cache
+                else _run_netlist_text(*arguments)
+            )
             summary = _summarize_run(output_dir)
         except RuntimeError as exc:
             summary = {
@@ -626,6 +672,7 @@ def run_experiment(
     ascii_raw: bool = False,
     timeout_seconds: int = 120,
     derived_parameters: list[ExperimentDerivedParameter] | None = None,
+    reuse_cache: bool = False,
 ) -> ExperimentResult:
     """Run a deterministic Cartesian experiment and reuse analyses at every point.
 
@@ -646,6 +693,7 @@ def run_experiment(
         ascii_raw,
         timeout_seconds,
         derived_parameters,
+        reuse_cache,
     )
 
 
@@ -674,6 +722,7 @@ def define_experiment(
     timeout_seconds: int = 120,
     derived_parameters: list[ExperimentDerivedParameter] | None = None,
     max_concurrency: int = 2,
+    reuse_cache: bool = False,
 ) -> ExperimentJobSnapshot:
     """Validate and persist an experiment definition without starting it."""
     return _get_experiment_manager().define(
@@ -685,6 +734,7 @@ def define_experiment(
         timeout_seconds,
         derived_parameters,
         max_concurrency,
+        reuse_cache,
     )
 
 

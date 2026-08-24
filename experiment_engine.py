@@ -44,6 +44,11 @@ def _validate_timeout(timeout_seconds: int) -> None:
         raise ValueError("timeout_seconds must be a positive integer")
 
 
+def _validate_reuse_cache(reuse_cache: bool) -> None:
+    if not isinstance(reuse_cache, bool):
+        raise ValueError("reuse_cache must be a boolean")
+
+
 class WaveformAnalysisResult(TypedDict):
     raw_file: str
     variable: str
@@ -96,6 +101,8 @@ class ExperimentPointResult(TypedDict):
     analyses: list[ExperimentAnalysisResult]
     all_passed: bool
     error: str | None
+    cache_hit: NotRequired[bool]
+    cache_key: NotRequired[str | None]
 
 
 class ExperimentResult(TypedDict):
@@ -1039,10 +1046,12 @@ def run_experiment_sync(
     ascii_raw: bool = False,
     timeout_seconds: int = 120,
     derived_parameters: list[ExperimentDerivedParameter] | None = None,
+    reuse_cache: bool = False,
 ) -> ExperimentResult:
     """Execute the backward-compatible sequential experiment path."""
     normalized_filename = _netlist_filename(filename)
     _validate_timeout(timeout_seconds)
+    _validate_reuse_cache(reuse_cache)
     analyses = [] if waveform_analyses is None else waveform_analyses
     (
         parameter_order,
@@ -1080,13 +1089,14 @@ def run_experiment_sync(
             "filename": normalized_filename,
             "ascii_raw": ascii_raw,
             "timeout_seconds": timeout_seconds,
+            "reuse_cache": reuse_cache,
         },
         "point_count": len(combinations),
     }
     _write_json(manifest_path, manifest)
 
-    points = [
-        execute_point(
+    def execute(index: int, combination: dict[str, str]) -> ExperimentPointResult:
+        arguments = (
             index,
             combination,
             experiment_dir / f"point-{index:04d}",
@@ -1096,8 +1106,11 @@ def run_experiment_sync(
             timeout_seconds,
             analyses,
         )
-        for index, combination in enumerate(combinations)
-    ]
+        if reuse_cache:
+            return execute_point(*arguments, None, True)
+        return execute_point(*arguments)
+
+    points = [execute(index, combination) for index, combination in enumerate(combinations)]
     counts = _experiment_counts(points, len(combinations))
     completed_points = counts["completed_points"]
     error_points = counts["error_points"]
@@ -1249,9 +1262,11 @@ class ExperimentJobManager:
         timeout_seconds: int = 120,
         derived_parameters: list[ExperimentDerivedParameter] | None = None,
         max_concurrency: int = 2,
+        reuse_cache: bool = False,
     ) -> ExperimentJobSnapshot:
         normalized_filename = _netlist_filename(filename)
         _validate_timeout(timeout_seconds)
+        _validate_reuse_cache(reuse_cache)
         if not isinstance(max_concurrency, int) or isinstance(max_concurrency, bool):
             raise ValueError("max_concurrency must be an integer")
         if max_concurrency < 1 or max_concurrency > self.workers:
@@ -1276,6 +1291,7 @@ class ExperimentJobManager:
             "ascii_raw": ascii_raw,
             "timeout_seconds": timeout_seconds,
             "max_concurrency": max_concurrency,
+            "reuse_cache": reuse_cache,
         }
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         experiment_id = f"mcp-experiment-{stamp}-{uuid.uuid4().hex[:8]}"
@@ -1518,8 +1534,7 @@ class ExperimentJobManager:
                     next_pending += 1
                     point_root = experiment_dir / f"point-{index:04d}"
                     attempt_dir = self._next_attempt_dir(point_root)
-                    future = self._executor.submit(
-                        self._execute_point,
+                    arguments = (
                         index,
                         combinations[index],
                         attempt_dir,
@@ -1530,6 +1545,9 @@ class ExperimentJobManager:
                         analyses,
                         event,
                     )
+                    if bool(definition.get("reuse_cache", False)):
+                        arguments = (*arguments, True)
+                    future = self._executor.submit(self._execute_point, *arguments)
                     active[future] = (index, point_root)
                 self._persist_progress(
                     experiment_id,

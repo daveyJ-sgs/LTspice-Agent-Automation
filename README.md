@@ -445,6 +445,40 @@ the same deterministic UTF-8 artifacts under
 Malformed, unfinished, ambiguous, or non-finite inputs are rejected before an
 output directory is created.
 
+### Reuse verified simulation artifacts
+
+Phase 2C-B1 adds an opt-in simulation cache to `run_netlist`,
+`run_netlist_file`, `run_parameter_sweep`, `run_experiment`, and
+`define_experiment`. Set `reuse_cache` to `true` to reuse a previously completed
+LTspice simulation when its complete cache identity still matches:
+
+```json
+{
+  "netlist": "V1 in 0 AC 1\nR1 in out 10k\nC1 out 0 1u\n.ac dec 20 10 1Meg\n.end\n",
+  "filename": "filter.cir",
+  "reuse_cache": true
+}
+```
+
+The identity covers the exact netlist and filename, binary versus ASCII output,
+timeout, simulator executable and version, operating system and architecture,
+and recursively resolved include/library files. Entries and their artifacts
+are content-addressed and verified by size and SHA-256 before any file is
+copied. A hit receives fresh run provenance and independent artifacts under the
+new run directory; measurement and waveform analysis still execute normally
+against those copied artifacts.
+
+Caching is disabled by default and fails closed. B1 deliberately bypasses
+model-dependent devices, unresolved includes, dynamic file inputs, corrupt
+entries, and pre-existing nonempty output directories because LTspice may
+resolve data through implicit installation or user libraries that cannot yet
+be fingerprinted confidently. These runs continue through LTspice normally.
+Every `run_manifest.json` records whether caching was requested, whether the
+run was eligible, its cache key, hit/miss state, whether a new entry was stored,
+and any bypass reason. Cache entries live under `runs/cache/`.
+B1 does not automatically evict entries; cache retention and cleanup policy are
+reserved for the later indexing/management work.
+
 `run_experiment` remains the backward-compatible synchronous path. It validates
 the complete definition before running, executes sequentially, and caps the
 Cartesian product at 1,000 points. Requirements are

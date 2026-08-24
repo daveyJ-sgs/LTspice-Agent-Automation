@@ -133,10 +133,24 @@ Generalize single-value parameter substitution into durable experiments with:
 - Stable requirement identities with regression and improvement classification
 - Content-addressed deterministic JSON and human-readable Markdown reports
 
-##### Phase 2C-B: Native stepping and cached-result reuse — planned
+##### Phase 2C-B: Native stepping and cached-result reuse — in progress
 
-- Native LTspice stepping
-- Netlist/configuration hashing and cached-result reuse
+###### Phase 2C-B1: Provenance-safe simulation cache — complete
+
+- Opt-in content-addressed reuse at the shared LTspice execution boundary
+- Simulator, runtime, option, netlist, and resolved-dependency fingerprints
+- Atomic entries, verified copied artifacts, and per-run cache provenance
+- Conservative bypass for implicit models and unresolved external inputs
+
+###### Phase 2C-B2: Native structured experiments — planned
+
+- Native LTspice stepping with deterministic point mapping
+- Shared stepped waveforms analyzed through the existing requirement engine
+
+###### Phase 2C-B3: Durable native-batch integration — planned
+
+- Atomic batch recovery and point checkpoint materialization
+- Cancellation, cache interaction, comparison, and Windows portability coverage
 
 ##### Phase 2C-C: Experiment indexing and visualization — planned
 

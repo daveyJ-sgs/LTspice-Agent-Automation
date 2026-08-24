@@ -125,6 +125,36 @@ class MCPServerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             mcp_server.run_netlist(".end", "..\\escape.cir")
 
+    def test_run_netlist_propagates_opt_in_cache(self) -> None:
+        output_dir = self.make_run()
+        summary = {
+            "run_dir": str(output_dir),
+            "status": "completed",
+            "cache": {"hit": True, "key": "abc"},
+        }
+        with (
+            patch.object(mcp_server, "_run_netlist_text", return_value=output_dir) as execute,
+            patch.object(mcp_server, "_summarize_run", return_value=summary),
+        ):
+            result = mcp_server.run_netlist(".end\n", reuse_cache=True)
+
+        self.assertEqual(result, summary)
+        self.assertTrue(execute.call_args.args[-1])
+        with self.assertRaisesRegex(ValueError, "reuse_cache must be a boolean"):
+            mcp_server.run_netlist(".end\n", reuse_cache=1)  # type: ignore[arg-type]
+
+    def test_simulation_cache_path_remains_inside_runs(self) -> None:
+        outside = self.root / "outside"
+        outside.mkdir()
+        try:
+            os.symlink(outside, self.runs / "cache", target_is_directory=True)
+        except OSError as exc:
+            self.skipTest(f"directory symlinks unavailable: {exc}")
+
+        with self.assertRaisesRegex(ValueError, "inside the runs directory"):
+            mcp_server.run_netlist(".end\n", reuse_cache=True)
+        self.assertEqual(list(outside.iterdir()), [])
+
     def test_run_netlist_file(self) -> None:
         source = self.root / "source.cir"
         source.write_text(".end\n")
@@ -916,6 +946,108 @@ class MCPServerTests(unittest.TestCase):
             "2*1k",
         )
         self.assertTrue(result.structured_content["all_passed"])
+
+    def test_run_experiment_propagates_cache_and_records_provenance(self) -> None:
+        def execute(
+            netlist: str,
+            filename: str,
+            ascii_raw: bool,
+            timeout: int,
+            dest: Path,
+            reuse_cache: bool,
+        ) -> Path:
+            self.assertTrue(reuse_cache)
+            dest.mkdir(parents=True)
+            return dest
+
+        summary = {
+            "status": "completed",
+            "duration_seconds": 0.01,
+            "measurements": {},
+            "cache": {"hit": True, "key": "cache-key"},
+        }
+        with (
+            patch.object(mcp_server, "_run_netlist_text", side_effect=execute),
+            patch.object(mcp_server, "_summarize_run", return_value=summary),
+        ):
+            result = mcp_server.run_experiment(
+                "R1 in out {R}\n.end\n",
+                [{"name": "R", "values": ["1k"]}],
+                reuse_cache=True,
+            )
+
+        self.assertTrue(result["points"][0]["cache_hit"])
+        self.assertEqual(result["points"][0]["cache_key"], "cache-key")
+        manifest = json.loads(Path(result["manifest"]).read_text(encoding="utf-8"))
+        self.assertTrue(manifest["definition"]["reuse_cache"])
+
+    def test_durable_experiment_persists_and_forwards_cache_policy(self) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        calls: list[bool] = []
+
+        def execute_point(
+            index: int,
+            combination: dict[str, str],
+            point_dir: Path,
+            netlist_template: str,
+            filename: str,
+            ascii_raw: bool,
+            timeout_seconds: int,
+            analyses: list[dict[str, object]],
+            cancel_event: threading.Event,
+            reuse_cache: bool,
+        ) -> dict[str, object]:
+            calls.append(reuse_cache)
+            return {
+                "index": index,
+                "parameters": combination,
+                "run_dir": str(point_dir),
+                "simulation_status": "completed",
+                "duration_seconds": 0.01,
+                "measurements": {},
+                "analyses": [],
+                "all_passed": True,
+                "error": None,
+                "cache_hit": True,
+                "cache_key": "cache-key",
+            }
+
+        try:
+            with patch.object(
+                mcp_server,
+                "_execute_experiment_point",
+                side_effect=execute_point,
+            ):
+                defined = manager.define(
+                    "R1 in out {R}\n.end\n",
+                    [{"name": "R", "values": ["1k"]}],
+                    max_concurrency=1,
+                    reuse_cache=True,
+                )
+                manager.start(defined["experiment_id"])
+                finished = manager.wait(defined["experiment_id"])
+        finally:
+            manager.shutdown()
+
+        self.assertEqual(finished["status"], "completed")
+        self.assertEqual(calls, [True])
+        manifest = json.loads(Path(defined["manifest"]).read_text(encoding="utf-8"))
+        self.assertTrue(manifest["definition"]["reuse_cache"])
+
+    def test_cache_option_is_exposed_on_all_mcp_simulation_tools(self) -> None:
+        tools = asyncio.run(mcp_server.mcp.list_tools())
+        by_name = {tool.name: tool for tool in tools}
+        for name in (
+            "run_netlist",
+            "run_netlist_file",
+            "run_parameter_sweep",
+            "run_experiment",
+            "define_experiment",
+        ):
+            with self.subTest(tool=name):
+                cache_property = by_name[name].input_schema["properties"]["reuse_cache"]
+                self.assertEqual(cache_property["type"], "boolean")
+                self.assertFalse(cache_property["default"])
 
     def test_compare_experiments_reports_deltas_and_requirement_changes(self) -> None:
         baseline_id = "mcp-experiment-baseline"

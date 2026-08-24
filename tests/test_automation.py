@@ -5,16 +5,300 @@ import tempfile
 import unittest
 import json
 import platform
+import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 from checks import assert_between, assert_close, floor, peak
-from ltspice_wrapper import LTSPICE, parse_measurements, parse_step_values, parse_stepped_measurements, run_netlist
+import ltspice_wrapper
+from ltspice_wrapper import (
+    LTSPICE,
+    parse_measurements,
+    parse_step_values,
+    parse_stepped_measurements,
+    run_netlist,
+)
 from raw_parser import RawData, parse_raw, step_slices
 from report_runs import collect_records
 from examples.design_search_rc import choose_best
 
 
 class AutomationTests(unittest.TestCase):
+    def test_simulation_cache_is_disabled_by_default_and_never_stores_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "LTspice.exe"
+            executable.write_bytes(b"simulator")
+            source = root / "filter.cir"
+            source.write_text("R1 in out 1k\n.end\n", encoding="utf-8")
+            cache = root / "cache"
+            calls = 0
+
+            def simulate(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                nonlocal calls
+                calls += 1
+                run_netlist_path = Path(command[-1])
+                run_netlist_path.with_suffix(".log").write_text("gain=1\n")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            ltspice_wrapper._simulator_metadata_cached.cache_clear()
+            with (
+                patch.object(ltspice_wrapper, "LTSPICE", executable),
+                patch.object(ltspice_wrapper.subprocess, "run", side_effect=simulate),
+            ):
+                first = run_netlist(source, root / "first", cache_dir=cache)
+                run_netlist(source, root / "second", cache_dir=cache)
+
+            manifest = json.loads((first / "run_manifest.json").read_text())
+            self.assertEqual(calls, 2)
+            self.assertFalse(manifest["cache"]["requested"])
+            self.assertFalse(cache.exists())
+
+            with (
+                patch.object(ltspice_wrapper, "LTSPICE", executable),
+                patch.object(
+                    ltspice_wrapper.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess([], 1, "", "failed"),
+                ),
+                self.assertRaises(RuntimeError),
+            ):
+                run_netlist(
+                    source,
+                    root / "failed",
+                    reuse_cache=True,
+                    cache_dir=cache,
+                )
+            self.assertFalse(cache.exists())
+
+    def test_simulation_cache_reuses_verified_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "LTspice.exe"
+            executable.write_bytes(b"simulator")
+            source = root / "filter.cir"
+            source.write_text("R1 in out 1k\n.end\n", encoding="utf-8")
+            cache = root / "cache"
+            calls = 0
+
+            def simulate(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                nonlocal calls
+                calls += 1
+                run_netlist_path = Path(command[-1])
+                run_netlist_path.with_suffix(".raw").write_bytes(b"waveform")
+                run_netlist_path.with_suffix(".log").write_text(
+                    "gain=1\n", encoding="utf-8"
+                )
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            ltspice_wrapper._simulator_metadata_cached.cache_clear()
+            with (
+                patch.object(ltspice_wrapper, "LTSPICE", executable),
+                patch.object(ltspice_wrapper.subprocess, "run", side_effect=simulate),
+            ):
+                first = run_netlist(
+                    source,
+                    root / "first",
+                    reuse_cache=True,
+                    cache_dir=cache,
+                )
+                second = run_netlist(
+                    source,
+                    root / "second",
+                    reuse_cache=True,
+                    cache_dir=cache,
+                )
+
+            first_manifest = json.loads((first / "run_manifest.json").read_text())
+            second_manifest = json.loads((second / "run_manifest.json").read_text())
+            self.assertEqual(calls, 1)
+            self.assertFalse(first_manifest["cache"]["hit"])
+            self.assertTrue(first_manifest["cache"]["stored"])
+            self.assertEqual(first_manifest["execution_source"], "simulator")
+            self.assertTrue(second_manifest["cache"]["hit"])
+            self.assertFalse(second_manifest["cache"]["stored"])
+            self.assertEqual(second_manifest["execution_source"], "cache")
+            self.assertEqual((second / "filter.raw").read_bytes(), b"waveform")
+            self.assertEqual(
+                first_manifest["cache"]["key"], second_manifest["cache"]["key"]
+            )
+
+    def test_simulation_cache_invalidates_changed_inputs_and_dependencies(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "LTspice.exe"
+            executable.write_bytes(b"simulator")
+            model = root / "device.lib"
+            model.write_text(".param RV=1k\n", encoding="utf-8")
+            source = root / "filter.cir"
+            source.write_text(
+                f'.include "{model}"\nR1 in out {{RV}}\n.end\n', encoding="utf-8"
+            )
+            cache = root / "cache"
+            calls = 0
+
+            def simulate(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                nonlocal calls
+                calls += 1
+                run_netlist_path = Path(command[-1])
+                run_netlist_path.with_suffix(".raw").write_bytes(str(calls).encode())
+                run_netlist_path.with_suffix(".log").write_text("gain=1\n")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            ltspice_wrapper._simulator_metadata_cached.cache_clear()
+            with (
+                patch.object(ltspice_wrapper, "LTSPICE", executable),
+                patch.object(ltspice_wrapper.subprocess, "run", side_effect=simulate),
+            ):
+                run_netlist(source, root / "one", reuse_cache=True, cache_dir=cache)
+                model.write_text(".param RV=2k\n", encoding="utf-8")
+                run_netlist(source, root / "two", reuse_cache=True, cache_dir=cache)
+                run_netlist(
+                    source,
+                    root / "three",
+                    ascii_raw=True,
+                    reuse_cache=True,
+                    cache_dir=cache,
+                )
+                executable.write_bytes(b"simulator-version-two")
+                run_netlist(
+                    source,
+                    root / "four",
+                    reuse_cache=True,
+                    cache_dir=cache,
+                )
+
+            self.assertEqual(calls, 4)
+            self.assertEqual(len(list(cache.glob("simulation-*"))), 4)
+
+    def test_simulation_cache_bypasses_unresolved_or_corrupt_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "LTspice.exe"
+            executable.write_bytes(b"simulator")
+            source = root / "filter.cir"
+            cache = root / "cache"
+            calls = 0
+
+            def simulate(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                nonlocal calls
+                calls += 1
+                run_netlist_path = Path(command[-1])
+                run_netlist_path.with_suffix(".raw").write_bytes(b"waveform")
+                run_netlist_path.with_suffix(".log").write_text("gain=1\n")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            ltspice_wrapper._simulator_metadata_cached.cache_clear()
+            with (
+                patch.object(ltspice_wrapper, "LTSPICE", executable),
+                patch.object(ltspice_wrapper.subprocess, "run", side_effect=simulate),
+            ):
+                source.write_text('.include "missing.lib"\n.end\n', encoding="utf-8")
+                unresolved = run_netlist(
+                    source,
+                    root / "unresolved",
+                    reuse_cache=True,
+                    cache_dir=cache,
+                )
+                source.write_text("D1 in 0 DTEST\n.end\n", encoding="utf-8")
+                model_dependent = run_netlist(
+                    source,
+                    root / "model-dependent",
+                    reuse_cache=True,
+                    cache_dir=cache,
+                )
+                source.write_text("R1 in out 1k\n.end\n", encoding="utf-8")
+                first = run_netlist(
+                    source,
+                    root / "first",
+                    reuse_cache=True,
+                    cache_dir=cache,
+                )
+                first_manifest = json.loads((first / "run_manifest.json").read_text())
+                cache_entry = cache / f"simulation-{first_manifest['cache']['key']}"
+                next((cache_entry / "artifacts").iterdir()).write_bytes(b"corrupt")
+                corrupt = run_netlist(
+                    source,
+                    root / "corrupt",
+                    reuse_cache=True,
+                    cache_dir=cache,
+                )
+
+            unresolved_manifest = json.loads(
+                (unresolved / "run_manifest.json").read_text()
+            )
+            model_manifest = json.loads(
+                (model_dependent / "run_manifest.json").read_text()
+            )
+            corrupt_manifest = json.loads((corrupt / "run_manifest.json").read_text())
+            self.assertEqual(calls, 4)
+            self.assertFalse(unresolved_manifest["cache"]["eligible"])
+            self.assertIn("cannot be resolved", unresolved_manifest["cache"]["reason"])
+            self.assertFalse(model_manifest["cache"]["eligible"])
+            self.assertIn("model-dependent", model_manifest["cache"]["reason"])
+            self.assertFalse(corrupt_manifest["cache"]["hit"])
+            self.assertIn("integrity", corrupt_manifest["cache"]["reason"])
+
+    def test_simulation_cache_rechecks_inputs_after_staging_a_hit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "LTspice.exe"
+            executable.write_bytes(b"simulator")
+            dependency = root / "values.inc"
+            dependency.write_text(".param RV=1k\n", encoding="utf-8")
+            source = root / "filter.cir"
+            source.write_text(
+                f'.include "{dependency}"\nR1 in out {{RV}}\n.end\n',
+                encoding="utf-8",
+            )
+            cache = root / "cache"
+            calls = 0
+
+            def simulate(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                nonlocal calls
+                calls += 1
+                run_netlist_path = Path(command[-1])
+                run_netlist_path.with_suffix(".raw").write_bytes(str(calls).encode())
+                run_netlist_path.with_suffix(".log").write_text("gain=1\n")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            ltspice_wrapper._simulator_metadata_cached.cache_clear()
+            with (
+                patch.object(ltspice_wrapper, "LTSPICE", executable),
+                patch.object(ltspice_wrapper.subprocess, "run", side_effect=simulate),
+            ):
+                run_netlist(source, root / "first", reuse_cache=True, cache_dir=cache)
+                original_copy = ltspice_wrapper.shutil.copy2
+                dependency_changed = False
+
+                def copy_and_change_dependency(
+                    source_path: Path, destination_path: Path
+                ) -> Path:
+                    nonlocal dependency_changed
+                    copied = original_copy(source_path, destination_path)
+                    if "artifacts" in Path(source_path).parts and not dependency_changed:
+                        dependency.write_text(".param RV=2k\n", encoding="utf-8")
+                        dependency_changed = True
+                    return copied
+
+                with patch.object(
+                    ltspice_wrapper.shutil,
+                    "copy2",
+                    side_effect=copy_and_change_dependency,
+                ):
+                    second = run_netlist(
+                        source,
+                        root / "second",
+                        reuse_cache=True,
+                        cache_dir=cache,
+                    )
+
+            manifest = json.loads((second / "run_manifest.json").read_text())
+            self.assertTrue(dependency_changed)
+            self.assertEqual(calls, 2)
+            self.assertEqual(manifest["execution_source"], "simulator")
+            self.assertFalse(manifest["cache"]["hit"])
+
     def test_parse_complex_raw_file(self) -> None:
         header = """Title: test
 Flags: complex forward
