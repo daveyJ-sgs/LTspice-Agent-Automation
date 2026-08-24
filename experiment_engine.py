@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import html
 import itertools
 import json
+import math
 import os
 import queue
 import re
@@ -134,11 +136,70 @@ class ExperimentJobSnapshot(TypedDict):
     error: str | None
 
 
+class MeasurementComparison(TypedDict):
+    name: str
+    status: str
+    baseline: float | None
+    candidate: float | None
+    delta: float | None
+
+
+class RequirementComparison(TypedDict):
+    check_id: str
+    analysis_name: str
+    metric: str
+    operator: str
+    target: float
+    unit: str
+    parameters: dict[str, float | int | str]
+    status: str
+    baseline_value: float | None
+    candidate_value: float | None
+    value_delta: float | None
+    baseline_passed: bool | None
+    candidate_passed: bool | None
+
+
+class ExperimentPointComparison(TypedDict):
+    status: str
+    parameters: dict[str, str]
+    baseline_index: int | None
+    candidate_index: int | None
+    baseline_all_passed: bool | None
+    candidate_all_passed: bool | None
+    baseline_error: str | None
+    candidate_error: str | None
+    measurements: list[MeasurementComparison]
+    requirements: list[RequirementComparison]
+
+
+class ExperimentComparisonResult(TypedDict):
+    schema_version: int
+    comparison_id: str
+    comparison_dir: str
+    comparison_json: str
+    comparison_markdown: str
+    baseline_experiment_id: str
+    candidate_experiment_id: str
+    matched_points: int
+    added_points: int
+    removed_points: int
+    matched_measurements: int
+    added_measurements: int
+    removed_measurements: int
+    requirement_regressions: int
+    requirement_improvements: int
+    unchanged_requirements: int
+    added_requirements: int
+    removed_requirements: int
+    points: list[ExperimentPointComparison]
+
+
 # --- internal helpers -------------------------------------------------
 def _write_json(path: Path, value: object) -> None:
     temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     temporary_path.write_text(
-        json.dumps(value, indent=2, sort_keys=True) + "\n",
+        json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
     os.replace(temporary_path, path)
@@ -464,6 +525,508 @@ def _definition_hash(definition: dict[str, object]) -> str:
         ensure_ascii=False,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _write_text(path: Path, value: str) -> None:
+    temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    temporary_path.write_text(value, encoding="utf-8")
+    os.replace(temporary_path, path)
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+
+
+def _finite_number(value: object, field: str) -> float:
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+    ):
+        raise ValueError(f"{field} must be a finite number")
+    return float(value)
+
+
+def _finite_delta(candidate: float, baseline: float, field: str) -> float:
+    delta = candidate - baseline
+    if not math.isfinite(delta):
+        raise ValueError(f"{field} delta must be finite")
+    return delta
+
+
+def _comparison_experiment_path(runs_dir: Path, experiment_id: str) -> Path:
+    if (
+        not isinstance(experiment_id, str)
+        or not experiment_id.startswith("mcp-experiment-")
+        or Path(experiment_id).name != experiment_id
+        or "/" in experiment_id
+        or "\\" in experiment_id
+    ):
+        raise ValueError("experiment_id must be a plain mcp-experiment-* directory name")
+    experiment_dir = runs_dir / experiment_id
+    if not experiment_dir.is_dir():
+        raise FileNotFoundError(f"Experiment not found: {experiment_id}")
+    try:
+        experiment_dir.resolve().relative_to(runs_dir.resolve())
+    except ValueError as exc:
+        raise ValueError(f"Experiment must be inside the runs directory: {experiment_id}") from exc
+    return experiment_dir
+
+
+def _normalize_requirement(
+    analysis_name: str, result: object, point_index: int
+) -> tuple[str, dict[str, object]]:
+    prefix = f"point {point_index} requirement"
+    if not isinstance(result, dict):
+        raise ValueError(f"{prefix} must be an object")
+    metric = result.get("metric")
+    threshold = result.get("threshold")
+    parameters = result.get("parameters")
+    if not isinstance(metric, str) or not metric:
+        raise ValueError(f"{prefix} metric must be a non-empty string")
+    if not isinstance(threshold, dict):
+        raise ValueError(f"{prefix} threshold must be an object")
+    operator = threshold.get("operator")
+    unit = threshold.get("unit")
+    if not isinstance(operator, str) or not operator:
+        raise ValueError(f"{prefix} threshold operator must be a non-empty string")
+    if not isinstance(unit, str):
+        raise ValueError(f"{prefix} threshold unit must be a string")
+    target = _finite_number(threshold.get("target"), f"{prefix} threshold target")
+    if not isinstance(parameters, dict) or not all(
+        isinstance(name, str) for name in parameters
+    ):
+        raise ValueError(f"{prefix} parameters must be an object with string keys")
+    normalized_parameters: dict[str, float | int | str] = {}
+    for name, value in parameters.items():
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            raise ValueError(f"{prefix} parameter {name} must be a scalar")
+        if isinstance(value, (int, float)) and not math.isfinite(value):
+            raise ValueError(f"{prefix} parameter {name} must be finite")
+        normalized_parameters[name] = value
+    value = _finite_number(result.get("value"), f"{prefix} value")
+    passed = result.get("passed")
+    if not isinstance(passed, bool):
+        raise ValueError(f"{prefix} passed must be a boolean")
+    identity = {
+        "analysis_name": analysis_name,
+        "metric": metric,
+        "operator": operator,
+        "target": target,
+        "unit": unit,
+        "parameters": normalized_parameters,
+    }
+    identity_key = _canonical_json(identity)
+    return identity_key, {
+        **identity,
+        "check_id": hashlib.sha256(identity_key.encode("utf-8")).hexdigest()[:16],
+        "value": value,
+        "passed": passed,
+    }
+
+
+def _normalize_comparison_point(point: object) -> dict[str, object]:
+    if not isinstance(point, dict):
+        raise ValueError("experiment points must contain objects")
+    index = point.get("index")
+    if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+        raise ValueError("point index must be a nonnegative integer")
+    parameters = point.get("parameters")
+    if not isinstance(parameters, dict) or not all(
+        isinstance(name, str) and isinstance(value, str)
+        for name, value in parameters.items()
+    ):
+        raise ValueError(f"point {index} parameters must map strings to strings")
+    measurements = point.get("measurements")
+    if not isinstance(measurements, dict) or not all(
+        isinstance(name, str) for name in measurements
+    ):
+        raise ValueError(f"point {index} measurements must be an object")
+    normalized_measurements = {
+        name: _finite_number(value, f"point {index} measurement {name}")
+        for name, value in measurements.items()
+    }
+    all_passed = point.get("all_passed")
+    error = point.get("error")
+    analyses = point.get("analyses")
+    if not isinstance(all_passed, bool):
+        raise ValueError(f"point {index} all_passed must be a boolean")
+    if error is not None and not isinstance(error, str):
+        raise ValueError(f"point {index} error must be a string or null")
+    if not isinstance(analyses, list):
+        raise ValueError(f"point {index} analyses must be a list")
+    requirements: dict[str, dict[str, object]] = {}
+    for entry in analyses:
+        if not isinstance(entry, dict):
+            raise ValueError(f"point {index} analyses must contain objects")
+        analysis_name = entry.get("name")
+        analysis = entry.get("analysis")
+        if not isinstance(analysis_name, str) or not analysis_name:
+            raise ValueError(f"point {index} analysis name must be a non-empty string")
+        if analysis is None:
+            continue
+        if not isinstance(analysis, dict) or not isinstance(analysis.get("results"), list):
+            raise ValueError(f"point {index} analysis result must contain a results list")
+        for result in analysis["results"]:
+            identity_key, normalized = _normalize_requirement(
+                analysis_name, result, index
+            )
+            if identity_key in requirements:
+                raise ValueError(
+                    f"point {index} has duplicate requirement identity "
+                    f"{normalized['check_id']}"
+                )
+            requirements[identity_key] = normalized
+    return {
+        "index": index,
+        "parameters": dict(parameters),
+        "parameter_key": _canonical_json(parameters),
+        "measurements": normalized_measurements,
+        "requirements": requirements,
+        "all_passed": all_passed,
+        "error": error,
+    }
+
+
+def _load_comparison_experiment(
+    runs_dir: Path, experiment_id: str
+) -> tuple[list[dict[str, object]], str]:
+    experiment_dir = _comparison_experiment_path(runs_dir, experiment_id)
+    results_path = experiment_dir / "results.json"
+    try:
+        raw = results_path.read_bytes()
+        document = json.loads(raw.decode("utf-8"))
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Experiment results not found: {experiment_id}") from None
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid results.json for {experiment_id}: {exc}") from exc
+    if not isinstance(document, dict):
+        raise ValueError(f"results.json for {experiment_id} must contain an object")
+    if document.get("experiment_id") != experiment_id:
+        raise ValueError(f"results.json experiment_id does not match {experiment_id}")
+    if document.get("status") != "completed":
+        raise ValueError(f"Experiment {experiment_id} is not completed")
+    if not isinstance(document.get("points"), list):
+        raise ValueError(f"results.json for {experiment_id} must contain a points list")
+    points = [_normalize_comparison_point(point) for point in document["points"]]
+    counts: dict[str, int] = {}
+    for field in (
+        "point_count",
+        "completed_points",
+        "error_points",
+        "passed_points",
+        "failed_points",
+    ):
+        value = document.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"results.json {field} must be a nonnegative integer")
+        counts[field] = value
+    all_passed = document.get("all_passed")
+    if not isinstance(all_passed, bool):
+        raise ValueError("results.json all_passed must be a boolean")
+    if counts["point_count"] == 0 or counts["point_count"] != len(points):
+        raise ValueError("results.json point_count must match its non-empty points list")
+    if (
+        counts["completed_points"] > counts["point_count"]
+        or counts["error_points"] > counts["point_count"]
+        or counts["passed_points"] + counts["failed_points"] != counts["point_count"]
+        or all_passed != (counts["passed_points"] == counts["point_count"])
+    ):
+        raise ValueError("results.json aggregate counts are inconsistent")
+    indexes: set[int] = set()
+    parameter_keys: set[str] = set()
+    for point in points:
+        index = point["index"]
+        parameter_key = point["parameter_key"]
+        if index in indexes:
+            raise ValueError(f"Experiment {experiment_id} has duplicate point index {index}")
+        if parameter_key in parameter_keys:
+            raise ValueError(f"Experiment {experiment_id} has duplicate parameter map")
+        indexes.add(index)  # type: ignore[arg-type]
+        parameter_keys.add(parameter_key)  # type: ignore[arg-type]
+    points.sort(key=lambda point: point["index"])
+    return points, hashlib.sha256(raw).hexdigest()
+
+
+def _compare_measurements(
+    baseline: dict[str, float], candidate: dict[str, float]
+) -> list[MeasurementComparison]:
+    comparisons: list[MeasurementComparison] = []
+    for name in sorted(set(baseline) | set(candidate)):
+        baseline_value = baseline.get(name)
+        candidate_value = candidate.get(name)
+        if baseline_value is None:
+            status = "added"
+        elif candidate_value is None:
+            status = "removed"
+        else:
+            status = "matched"
+        comparisons.append(
+            {
+                "name": name,
+                "status": status,
+                "baseline": baseline_value,
+                "candidate": candidate_value,
+                "delta": None
+                if baseline_value is None or candidate_value is None
+                else _finite_delta(
+                    candidate_value,
+                    baseline_value,
+                    f"measurement {name}",
+                ),
+            }
+        )
+    return comparisons
+
+
+def _compare_requirements(
+    baseline: dict[str, dict[str, object]],
+    candidate: dict[str, dict[str, object]],
+) -> list[RequirementComparison]:
+    comparisons: list[RequirementComparison] = []
+    for identity_key in sorted(set(baseline) | set(candidate)):
+        baseline_check = baseline.get(identity_key)
+        candidate_check = candidate.get(identity_key)
+        check = baseline_check or candidate_check
+        assert check is not None
+        baseline_passed = None if baseline_check is None else baseline_check["passed"]
+        candidate_passed = None if candidate_check is None else candidate_check["passed"]
+        baseline_value = None if baseline_check is None else baseline_check["value"]
+        candidate_value = None if candidate_check is None else candidate_check["value"]
+        if baseline_check is None:
+            status = "added"
+        elif candidate_check is None:
+            status = "removed"
+        elif baseline_passed and not candidate_passed:
+            status = "regression"
+        elif not baseline_passed and candidate_passed:
+            status = "improvement"
+        else:
+            status = "unchanged"
+        comparisons.append(
+            {
+                "check_id": check["check_id"],  # type: ignore[typeddict-item]
+                "analysis_name": check["analysis_name"],  # type: ignore[typeddict-item]
+                "metric": check["metric"],  # type: ignore[typeddict-item]
+                "operator": check["operator"],  # type: ignore[typeddict-item]
+                "target": check["target"],  # type: ignore[typeddict-item]
+                "unit": check["unit"],  # type: ignore[typeddict-item]
+                "parameters": check["parameters"],  # type: ignore[typeddict-item]
+                "status": status,
+                "baseline_value": baseline_value,  # type: ignore[typeddict-item]
+                "candidate_value": candidate_value,  # type: ignore[typeddict-item]
+                "value_delta": None
+                if baseline_value is None or candidate_value is None
+                else _finite_delta(
+                    candidate_value,  # type: ignore[arg-type]
+                    baseline_value,  # type: ignore[arg-type]
+                    f"requirement {check['check_id']}",
+                ),
+                "baseline_passed": baseline_passed,  # type: ignore[typeddict-item]
+                "candidate_passed": candidate_passed,  # type: ignore[typeddict-item]
+            }
+        )
+    return comparisons
+
+
+def _comparison_markdown(result: ExperimentComparisonResult) -> str:
+    def cell(value: object) -> str:
+        if value is None:
+            return "—"
+        if isinstance(value, float):
+            return format(value, ".12g")
+        escaped = html.escape(str(value), quote=False)
+        return (
+            escaped.replace("\\", "\\\\")
+            .replace("|", "\\|")
+            .replace("`", "\\`")
+            .replace("\r\n", "<br>")
+            .replace("\n", "<br>")
+        )
+
+    lines = [
+        "# Experiment comparison",
+        "",
+        f"Baseline: `{cell(result['baseline_experiment_id'])}`  ",
+        f"Candidate: `{cell(result['candidate_experiment_id'])}`",
+        "",
+        "## Summary",
+        "",
+        "| Item | Matched/unchanged | Added/improved | Removed/regressed |",
+        "| --- | ---: | ---: | ---: |",
+        "| Points | "
+        f"{result['matched_points']} | {result['added_points']} | "
+        f"{result['removed_points']} |",
+        "| Measurements | "
+        f"{result['matched_measurements']} | {result['added_measurements']} | "
+        f"{result['removed_measurements']} |",
+        "| Requirements | "
+        f"{result['unchanged_requirements']} | "
+        f"{result['added_requirements']} added, "
+        f"{result['requirement_improvements']} improved | "
+        f"{result['removed_requirements']} removed, "
+        f"{result['requirement_regressions']} regressed |",
+        "",
+        "## Points",
+        "",
+    ]
+    for point in result["points"]:
+        parameters = ", ".join(
+            f"{cell(name)}={cell(value)}" for name, value in sorted(point["parameters"].items())
+        )
+        lines.extend(
+            [
+                f"### {cell(point['status']).title()}: {parameters or '(no parameters)'}",
+                "",
+                f"Baseline index: {cell(point['baseline_index'])}; "
+                f"candidate index: {cell(point['candidate_index'])}",
+                "",
+            ]
+        )
+        if point["measurements"]:
+            lines.extend([
+                "| Measurement | Status | Baseline | Candidate | Delta |",
+                "| --- | --- | ---: | ---: | ---: |",
+            ])
+            lines.extend(
+                f"| {cell(item['name'])} | {cell(item['status'])} | "
+                f"{cell(item['baseline'])} | {cell(item['candidate'])} | "
+                f"{cell(item['delta'])} |"
+                for item in point["measurements"]
+            )
+            lines.append("")
+        if point["requirements"]:
+            lines.extend([
+                "| Check | Analysis / metric | Status | Baseline | Candidate | Delta |",
+                "| --- | --- | --- | ---: | ---: | ---: |",
+            ])
+            lines.extend(
+                f"| `{cell(item['check_id'])}` | {cell(item['analysis_name'])} / "
+                f"{cell(item['metric'])} | {cell(item['status'])} | "
+                f"{cell(item['baseline_value'])} | "
+                f"{cell(item['candidate_value'])} | "
+                f"{cell(item['value_delta'])} |"
+                for item in point["requirements"]
+            )
+            lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def compare_experiments(
+    runs_dir: Path,
+    baseline_experiment_id: str,
+    candidate_experiment_id: str,
+) -> ExperimentComparisonResult:
+    """Compare two complete experiment artifacts without running simulations."""
+    baseline_points, baseline_hash = _load_comparison_experiment(
+        runs_dir, baseline_experiment_id
+    )
+    candidate_points, candidate_hash = _load_comparison_experiment(
+        runs_dir, candidate_experiment_id
+    )
+    candidate_by_parameters = {
+        point["parameter_key"]: point for point in candidate_points
+    }
+    baseline_keys = {point["parameter_key"] for point in baseline_points}
+    point_comparisons: list[ExperimentPointComparison] = []
+
+    def point_comparison(
+        status: str,
+        baseline: dict[str, object] | None,
+        candidate: dict[str, object] | None,
+    ) -> ExperimentPointComparison:
+        point = baseline or candidate
+        assert point is not None
+        return {
+            "status": status,
+            "parameters": point["parameters"],  # type: ignore[typeddict-item]
+            "baseline_index": (
+                None if baseline is None else baseline["index"]
+            ),  # type: ignore[typeddict-item]
+            "candidate_index": (
+                None if candidate is None else candidate["index"]
+            ),  # type: ignore[typeddict-item]
+            "baseline_all_passed": (
+                None if baseline is None else baseline["all_passed"]
+            ),  # type: ignore[typeddict-item]
+            "candidate_all_passed": (
+                None if candidate is None else candidate["all_passed"]
+            ),  # type: ignore[typeddict-item]
+            "baseline_error": (
+                None if baseline is None else baseline["error"]
+            ),  # type: ignore[typeddict-item]
+            "candidate_error": (
+                None if candidate is None else candidate["error"]
+            ),  # type: ignore[typeddict-item]
+            "measurements": _compare_measurements(
+                {} if baseline is None else baseline["measurements"],  # type: ignore[arg-type]
+                {} if candidate is None else candidate["measurements"],  # type: ignore[arg-type]
+            ),
+            "requirements": _compare_requirements(
+                {} if baseline is None else baseline["requirements"],  # type: ignore[arg-type]
+                {} if candidate is None else candidate["requirements"],  # type: ignore[arg-type]
+            ),
+        }
+
+    for baseline in baseline_points:
+        candidate = candidate_by_parameters.get(baseline["parameter_key"])
+        point_comparisons.append(
+            point_comparison("removed" if candidate is None else "matched", baseline, candidate)
+        )
+    for candidate in candidate_points:
+        if candidate["parameter_key"] not in baseline_keys:
+            point_comparisons.append(point_comparison("added", None, candidate))
+
+    comparison_key = {
+        "schema_version": 1,
+        "baseline_experiment_id": baseline_experiment_id,
+        "candidate_experiment_id": candidate_experiment_id,
+        "baseline_results_sha256": baseline_hash,
+        "candidate_results_sha256": candidate_hash,
+    }
+    comparison_id = hashlib.sha256(
+        _canonical_json(comparison_key).encode("utf-8")
+    ).hexdigest()[:16]
+    comparison_dir = runs_dir / "comparisons" / f"comparison-{comparison_id}"
+    try:
+        comparison_dir.resolve().relative_to(runs_dir.resolve())
+    except ValueError as exc:
+        raise ValueError("Comparison output must be inside the runs directory") from exc
+    comparison_json = comparison_dir / "comparison.json"
+    comparison_markdown = comparison_dir / "comparison.md"
+    measurements = [item for point in point_comparisons for item in point["measurements"]]
+    requirements = [item for point in point_comparisons for item in point["requirements"]]
+    result: ExperimentComparisonResult = {
+        "schema_version": 1,
+        "comparison_id": comparison_id,
+        "comparison_dir": str(comparison_dir),
+        "comparison_json": str(comparison_json),
+        "comparison_markdown": str(comparison_markdown),
+        "baseline_experiment_id": baseline_experiment_id,
+        "candidate_experiment_id": candidate_experiment_id,
+        "matched_points": sum(point["status"] == "matched" for point in point_comparisons),
+        "added_points": sum(point["status"] == "added" for point in point_comparisons),
+        "removed_points": sum(point["status"] == "removed" for point in point_comparisons),
+        "matched_measurements": sum(item["status"] == "matched" for item in measurements),
+        "added_measurements": sum(item["status"] == "added" for item in measurements),
+        "removed_measurements": sum(item["status"] == "removed" for item in measurements),
+        "requirement_regressions": sum(item["status"] == "regression" for item in requirements),
+        "requirement_improvements": sum(item["status"] == "improvement" for item in requirements),
+        "unchanged_requirements": sum(item["status"] == "unchanged" for item in requirements),
+        "added_requirements": sum(item["status"] == "added" for item in requirements),
+        "removed_requirements": sum(item["status"] == "removed" for item in requirements),
+        "points": point_comparisons,
+    }
+    comparison_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(comparison_json, result)
+    _write_text(comparison_markdown, _comparison_markdown(result))
+    return result
 
 
 def run_experiment_sync(

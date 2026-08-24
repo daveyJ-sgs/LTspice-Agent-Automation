@@ -400,6 +400,27 @@ LTspice execution and waveform-analysis adapter plus the public tool wrappers.
 This boundary lets other Python front ends reuse the engine without running an
 MCP server.
 
+### Compare completed experiments
+
+Phase 2C-A adds `compare_experiments`, a read-only comparison of two completed
+experiment IDs. It reads their existing `results.json` artifacts and never
+runs LTspice. Points match only when their complete parameter maps match
+exactly, including derived values: parameter key order is irrelevant, but
+value text is case-sensitive and is not normalized (`1k` and `1000` differ).
+
+The result reports matched, added, and removed points and measurements;
+measurement deltas are `candidate - baseline`. Requirements match by analysis
+name, metric, threshold, unit, and metric parameters. A passing baseline check
+that fails in the candidate is a regression; the reverse is an improvement.
+Added and removed checks remain explicit rather than being inferred.
+
+Each comparison is content-addressed from both experiment IDs and both result
+file hashes. Repeating an unchanged comparison returns the same ID and rewrites
+the same deterministic UTF-8 artifacts under
+`runs/comparisons/comparison-<id>/comparison.json` and `comparison.md`.
+Malformed, unfinished, ambiguous, or non-finite inputs are rejected before an
+output directory is created.
+
 `run_experiment` remains the backward-compatible synchronous path. It validates
 the complete definition before running, executes sequentially, and caps the
 Cartesian product at 1,000 points. Requirements are

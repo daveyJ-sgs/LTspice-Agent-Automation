@@ -5,6 +5,7 @@ import cmath
 import csv
 import json
 import math
+import os
 import tempfile
 import threading
 import time
@@ -45,6 +46,66 @@ class MCPServerTests(unittest.TestCase):
         run_dir = self.runs / name
         run_dir.mkdir(parents=True)
         return run_dir
+
+    def make_experiment_result(
+        self,
+        experiment_id: str,
+        points: list[dict[str, object]],
+        status: str = "completed",
+    ) -> Path:
+        experiment_dir = self.runs / experiment_id
+        experiment_dir.mkdir(parents=True, exist_ok=True)
+        path = experiment_dir / "results.json"
+        mcp_server._write_json(
+            path,
+            {
+                "experiment_id": experiment_id,
+                "status": status,
+                "point_count": len(points),
+                "completed_points": len(points),
+                "error_points": 0,
+                "passed_points": sum(bool(point["all_passed"]) for point in points),
+                "failed_points": sum(not bool(point["all_passed"]) for point in points),
+                "all_passed": all(bool(point["all_passed"]) for point in points),
+                "points": points,
+            },
+        )
+        return path
+
+    @staticmethod
+    def experiment_point(
+        index: int,
+        parameters: dict[str, str],
+        measurements: dict[str, float],
+        checks: list[dict[str, object]],
+    ) -> dict[str, object]:
+        return {
+            "index": index,
+            "parameters": parameters,
+            "measurements": measurements,
+            "analyses": [
+                {
+                    "name": "bandwidth|check `<img src=x>",
+                    "status": "completed",
+                    "error": None,
+                    "analysis": {"results": checks},
+                }
+            ],
+            "all_passed": all(check["passed"] for check in checks),
+            "error": None,
+        }
+
+    @staticmethod
+    def experiment_check(value: float, passed: bool) -> dict[str, object]:
+        return {
+            "metric": "cutoff_frequency",
+            "value": value,
+            "unit": "Hz",
+            "threshold": {"operator": ">=", "target": 1000.0, "unit": "Hz"},
+            "passed": passed,
+            "evidence": {},
+            "parameters": {"reference_frequency": 10.0},
+        }
 
     def test_run_netlist(self) -> None:
         output_dir = self.make_run()
@@ -855,6 +916,187 @@ class MCPServerTests(unittest.TestCase):
             "2*1k",
         )
         self.assertTrue(result.structured_content["all_passed"])
+
+    def test_compare_experiments_reports_deltas_and_requirement_changes(self) -> None:
+        baseline_id = "mcp-experiment-baseline"
+        candidate_id = "mcp-experiment-candidate"
+        self.make_experiment_result(
+            baseline_id,
+            [
+                self.experiment_point(
+                    0,
+                    {"R": "1k", "C": "10n"},
+                    {"gain": 2.0, "baseline_only": 4.0},
+                    [self.experiment_check(1200.0, True)],
+                ),
+                self.experiment_point(
+                    1,
+                    {"R": "2k"},
+                    {},
+                    [self.experiment_check(900.0, False)],
+                ),
+                self.experiment_point(2, {"R": "1k"}, {}, []),
+            ],
+        )
+        self.make_experiment_result(
+            candidate_id,
+            [
+                self.experiment_point(
+                    7,
+                    {"C": "10n", "R": "1k"},
+                    {"gain": 1.5},
+                    [self.experiment_check(900.0, False)],
+                ),
+                self.experiment_point(
+                    9,
+                    {"R": "2k"},
+                    {},
+                    [self.experiment_check(1200.0, True)],
+                ),
+                self.experiment_point(
+                    8,
+                    {"R": "1000"},
+                    {"candidate_only": 3.0},
+                    [],
+                ),
+            ],
+        )
+
+        result = mcp_server.compare_experiments(baseline_id, candidate_id)
+
+        self.assertEqual(
+            (result["matched_points"], result["added_points"], result["removed_points"]),
+            (2, 1, 1),
+        )
+        self.assertEqual(
+            [point["status"] for point in result["points"]],
+            ["matched", "matched", "removed", "added"],
+        )
+        matched = result["points"][0]
+        gain = next(item for item in matched["measurements"] if item["name"] == "gain")
+        self.assertEqual(gain["delta"], -0.5)
+        self.assertEqual(result["matched_measurements"], 1)
+        self.assertEqual(result["removed_measurements"], 1)
+        self.assertEqual(result["added_measurements"], 1)
+        self.assertEqual(result["requirement_regressions"], 1)
+        self.assertEqual(result["requirement_improvements"], 1)
+        self.assertEqual(matched["requirements"][0]["status"], "regression")
+        self.assertEqual(result["points"][1]["requirements"][0]["status"], "improvement")
+        first_json = Path(result["comparison_json"]).read_bytes()
+        first_markdown = Path(result["comparison_markdown"]).read_bytes()
+        repeated = mcp_server.compare_experiments(baseline_id, candidate_id)
+        self.assertEqual(repeated["comparison_id"], result["comparison_id"])
+        self.assertEqual(Path(repeated["comparison_json"]).read_bytes(), first_json)
+        self.assertEqual(Path(repeated["comparison_markdown"]).read_bytes(), first_markdown)
+        self.assertIn(b"bandwidth\\|check \\`&lt;img src=x&gt;", first_markdown)
+        self.assertNotIn(b"<img", first_markdown)
+
+    def test_compare_experiments_rejects_invalid_artifacts_before_output(self) -> None:
+        baseline_id = "mcp-experiment-baseline"
+        candidate_id = "mcp-experiment-candidate"
+        duplicate = self.experiment_point(
+            0,
+            {"R": "1k"},
+            {},
+            [self.experiment_check(1200.0, True)],
+        )
+        self.make_experiment_result(baseline_id, [duplicate, {**duplicate, "index": 1}])
+        self.make_experiment_result(candidate_id, [], status="running")
+
+        with self.assertRaisesRegex(ValueError, "duplicate parameter map"):
+            mcp_server.compare_experiments(baseline_id, candidate_id)
+        self.assertFalse((self.runs / "comparisons").exists())
+
+        self.make_experiment_result(baseline_id, [duplicate])
+        with self.assertRaisesRegex(ValueError, "not completed"):
+            mcp_server.compare_experiments(baseline_id, candidate_id)
+        self.assertFalse((self.runs / "comparisons").exists())
+
+        duplicated_checks = self.experiment_point(
+            0,
+            {"R": "1k"},
+            {},
+            [self.experiment_check(1200.0, True), self.experiment_check(900.0, False)],
+        )
+        self.make_experiment_result(baseline_id, [duplicated_checks])
+        self.make_experiment_result(candidate_id, [])
+        with self.assertRaisesRegex(ValueError, "duplicate requirement identity"):
+            mcp_server.compare_experiments(baseline_id, candidate_id)
+        self.assertFalse((self.runs / "comparisons").exists())
+
+    def test_compare_experiments_rejects_nonfinite_deltas_before_output(self) -> None:
+        baseline_id = "mcp-experiment-baseline"
+        candidate_id = "mcp-experiment-candidate"
+        self.make_experiment_result(
+            baseline_id,
+            [self.experiment_point(0, {"R": "1k"}, {"extreme": -1e308}, [])],
+        )
+        self.make_experiment_result(
+            candidate_id,
+            [self.experiment_point(0, {"R": "1k"}, {"extreme": 1e308}, [])],
+        )
+        with self.assertRaisesRegex(ValueError, "measurement extreme delta"):
+            mcp_server.compare_experiments(baseline_id, candidate_id)
+        self.assertFalse((self.runs / "comparisons").exists())
+
+        self.make_experiment_result(
+            baseline_id,
+            [self.experiment_point(0, {"R": "1k"}, {}, [
+                self.experiment_check(-1e308, False)
+            ])],
+        )
+        self.make_experiment_result(
+            candidate_id,
+            [self.experiment_point(0, {"R": "1k"}, {}, [
+                self.experiment_check(1e308, True)
+            ])],
+        )
+        with self.assertRaisesRegex(ValueError, "requirement .* delta"):
+            mcp_server.compare_experiments(baseline_id, candidate_id)
+        self.assertFalse((self.runs / "comparisons").exists())
+
+    def test_compare_experiments_confines_comparison_output(self) -> None:
+        baseline_id = "mcp-experiment-baseline"
+        candidate_id = "mcp-experiment-candidate"
+        point = self.experiment_point(0, {"R": "1k"}, {}, [])
+        self.make_experiment_result(baseline_id, [point])
+        self.make_experiment_result(candidate_id, [point])
+        outside = self.root / "outside"
+        outside.mkdir()
+        try:
+            os.symlink(outside, self.runs / "comparisons", target_is_directory=True)
+        except OSError as exc:
+            self.skipTest(f"directory symlinks unavailable: {exc}")
+
+        with self.assertRaisesRegex(ValueError, "inside the runs directory"):
+            mcp_server.compare_experiments(baseline_id, candidate_id)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_compare_experiments_works_through_mcp_protocol(self) -> None:
+        baseline_id = "mcp-experiment-baseline"
+        candidate_id = "mcp-experiment-candidate"
+        point = self.experiment_point(
+            0, {"R": "1k"}, {"gain": 2.0}, [self.experiment_check(1200.0, True)]
+        )
+        self.make_experiment_result(baseline_id, [point])
+        self.make_experiment_result(candidate_id, [point])
+
+        result = asyncio.run(
+            mcp_server.mcp.call_tool(
+                "compare_experiments",
+                {
+                    "baseline_experiment_id": baseline_id,
+                    "candidate_experiment_id": candidate_id,
+                },
+            )
+        )
+
+        self.assertFalse(result.is_error)
+        self.assertEqual(result.structured_content["matched_points"], 1)
+        self.assertEqual(result.structured_content["unchanged_requirements"], 1)
+        tools = asyncio.run(mcp_server.mcp.list_tools())
+        tool = next(tool for tool in tools if tool.name == "compare_experiments")
+        self.assertIn("requirement_regressions", tool.output_schema["properties"])
 
     def test_experiment_job_bounds_concurrency_and_sorts_results(self) -> None:
         manager = mcp_server.ExperimentJobManager(self.runs, workers=3)

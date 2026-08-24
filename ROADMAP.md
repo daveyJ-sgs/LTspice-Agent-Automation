@@ -124,11 +124,24 @@ Generalize single-value parameter substitution into durable experiments with:
 - Explicit `start_experiment` operation so definition does not launch work
 - Idempotent cooperative cancellation with Windows-safe point boundaries
 
-#### Phase 2C: Execution efficiency and reporting — planned
+#### Phase 2C: Execution efficiency and reporting — in progress
+
+##### Phase 2C-A: Experiment comparison and reports — complete
+
+- Read-only comparison of two completed experiment artifacts
+- Exact full-parameter point matching and candidate-minus-baseline deltas
+- Stable requirement identities with regression and improvement classification
+- Content-addressed deterministic JSON and human-readable Markdown reports
+
+##### Phase 2C-B: Native stepping and cached-result reuse — planned
 
 - Native LTspice stepping
 - Netlist/configuration hashing and cached-result reuse
-- SQLite, plots, human-readable experiment reports, and `compare_runs`
+
+##### Phase 2C-C: Experiment indexing and visualization — planned
+
+- SQLite experiment index and queries
+- Comparison and experiment plots
 
 Phase 2A provides synchronous `run_experiment`; Phase 2B adds the durable job
 lifecycle without changing that contract. Phase 2C adds execution efficiency

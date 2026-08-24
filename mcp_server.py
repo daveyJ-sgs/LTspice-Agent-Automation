@@ -49,6 +49,7 @@ ExperimentAnalysisResult = experiment_engine.ExperimentAnalysisResult
 ExperimentPointResult = experiment_engine.ExperimentPointResult
 ExperimentResult = experiment_engine.ExperimentResult
 ExperimentJobSnapshot = experiment_engine.ExperimentJobSnapshot
+ExperimentComparisonResult = experiment_engine.ExperimentComparisonResult
 
 _write_json = experiment_engine._write_json
 _prepare_experiment = experiment_engine._prepare_experiment
@@ -703,6 +704,19 @@ def get_experiment(experiment_id: str) -> ExperimentJobSnapshot:
 def cancel_experiment(experiment_id: str) -> ExperimentJobSnapshot:
     """Request cooperative cancellation without scheduling additional points."""
     return _get_experiment_manager().cancel(experiment_id)
+
+
+@mcp.tool()
+def compare_experiments(
+    baseline_experiment_id: str,
+    candidate_experiment_id: str,
+) -> ExperimentComparisonResult:
+    """Compare two completed experiments without rerunning simulations."""
+    return experiment_engine.compare_experiments(
+        RUNS_DIR,
+        baseline_experiment_id,
+        candidate_experiment_id,
+    )
 
 
 @mcp.tool()
