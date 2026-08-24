@@ -55,14 +55,31 @@ Windows acceptance criteria:
 ### Phase 1: Waveform property engine
 
 Add full-resolution, machine-checkable waveform analysis as first-class MCP
-tools. Initial properties should include:
+tools. Phase 1 is split into three independently verifiable sections.
 
+#### Phase 1A: Scalar and first-transition properties — complete
+
+- Structured requirement, threshold, evidence, and result schemas
 - Minimum, maximum, mean, RMS, and peak-to-peak values
-- Rise/fall time, propagation delay, pulse width, duty cycle, and slew rate
-- Overshoot, undershoot, settling time, ripple, and monotonicity
-- Frequency, spectral peaks, and total harmonic distortion
-- AC gain, cutoff, peaking, crossover, gain margin, and phase margin
-- Cross-signal timing and forbidden-region assertions
+- Rise time, overshoot, and settling time
+- Full-resolution local analysis through `analyze_waveform`
+
+#### Phase 1B: Time-domain and paired-signal properties — complete
+
+- Closed analysis windows with interpolated boundary points
+- Fall time, pulse width, duty cycle, and slew rate
+- Undershoot, ripple, and monotonicity
+- Paired-signal propagation delay and forbidden-region sample assertions
+- Step-relative evidence indexes for windowed and paired analysis
+
+#### Phase 1C: Spectral and AC properties — complete
+
+- Fundamental frequency, spectral peak, and total harmonic distortion
+- AC gain, cutoff frequency, and peaking
+- Gain crossover, gain margin, and phase margin
+- Explicit nonuniform Fourier integration, spectral-window, interpolation, and
+  phase-unwrapping semantics
+- Deterministic real/complex and stepped fixtures on macOS and Windows
 
 The engine must analyze the full waveform locally. Uniformly downsampled data
 is useful for agent context but must not be used to prove the absence of narrow
@@ -75,15 +92,6 @@ Windows acceptance criteria:
   fixture data on macOS and Windows.
 - Test binary, ASCII, complex, double-precision, FastAccess, and stepped raw
   fixtures on both platforms.
-
-Implementation status:
-
-- Phase 1A provides structured full-resolution scalar, rise-time, overshoot,
-  and settling-time requirements.
-- Phase 1B adds analysis windows, the remaining core time-domain properties,
-  paired-signal propagation delay, and forbidden-region sample assertions.
-- Spectral, THD, AC stability, and broader cross-signal properties remain for
-  Phase 1C.
 
 ### Phase 2: Structured experiment runner
 

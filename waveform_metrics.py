@@ -29,6 +29,15 @@ MetricName = Literal[
     "monotonicity",
     "propagation_delay",
     "forbidden_region_samples",
+    "frequency",
+    "spectral_peak",
+    "thd",
+    "ac_gain_db",
+    "cutoff_frequency",
+    "peaking_db",
+    "gain_crossover_frequency",
+    "gain_margin",
+    "phase_margin",
 ]
 ComparisonOperator = Literal["<", "<=", ">", ">="]
 Edge = Literal["rising", "falling"]
@@ -58,6 +67,15 @@ class WaveformRequirement(TypedDict):
     secondary_forbidden_min: NotRequired[float]
     secondary_forbidden_max: NotRequired[float]
     direction: NotRequired[Direction]
+    edge: NotRequired[Edge]
+    frequency_min: NotRequired[float]
+    frequency_max: NotRequired[float]
+    frequency_resolution: NotRequired[float]
+    fundamental_frequency: NotRequired[float]
+    maximum_harmonic: NotRequired[int]
+    frequency_value: NotRequired[float]
+    reference_frequency: NotRequired[float]
+    cutoff_drop_db: NotRequired[float]
 
 
 class RequirementThreshold(TypedDict):
@@ -73,10 +91,21 @@ class RequirementResult(TypedDict):
     threshold: RequirementThreshold
     passed: bool
     evidence: dict[str, float | int]
-    parameters: dict[str, float | str]
+    parameters: dict[str, float | int | str]
 
 
-SUPPORTED_METRICS = set(get_args(MetricName))
+FREQUENCY_METRICS = {
+    "frequency",
+    "spectral_peak",
+    "thd",
+    "ac_gain_db",
+    "cutoff_frequency",
+    "peaking_db",
+    "gain_crossover_frequency",
+    "gain_margin",
+    "phase_margin",
+}
+SUPPORTED_METRICS = set(get_args(MetricName)) - FREQUENCY_METRICS
 
 
 @dataclass(frozen=True)
@@ -85,7 +114,7 @@ class MetricMeasurement:
     value: float
     unit: str
     evidence: dict[str, float | int]
-    parameters: dict[str, float | str] = field(default_factory=dict)
+    parameters: dict[str, float | int | str] = field(default_factory=dict)
 
 
 def _real_vector(values: Sequence[Number], name: str) -> list[float]:

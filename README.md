@@ -363,6 +363,35 @@ and, when secondary bounds are present, inside both bands simultaneously. A
 requirement such as `{"metric": "forbidden_region_samples", "operator":
 "<=", "target": 0, ...}` proves that no recorded sample violated the region.
 
+Phase 1C adds frequency-domain requirements:
+
+| Metric | Definition | Required parameters |
+| --- | --- | --- |
+| `frequency` | Average rate between first and last matching interpolated edges | `threshold_value`; `edge` defaults to `rising` |
+| `spectral_peak` | Amplitude of the largest non-DC component in an explicit band | `frequency_min`, `frequency_max` |
+| `thd` | RMS harmonics 2…N divided by the fundamental amplitude | `fundamental_frequency`; `maximum_harmonic` defaults to 5 |
+| `ac_gain_db` | Log-frequency-interpolated gain | `frequency_value` |
+| `cutoff_frequency` | First selected-direction crossing below reference gain by 3.0103 dB | `reference_frequency` |
+| `peaking_db` | Peak gain minus gain at the reference frequency | `reference_frequency` |
+| `gain_crossover_frequency` | Falling 0 dB loop-gain crossing | None |
+| `gain_margin` | Negative gain at the falling odd-180° phase crossing | None |
+| `phase_margin` | 180° plus phase at the falling 0 dB crossing | None |
+
+Spectral analysis integrates the adaptive LTspice samples in time instead of
+treating them as uniformly spaced. `spectral_peak` uses a Hann window and a
+bounded frequency grid; `thd` uses the largest whole-cycle subwindow and an
+explicit fundamental. Both reject requested content above the conservative
+Nyquist limit implied by the largest recorded time gap. Resource limits cap a
+spectral search at 4,096 bins and 5,000,000 point-frequency operations, and THD
+at the 100th harmonic.
+
+AC metrics use the complex primary vector, divided by `secondary_variable`
+when supplied. Magnitude and unwrapped phase are interpolated in log frequency.
+Stability metrics reject absent or multiple crossovers; narrow
+`window_start`/`window_end` when a response legitimately contains several.
+The default axis unit is inferred as `Hz` for a `frequency` vector and `s`
+otherwise.
+
 ## Windows
 
 Verified on Windows 11 with LTspice 26.0.2: the baseline test suite passed and

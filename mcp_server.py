@@ -27,6 +27,7 @@ from typing import TypedDict
 
 from mcp.server.mcpserver import MCPServer
 
+import frequency_domain_metrics
 import ltspice_wrapper as wrapper
 import raw_parser
 import report_runs
@@ -266,16 +267,16 @@ def analyze_waveform(
     axis_variable: str | None = None,
     step_index: int | None = None,
     signal_unit: str = "",
-    axis_unit: str = "s",
+    axis_unit: str | None = None,
     raw_filename: str | None = None,
     secondary_variable: str | None = None,
 ) -> WaveformAnalysisResult:
     """Evaluate full-resolution waveform requirements for one real-valued vector.
 
     Each requirement needs `metric`, `operator`, and `target`. Supported metrics
-    include scalar, transition, pulse, slew, ripple, monotonicity, paired-signal
-    propagation delay, and forbidden-region checks. Each requirement can select
-    a closed axis window. Paired metrics use the optional secondary_variable.
+    include scalar, time-domain, paired-signal, spectral, and AC checks. Each
+    requirement can select a closed axis window. Paired and transfer-function
+    metrics use the optional secondary_variable.
     Stepped raw files require an explicit zero-based step_index.
     """
     if not requirements:
@@ -313,8 +314,11 @@ def analyze_waveform(
     secondary_values = (
         None if secondary_variable is None else data.values[secondary_variable][selected]
     )
+    resolved_axis_unit = axis_unit
+    if resolved_axis_unit is None:
+        resolved_axis_unit = "Hz" if axis_name.lower() == "frequency" else "s"
     results: list[waveform_metrics.RequirementResult] = []
-    numeric_parameters = {
+    waveform_numeric_parameters = {
         "initial_value",
         "final_value",
         "low_fraction",
@@ -330,7 +334,25 @@ def analyze_waveform(
         "secondary_forbidden_min",
         "secondary_forbidden_max",
     }
-    string_parameters = {"polarity", "primary_edge", "secondary_edge", "direction"}
+    frequency_numeric_parameters = {
+        "window_start",
+        "window_end",
+        "threshold_value",
+        "frequency_min",
+        "frequency_max",
+        "frequency_resolution",
+        "fundamental_frequency",
+        "frequency_value",
+        "reference_frequency",
+        "cutoff_drop_db",
+    }
+    waveform_string_parameters = {
+        "polarity",
+        "primary_edge",
+        "secondary_edge",
+        "direction",
+    }
+    frequency_string_parameters = {"edge", "direction"}
     for requirement in requirements:
         try:
             metric = str(requirement["metric"])
@@ -338,27 +360,57 @@ def analyze_waveform(
             target = float(requirement["target"])
         except KeyError as exc:
             raise ValueError(f"requirement is missing {exc.args[0]}") from exc
-        parameters = {
+        all_numeric_parameters = waveform_numeric_parameters | frequency_numeric_parameters
+        parameters: dict[str, float | int | str] = {
             name: float(requirement[name])
-            for name in numeric_parameters
+            for name in all_numeric_parameters
             if name in requirement
         }
+        if "maximum_harmonic" in requirement:
+            harmonic = requirement["maximum_harmonic"]
+            if not isinstance(harmonic, int) or isinstance(harmonic, bool):
+                raise ValueError("maximum_harmonic must be an integer")
+            parameters["maximum_harmonic"] = harmonic
+        all_string_parameters = waveform_string_parameters | frequency_string_parameters
         parameters.update(
             {
                 name: str(requirement[name])
-                for name in string_parameters
+                for name in all_string_parameters
                 if name in requirement
             }
         )
-        measurement = waveform_metrics.measure_metric(
-            axis,
-            values,
-            metric,
-            secondary_values=secondary_values,
-            signal_unit=signal_unit,
-            axis_unit=axis_unit,
-            **parameters,
-        )
+        if metric in frequency_domain_metrics.SUPPORTED_METRICS:
+            accepted = (
+                frequency_numeric_parameters
+                | frequency_string_parameters
+                | {"maximum_harmonic"}
+            )
+            metric_parameters = {
+                name: value for name, value in parameters.items() if name in accepted
+            }
+            measurement = frequency_domain_metrics.measure_metric(
+                axis,
+                values,
+                metric,
+                secondary_values=secondary_values,
+                signal_unit=signal_unit,
+                axis_unit=resolved_axis_unit,
+                **metric_parameters,
+            )
+        else:
+            accepted = waveform_numeric_parameters | waveform_string_parameters
+            metric_parameters = {
+                name: value for name, value in parameters.items() if name in accepted
+            }
+            measurement = waveform_metrics.measure_metric(
+                axis,
+                values,
+                metric,
+                secondary_values=secondary_values,
+                signal_unit=signal_unit,
+                axis_unit=resolved_axis_unit,
+                **metric_parameters,
+            )
         results.append(waveform_metrics.evaluate_requirement(measurement, operator, target))
 
     response: WaveformAnalysisResult = {

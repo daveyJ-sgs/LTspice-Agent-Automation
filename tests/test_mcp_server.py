@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import cmath
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -279,7 +281,7 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(result["results"][1]["value"], 1.0)
         self.assertEqual(result["results"][2]["value"], 0.0)
 
-    def test_analyze_waveform_schema_advertises_phase_1b_contract(self) -> None:
+    def test_analyze_waveform_schema_advertises_phase_1_contract(self) -> None:
         tools = asyncio.run(mcp_server.mcp.list_tools())
         tool = next(tool for tool in tools if tool.name == "analyze_waveform")
         schema = tool.input_schema
@@ -288,7 +290,12 @@ class MCPServerTests(unittest.TestCase):
         self.assertIn("secondary_variable", schema["properties"])
         self.assertIn("window_start", requirement)
         self.assertIn("propagation_delay", requirement["metric"]["enum"])
+        self.assertIn("spectral_peak", requirement["metric"]["enum"])
+        self.assertIn("phase_margin", requirement["metric"]["enum"])
+        self.assertEqual(requirement["maximum_harmonic"]["type"], "integer")
+        self.assertIn("frequency_min", requirement)
         self.assertEqual(requirement["primary_edge"]["enum"], ["rising", "falling"])
+        self.assertIsNone(schema["properties"]["axis_unit"]["default"])
         secondary_output = tool.output_schema["properties"]["secondary_variable"]
         self.assertIn({"type": "null"}, secondary_output["anyOf"])
 
@@ -313,6 +320,88 @@ class MCPServerTests(unittest.TestCase):
         self.assertFalse(result.is_error)
         self.assertTrue(result.structured_content["all_passed"])
         self.assertIsNone(result.structured_content["secondary_variable"])
+
+    def test_analyze_waveform_supports_spectral_metrics(self) -> None:
+        run_dir = self.make_run()
+        (run_dir / "transient.raw").touch()
+        data = RawData(
+            flags="real forward",
+            variables=["time", "V(out)"],
+            values={
+                "time": [0, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2],
+                "V(out)": [-1, 0, 1, 0, -1, 0, 1, 0, -1],
+            },
+        )
+        with patch.object(mcp_server.raw_parser, "parse_raw", return_value=data):
+            result = mcp_server.analyze_waveform(
+                str(run_dir),
+                "V(out)",
+                [
+                    {
+                        "metric": "frequency",
+                        "operator": ">=",
+                        "target": 1,
+                        "threshold_value": 0,
+                        "edge": "rising",
+                    }
+                ],
+            )
+
+        self.assertTrue(result["all_passed"])
+        self.assertEqual(result["results"][0]["value"], 1.0)
+        self.assertEqual(result["results"][0]["unit"], "Hz")
+
+    def test_analyze_waveform_supports_complex_ac_metrics(self) -> None:
+        run_dir = self.make_run()
+        (run_dir / "ac.raw").touch()
+        frequency = [10, 100, 1000, 10000]
+        gain_db = [0, 3, 0, -10]
+        reference = [complex(2, 0)] * len(frequency)
+        primary = [
+            2 * cmath.rect(10 ** (gain / 20), 0.0) for gain in gain_db
+        ]
+        data = RawData(
+            flags="complex forward log stepped",
+            variables=["frequency", "V(in)", "V(out)"],
+            values={
+                "frequency": [
+                    *(complex(value, 0) for value in frequency),
+                    *(complex(value, 0) for value in frequency),
+                ],
+                "V(in)": [*reference, *reference],
+                "V(out)": [complex(4, 0)] * len(frequency) + primary,
+            },
+            step_count=2,
+            points_per_step=4,
+        )
+        requirements = [
+            {
+                "metric": "ac_gain_db",
+                "operator": ">=",
+                "target": 1.4,
+                "frequency_value": math.sqrt(1000),
+            },
+            {
+                "metric": "cutoff_frequency",
+                "operator": "<=",
+                "target": 2001,
+                "reference_frequency": 10,
+            },
+        ]
+        with patch.object(mcp_server.raw_parser, "parse_raw", return_value=data):
+            result = mcp_server.analyze_waveform(
+                str(run_dir),
+                "V(out)",
+                requirements,
+                secondary_variable="V(in)",
+                step_index=1,
+            )
+
+        self.assertEqual(result["source_points"], 4)
+        self.assertTrue(result["all_passed"])
+        self.assertAlmostEqual(result["results"][0]["value"], 1.5)
+        self.assertAlmostEqual(result["results"][1]["value"], 2000.0)
+        self.assertEqual(result["results"][1]["unit"], "Hz")
 
     def test_run_parameter_sweep(self) -> None:
         def execute(netlist: str, filename: str, ascii_raw: bool, timeout: int, dest: Path) -> Path:
