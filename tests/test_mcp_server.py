@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -134,9 +135,10 @@ class MCPServerTests(unittest.TestCase):
         raw_path.touch()
         data = RawData(
             flags="real stepped",
-            variables=["time", "V(out)"],
+            variables=["time", "V(in)", "V(out)"],
             values={
                 "time": [0, 1, 2, 0, 1, 2, 3],
+                "V(in)": [0, 1, 2, 0, 0, 2, 2],
                 "V(out)": [0, 1, 2, 0, 4, 5.5, 5],
             },
             step_count=2,
@@ -174,6 +176,28 @@ class MCPServerTests(unittest.TestCase):
                 mcp_server.analyze_waveform(
                     str(run_dir), "V(out)", requirements, step_index=1.5
                 )
+        with patch.object(mcp_server.raw_parser, "parse_raw", return_value=data):
+            paired = mcp_server.analyze_waveform(
+                str(run_dir),
+                "V(in)",
+                [
+                    {
+                        "metric": "propagation_delay",
+                        "operator": "<=",
+                        "target": 1,
+                        "primary_threshold": 1,
+                        "secondary_threshold": 5,
+                        "primary_edge": "rising",
+                        "secondary_edge": "rising",
+                    }
+                ],
+                secondary_variable="V(out)",
+                step_index=1,
+            )
+
+        self.assertEqual(paired["source_points"], 4)
+        self.assertAlmostEqual(paired["results"][0]["value"], 1 / 6)
+        self.assertEqual(paired["results"][0]["evidence"]["primary_index_before"], 1)
 
     def test_analyze_waveform_does_not_miss_a_narrow_spike(self) -> None:
         run_dir = self.make_run()
@@ -194,8 +218,101 @@ class MCPServerTests(unittest.TestCase):
             )
 
         self.assertEqual(result["source_points"], 401)
+        self.assertIsNone(result["secondary_variable"])
         self.assertTrue(result["all_passed"])
         self.assertEqual(result["results"][0]["evidence"]["index"], 199)
+
+    def test_analyze_waveform_supports_windows_and_paired_signals(self) -> None:
+        run_dir = self.make_run()
+        (run_dir / "paired.raw").touch()
+        data = RawData(
+            flags="real forward",
+            variables=["time", "V(in)", "V(out)"],
+            values={
+                "time": [0, 1, 2, 3, 4, 5],
+                "V(in)": [99, 0, 0, 2, 2, 99],
+                "V(out)": [0, 2, 2, 2, 0, 0],
+            },
+        )
+        requirements = [
+            {
+                "metric": "maximum",
+                "operator": "<=",
+                "target": 2,
+                "window_start": 1,
+                "window_end": 4,
+            },
+            {
+                "metric": "propagation_delay",
+                "operator": "<=",
+                "target": 2,
+                "window_start": 1,
+                "window_end": 4,
+                "primary_threshold": 1,
+                "secondary_threshold": 1,
+                "primary_edge": "rising",
+                "secondary_edge": "falling",
+            },
+            {
+                "metric": "forbidden_region_samples",
+                "operator": "<=",
+                "target": 0,
+                "forbidden_min": 1.5,
+                "forbidden_max": 2.5,
+                "secondary_forbidden_min": 3.5,
+                "secondary_forbidden_max": 4.0,
+            },
+        ]
+        with patch.object(mcp_server.raw_parser, "parse_raw", return_value=data):
+            result = mcp_server.analyze_waveform(
+                str(run_dir),
+                "V(in)",
+                requirements,
+                secondary_variable="V(out)",
+                signal_unit="V",
+            )
+
+        self.assertEqual(result["source_points"], 6)
+        self.assertEqual(result["secondary_variable"], "V(out)")
+        self.assertTrue(result["all_passed"])
+        self.assertEqual(result["results"][0]["evidence"]["index"], 3)
+        self.assertEqual(result["results"][1]["value"], 1.0)
+        self.assertEqual(result["results"][2]["value"], 0.0)
+
+    def test_analyze_waveform_schema_advertises_phase_1b_contract(self) -> None:
+        tools = asyncio.run(mcp_server.mcp.list_tools())
+        tool = next(tool for tool in tools if tool.name == "analyze_waveform")
+        schema = tool.input_schema
+        requirement = schema["$defs"]["WaveformRequirement"]["properties"]
+
+        self.assertIn("secondary_variable", schema["properties"])
+        self.assertIn("window_start", requirement)
+        self.assertIn("propagation_delay", requirement["metric"]["enum"])
+        self.assertEqual(requirement["primary_edge"]["enum"], ["rising", "falling"])
+        secondary_output = tool.output_schema["properties"]["secondary_variable"]
+        self.assertIn({"type": "null"}, secondary_output["anyOf"])
+
+    def test_analyze_waveform_through_mcp_protocol(self) -> None:
+        run_dir = self.make_run()
+        (run_dir / "result.raw").touch()
+        data = RawData(
+            flags="real forward",
+            variables=["time", "V(out)"],
+            values={"time": [0, 1, 2], "V(out)": [0, 2, 1]},
+        )
+        arguments = {
+            "run_dir": str(run_dir),
+            "variable": "V(out)",
+            "requirements": [
+                {"metric": "maximum", "operator": ">=", "target": 2}
+            ],
+        }
+        with patch.object(mcp_server.raw_parser, "parse_raw", return_value=data):
+            result = asyncio.run(mcp_server.mcp.call_tool("analyze_waveform", arguments))
+
+        self.assertFalse(result.is_error)
+        self.assertTrue(result.structured_content["all_passed"])
+        self.assertIsNone(result.structured_content["secondary_variable"])
 
     def test_run_parameter_sweep(self) -> None:
         def execute(netlist: str, filename: str, ascii_raw: bool, timeout: int, dest: Path) -> Path:

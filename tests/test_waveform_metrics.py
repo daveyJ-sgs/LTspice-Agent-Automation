@@ -94,6 +94,213 @@ class WaveformMetricTests(unittest.TestCase):
                 final_value=5,
             )
 
+    def test_analysis_window_preserves_source_indices(self) -> None:
+        result = measure_metric(
+            [0, 1, 2, 3, 4, 5],
+            [99, 1, 2, 4, 3, 100],
+            "maximum",
+            window_start=1,
+            window_end=4,
+        )
+
+        self.assertEqual(result.value, 4.0)
+        self.assertEqual(result.evidence, {"index": 3, "axis_value": 3.0})
+        self.assertEqual(result.parameters, {"window_start": 1.0, "window_end": 4.0})
+        with self.assertRaisesRegex(ValueError, "must not exceed"):
+            measure_metric([0, 1], [0, 1], "maximum", window_start=1, window_end=0)
+        with self.assertRaisesRegex(ValueError, "captured axis"):
+            measure_metric(
+                [0, 1], [0, 1], "maximum", window_start=2, window_end=3
+            )
+
+        duty = measure_metric(
+            [0, 1, 2],
+            [2, 2, 2],
+            "duty_cycle",
+            threshold_value=1,
+            window_start=0.5,
+            window_end=1.5,
+        )
+        rise = measure_metric(
+            [0, 1, 2],
+            [0, 2, 2],
+            "rise_time",
+            initial_value=0,
+            final_value=2,
+            window_start=0.05,
+            window_end=1.5,
+        )
+        self.assertEqual(duty.value, 100.0)
+        self.assertAlmostEqual(rise.value, 0.8)
+        self.assertEqual(duty.evidence["start_index_before"], 0)
+        self.assertEqual(duty.evidence["start_index_after"], 1)
+
+    def test_fall_time_undershoot_and_monotonicity(self) -> None:
+        fall = measure_metric(
+            [0, 1, 2, 3, 4],
+            [5, 5, 4, 1, 0],
+            "fall_time",
+            initial_value=5,
+            final_value=0,
+            axis_unit="s",
+        )
+        undershoot = measure_metric(
+            [0, 1, 2],
+            [-1, 0, 5],
+            "undershoot",
+            initial_value=0,
+            final_value=5,
+        )
+        falling_undershoot = measure_metric(
+            [0, 1, 2],
+            [6, 5, 0],
+            "undershoot",
+            initial_value=5,
+            final_value=0,
+        )
+        monotonicity = measure_metric(
+            [0, 1, 2, 3],
+            [0, 1, 0.8, 2],
+            "monotonicity",
+            initial_value=0,
+            final_value=2,
+            signal_unit="V",
+        )
+
+        self.assertEqual(fall.value, 2.0)
+        self.assertEqual(undershoot.value, 20.0)
+        self.assertEqual(falling_undershoot.value, 20.0)
+        self.assertAlmostEqual(monotonicity.value, 0.2)
+        self.assertEqual(monotonicity.evidence["start_index"], 1)
+        equal_endpoints = measure_metric(
+            [0, 1, 2], [0, 1, 0], "monotonicity", direction="rising"
+        )
+        self.assertEqual(equal_endpoints.value, 1.0)
+        with self.assertRaisesRegex(ValueError, "fall_time requires"):
+            measure_metric(
+                [0, 1], [0, 1], "fall_time", initial_value=0, final_value=1
+            )
+
+    def test_pulse_width_and_duty_cycle_use_interpolated_time(self) -> None:
+        axis = [0, 1, 2, 4, 5]
+        values = [0, 0, 2, 2, 0]
+        width = measure_metric(
+            axis,
+            values,
+            "pulse_width",
+            threshold_value=1,
+            axis_unit="s",
+        )
+        duty = measure_metric(
+            axis,
+            values,
+            "duty_cycle",
+            threshold_value=1,
+        )
+        low_width = measure_metric(
+            axis,
+            [2, 2, 0, 0, 2],
+            "pulse_width",
+            threshold_value=1,
+            polarity="low",
+        )
+        low_duty = measure_metric(
+            axis,
+            [2, 2, 0, 0, 2],
+            "duty_cycle",
+            threshold_value=1,
+            polarity="low",
+        )
+
+        self.assertEqual(width.value, 3.0)
+        self.assertEqual(width.evidence["entry_axis"], 1.5)
+        self.assertEqual(width.evidence["exit_axis"], 4.5)
+        self.assertEqual(duty.value, 60.0)
+        self.assertEqual(low_width.value, 3.0)
+        self.assertEqual(low_duty.value, 60.0)
+        with self.assertRaisesRegex(ValueError, "complete pulse"):
+            measure_metric(
+                [0, 1, 2], [2, 2, 0], "pulse_width", threshold_value=1
+            )
+
+    def test_slew_rate_and_windowed_ripple(self) -> None:
+        slew = measure_metric(
+            [0, 2, 3], [0, 1, 5], "slew_rate", signal_unit="V", axis_unit="s"
+        )
+        ripple = measure_metric(
+            [0, 1, 2, 3, 4],
+            [20, 4.9, 5.1, 5.0, 30],
+            "ripple",
+            signal_unit="V",
+            window_start=1,
+            window_end=3,
+        )
+
+        self.assertEqual(slew.value, 4.0)
+        self.assertEqual(slew.unit, "V/s")
+        self.assertAlmostEqual(ripple.value, 0.2)
+        self.assertEqual(ripple.evidence["minimum_index"], 1)
+
+    def test_propagation_delay_uses_first_response_after_trigger(self) -> None:
+        result = measure_metric(
+            [0, 1, 3, 4],
+            [0, 0, 2, 2],
+            "propagation_delay",
+            secondary_values=[2, 0, 2, 0],
+            primary_threshold=1,
+            secondary_threshold=1,
+            primary_edge="rising",
+            secondary_edge="falling",
+            axis_unit="s",
+        )
+
+        self.assertEqual(result.value, 1.5)
+        self.assertEqual(result.evidence["primary_axis"], 2.0)
+        self.assertEqual(result.evidence["secondary_axis"], 3.5)
+        with self.assertRaisesRegex(ValueError, "secondary waveform"):
+            measure_metric(
+                [0, 1],
+                [0, 2],
+                "propagation_delay",
+                primary_threshold=1,
+                secondary_threshold=1,
+                primary_edge="rising",
+                secondary_edge="rising",
+            )
+
+    def test_forbidden_region_samples_supports_signal_pairs(self) -> None:
+        single = measure_metric(
+            [0, 1, 2, 3],
+            [0, 1, 2, 3],
+            "forbidden_region_samples",
+            forbidden_min=1,
+            forbidden_max=2,
+        )
+        paired = measure_metric(
+            [0, 1, 2, 3],
+            [0, 1, 2, 3],
+            "forbidden_region_samples",
+            secondary_values=[0, 3, 2, 0],
+            forbidden_min=1,
+            forbidden_max=2,
+            secondary_forbidden_min=2,
+            secondary_forbidden_max=3,
+        )
+
+        self.assertEqual(single.value, 2.0)
+        self.assertEqual(paired.value, 2.0)
+        self.assertEqual(paired.evidence["first_index"], 1)
+        with self.assertRaisesRegex(ValueError, "secondary_forbidden_max is required"):
+            measure_metric(
+                [0, 1],
+                [0, 1],
+                "forbidden_region_samples",
+                secondary_values=[0, 1],
+                forbidden_min=0,
+                forbidden_max=1,
+                secondary_forbidden_min=0,
+            )
+
     def test_requirement_result_is_structured(self) -> None:
         measurement = measure_metric([0, 1, 2], [0, 2, 4], "maximum", signal_unit="V")
         result = evaluate_requirement(measurement, "<=", 5.0)
@@ -116,6 +323,25 @@ class WaveformMetricTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "Unknown"):
             measure_metric([0, 1], [0, 1], "median")
+        with self.assertRaisesRegex(ValueError, "polarity"):
+            measure_metric(
+                [0, 1, 2],
+                [0, 2, 0],
+                "pulse_width",
+                threshold_value=1,
+                polarity="middle",
+            )
+        with self.assertRaisesRegex(ValueError, "edge"):
+            measure_metric(
+                [0, 1],
+                [0, 2],
+                "propagation_delay",
+                secondary_values=[0, 2],
+                primary_threshold=1,
+                secondary_threshold=1,
+                primary_edge="up",
+                secondary_edge="rising",
+            )
 
 
 if __name__ == "__main__":

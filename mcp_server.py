@@ -57,6 +57,7 @@ class WaveformAnalysisResult(TypedDict):
     analysis_resolution: str
     all_passed: bool
     results: list[waveform_metrics.RequirementResult]
+    secondary_variable: str | None
 
 
 # --- internal helpers -------------------------------------------------
@@ -267,13 +268,14 @@ def analyze_waveform(
     signal_unit: str = "",
     axis_unit: str = "s",
     raw_filename: str | None = None,
+    secondary_variable: str | None = None,
 ) -> WaveformAnalysisResult:
     """Evaluate full-resolution waveform requirements for one real-valued vector.
 
     Each requirement needs `metric`, `operator`, and `target`. Supported metrics
-    are minimum, maximum, mean, rms, peak_to_peak, rise_time, overshoot, and
-    settling_time. Optional per-requirement parameters are initial_value,
-    final_value, low_fraction, high_fraction, and settling_tolerance.
+    include scalar, transition, pulse, slew, ripple, monotonicity, paired-signal
+    propagation delay, and forbidden-region checks. Each requirement can select
+    a closed axis window. Paired metrics use the optional secondary_variable.
     Stepped raw files require an explicit zero-based step_index.
     """
     if not requirements:
@@ -282,7 +284,10 @@ def analyze_waveform(
     raw_path = _find_raw(resolved, raw_filename)
     data = raw_parser.parse_raw(raw_path)
     axis_name = axis_variable or data.variables[0]
-    unknown = sorted({variable, axis_name} - set(data.variables))
+    requested_variables = {variable, axis_name}
+    if secondary_variable is not None:
+        requested_variables.add(secondary_variable)
+    unknown = sorted(requested_variables - set(data.variables))
     if unknown:
         raise KeyError(f"Unknown variable(s) {unknown}; available: {data.variables}")
 
@@ -305,6 +310,9 @@ def analyze_waveform(
 
     axis = data.values[axis_name][selected]
     values = data.values[variable][selected]
+    secondary_values = (
+        None if secondary_variable is None else data.values[secondary_variable][selected]
+    )
     results: list[waveform_metrics.RequirementResult] = []
     numeric_parameters = {
         "initial_value",
@@ -312,7 +320,17 @@ def analyze_waveform(
         "low_fraction",
         "high_fraction",
         "settling_tolerance",
+        "window_start",
+        "window_end",
+        "threshold_value",
+        "primary_threshold",
+        "secondary_threshold",
+        "forbidden_min",
+        "forbidden_max",
+        "secondary_forbidden_min",
+        "secondary_forbidden_max",
     }
+    string_parameters = {"polarity", "primary_edge", "secondary_edge", "direction"}
     for requirement in requirements:
         try:
             metric = str(requirement["metric"])
@@ -325,17 +343,25 @@ def analyze_waveform(
             for name in numeric_parameters
             if name in requirement
         }
+        parameters.update(
+            {
+                name: str(requirement[name])
+                for name in string_parameters
+                if name in requirement
+            }
+        )
         measurement = waveform_metrics.measure_metric(
             axis,
             values,
             metric,
+            secondary_values=secondary_values,
             signal_unit=signal_unit,
             axis_unit=axis_unit,
             **parameters,
         )
         results.append(waveform_metrics.evaluate_requirement(measurement, operator, target))
 
-    return {
+    response: WaveformAnalysisResult = {
         "raw_file": str(raw_path),
         "variable": variable,
         "axis_variable": axis_name,
@@ -344,7 +370,9 @@ def analyze_waveform(
         "analysis_resolution": "full",
         "all_passed": all(result["passed"] for result in results),
         "results": results,
+        "secondary_variable": secondary_variable,
     }
+    return response
 
 
 @mcp.tool()

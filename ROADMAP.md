@@ -76,6 +76,15 @@ Windows acceptance criteria:
 - Test binary, ASCII, complex, double-precision, FastAccess, and stepped raw
   fixtures on both platforms.
 
+Implementation status:
+
+- Phase 1A provides structured full-resolution scalar, rise-time, overshoot,
+  and settling-time requirements.
+- Phase 1B adds analysis windows, the remaining core time-domain properties,
+  paired-signal propagation delay, and forbidden-region sample assertions.
+- Spectral, THD, AC stability, and broader cross-signal properties remain for
+  Phase 1C.
+
 ### Phase 2: Structured experiment runner
 
 Generalize single-value parameter substitution into durable experiments with:

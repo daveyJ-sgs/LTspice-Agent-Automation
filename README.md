@@ -335,6 +335,34 @@ Each result includes units, pass/fail state, the threshold, metric parameters,
 and point or region evidence. A stepped raw file requires `step_index`; the
 tool splits on actual axis resets rather than assuming equal transient lengths.
 
+Phase 1B adds closed, per-requirement `window_start`/`window_end` selection and
+the `fall_time`, `pulse_width`, `duty_cycle`, `slew_rate`, `undershoot`,
+`ripple`, `monotonicity`, `propagation_delay`, and
+`forbidden_region_samples` metrics. Window evidence indexes remain relative to
+the selected raw step, not the smaller window. Bounds between recorded samples
+are linearly interpolated and retain both bracketing source indexes.
+
+| Metric | Definition | Required parameters |
+| --- | --- | --- |
+| `fall_time` | First 90–10% falling transition | Falling `initial_value`/`final_value`, or falling window endpoints |
+| `pulse_width` | First complete active pulse; `polarity` defaults to `high` | `threshold_value` |
+| `duty_cycle` | Interpolated active time divided by window duration | `threshold_value` |
+| `slew_rate` | Largest absolute adjacent slope | None |
+| `undershoot` | Excursion beyond the initial endpoint, normalized to step size | Distinct step endpoints |
+| `ripple` | Peak-to-peak value in the window | None |
+| `monotonicity` | Largest adjacent reversal; zero is monotonic | `direction` only when endpoints are equal |
+| `propagation_delay` | First secondary edge at or after the first primary edge | Secondary variable, two thresholds, and two edge directions |
+| `forbidden_region_samples` | Recorded samples inside one band or simultaneous paired bands | `forbidden_min` and `forbidden_max` |
+
+For paired checks, pass `secondary_variable` to `analyze_waveform`.
+`propagation_delay` treats the primary `variable` as the trigger and measures
+the first requested secondary edge at or after the first requested primary
+edge; both thresholds and edge directions are explicit. A forbidden-region
+requirement counts full-resolution samples inside the inclusive primary band
+and, when secondary bounds are present, inside both bands simultaneously. A
+requirement such as `{"metric": "forbidden_region_samples", "operator":
+"<=", "target": 0, ...}` proves that no recorded sample violated the region.
+
 ## Windows
 
 Verified on Windows 11 with LTspice 26.0.2: the baseline test suite passed and
