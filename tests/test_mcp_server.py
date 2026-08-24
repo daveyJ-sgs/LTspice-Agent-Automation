@@ -1656,6 +1656,66 @@ class MCPServerTests(unittest.TestCase):
         )
         self.assertIn("report_html", tool.output_schema["properties"])
 
+    def test_c3_visualization_tools_work_through_mcp_protocol(self) -> None:
+        comparison = {
+            "comparison_id": "0123456789abcdef",
+            "comparison_html": str(self.runs / "comparisons" / "comparison.html"),
+            "plot_count": 1,
+            "trace_count": 2,
+            "requirement_regressions": 1,
+            "requirement_improvements": 0,
+        }
+        dashboard = {
+            "dashboard_html": str(self.runs / "dashboard.html"),
+            "experiment_count": 2,
+            "comparison_count": 1,
+            "issue_count": 0,
+        }
+        with (
+            patch.object(
+                mcp_server.experiment_visualization,
+                "build_comparison_report",
+                return_value=comparison,
+            ) as build_comparison,
+            patch.object(
+                mcp_server.experiment_visualization,
+                "build_experiment_dashboard",
+                return_value=dashboard,
+            ) as build_dashboard,
+        ):
+            comparison_result = asyncio.run(
+                mcp_server.mcp.call_tool(
+                    "build_comparison_report",
+                    {
+                        "baseline_experiment_id": "mcp-experiment-baseline",
+                        "candidate_experiment_id": "mcp-experiment-candidate",
+                    },
+                )
+            )
+            dashboard_result = asyncio.run(
+                mcp_server.mcp.call_tool("build_experiment_dashboard", {})
+            )
+
+        self.assertFalse(comparison_result.is_error)
+        self.assertEqual(comparison_result.structured_content, comparison)
+        self.assertFalse(dashboard_result.is_error)
+        self.assertEqual(dashboard_result.structured_content, dashboard)
+        build_comparison.assert_called_once_with(
+            self.runs, "mcp-experiment-baseline", "mcp-experiment-candidate"
+        )
+        build_dashboard.assert_called_once_with(self.runs)
+        tools = {tool.name: tool for tool in asyncio.run(mcp_server.mcp.list_tools())}
+        self.assertIn("build_comparison_report", tools)
+        self.assertIn("build_experiment_dashboard", tools)
+        self.assertIn(
+            "comparison_html",
+            tools["build_comparison_report"].output_schema["properties"],
+        )
+        self.assertIn(
+            "dashboard_html",
+            tools["build_experiment_dashboard"].output_schema["properties"],
+        )
+
     def test_experiment_job_bounds_concurrency_and_sorts_results(self) -> None:
         manager = mcp_server.ExperimentJobManager(self.runs, workers=3)
         lock = threading.Lock()

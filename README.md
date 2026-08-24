@@ -314,8 +314,9 @@ Model Context Protocol, in-process (no REST server needed): `run_netlist`,
 `analyze_waveform`, `run_parameter_sweep`, `run_experiment`,
 `define_experiment`, `start_experiment`, `get_experiment`,
 `cancel_experiment`, `compare_experiments`, `build_experiment_index`,
-`query_experiments`, `build_experiment_report`, `list_runs`, `build_dashboard`,
-and `list_examples`.
+`query_experiments`, `build_experiment_report`, `build_comparison_report`,
+`build_experiment_dashboard`, `list_runs`, `build_dashboard`, and
+`list_examples`.
 
 It depends on the `mcp` package. Homebrew/system Python is externally
 managed, so install it into a local virtualenv:
@@ -502,6 +503,30 @@ The builder rejects incomplete or inconsistent experiments, missing or
 escaped RAW artifacts, invalid step mappings, non-finite plot data, and
 oversized display payloads before replacing an existing report. User-provided
 labels and values are escaped in both HTML and embedded JSON.
+
+### Visualize comparisons and browse experiments
+
+Phase 2C-C3 adds two derived, human-facing views while keeping JSON, CSV, RAW,
+and SQLite artifacts authoritative. Call `build_comparison_report` with a
+baseline and candidate experiment ID to produce a portable
+`runs/comparisons/comparison-<id>/comparison.html`. The report overlays the
+experiments' actual RAW waveform traces through the same validated parser and
+bounded SVG renderer used by individual experiment reports. It also presents
+candidate-minus-baseline measurement deltas and marks requirement regressions,
+improvements, additions, removals, and unchanged checks.
+
+Call `build_experiment_dashboard` to rebuild `runs/experiments.sqlite3` and
+write `runs/dashboard.html`. The offline dashboard lists structured
+experiments newest-first, supports text, status, and execution-mode filters,
+and links relatively to available manifests, results, reports, and comparison
+artifacts. It requires no web server or external JavaScript. Invalid experiment
+artifacts remain visible through index diagnostics, while malformed comparison
+artifacts are counted and skipped so one damaged result cannot prevent the
+dashboard from being generated.
+
+Both builders validate that inputs and outputs remain under `runs/`, normalize
+portable Windows/POSIX artifact references, escape embedded content, enforce
+display limits, and publish HTML atomically. They never rerun LTspice.
 
 ### Reuse verified simulation artifacts
 

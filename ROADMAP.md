@@ -158,7 +158,7 @@ Generalize single-value parameter substitution into durable experiments with:
 - Cache provenance retention and comparison-compatible structured results
 - Cross-platform restart, corruption, schema, and lifecycle regression coverage
 
-##### Phase 2C-C: Experiment indexing and visualization — in progress
+##### Phase 2C-C: Experiment indexing and visualization — complete
 
 ###### Phase 2C-C1: Experiment index and queries — complete
 
@@ -176,10 +176,19 @@ Generalize single-value parameter substitution into durable experiments with:
 - Display-only endpoint-preserving downsampling with full-resolution evidence links
 - Schema-v1/v2, independent/native, macOS/Windows, and confinement coverage
 
-###### Phase 2C-C3: Comparison visualization and unified dashboard — planned
+###### Phase 2C-C3-A: Comparison visualization — complete
 
-- Baseline-versus-candidate plots with regression and improvement markers
-- Searchable experiment dashboard linked to reports and comparisons
+- Portable baseline-versus-candidate HTML reports derived from completed artifacts
+- Actual RAW waveform overlays using the validated C2 parser and SVG renderer
+- Measurement deltas plus explicit regression and improvement markers
+- Relative evidence links, bounded display payloads, and atomic replacement
+
+###### Phase 2C-C3-B: Unified experiment dashboard — complete
+
+- Rebuildable searchable offline dashboard derived from the SQLite index
+- Status and execution-mode filters with experiment and comparison summaries
+- Relative links to manifests, results, reports, and comparison artifacts
+- Malformed-comparison isolation and cross-platform regression coverage
 
 Phase 2A provides synchronous `run_experiment`; Phase 2B adds the durable job
 lifecycle without changing that contract. Phase 2C adds execution efficiency

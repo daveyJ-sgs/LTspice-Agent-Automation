@@ -31,6 +31,7 @@ from mcp.server.mcpserver import MCPServer
 import experiment_engine
 import experiment_index
 import experiment_report
+import experiment_visualization
 import frequency_domain_metrics
 import ltspice_wrapper as wrapper
 import raw_parser
@@ -56,6 +57,8 @@ ExperimentComparisonResult = experiment_engine.ExperimentComparisonResult
 ExperimentIndexBuildResult = experiment_index.ExperimentIndexBuildResult
 ExperimentQueryResult = experiment_index.ExperimentQueryResult
 ExperimentReportResult = experiment_report.ExperimentReportResult
+ComparisonReportResult = experiment_visualization.ComparisonReportResult
+ExperimentDashboardResult = experiment_visualization.ExperimentDashboardResult
 
 ExperimentIndexStatus = Literal[
     "defined",
@@ -994,6 +997,25 @@ def query_experiments(
 def build_experiment_report(experiment_id: str) -> ExperimentReportResult:
     """Build a portable offline HTML report from completed experiment artifacts."""
     return experiment_report.build_experiment_report(RUNS_DIR, experiment_id)
+
+
+@mcp.tool()
+def build_comparison_report(
+    baseline_experiment_id: str,
+    candidate_experiment_id: str,
+) -> ComparisonReportResult:
+    """Build a portable baseline-versus-candidate waveform report."""
+    return experiment_visualization.build_comparison_report(
+        RUNS_DIR,
+        baseline_experiment_id,
+        candidate_experiment_id,
+    )
+
+
+@mcp.tool()
+def build_experiment_dashboard() -> ExperimentDashboardResult:
+    """Rebuild the experiment index and its searchable offline dashboard."""
+    return experiment_visualization.build_experiment_dashboard(RUNS_DIR)
 
 
 @mcp.tool()
