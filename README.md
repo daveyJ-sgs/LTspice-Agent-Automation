@@ -393,6 +393,13 @@ The file-backed manager intentionally supports one active MCP process per
 active experiment use the declared concurrency bound. Multi-process locking is
 outside Phase 2B.
 
+The portable experiment implementation lives in `experiment_engine.py`. It
+owns definition validation, parameter expansion, durable state, checkpoints,
+and result assembly without importing MCP. `mcp_server.py` provides the thin
+LTspice execution and waveform-analysis adapter plus the public tool wrappers.
+This boundary lets other Python front ends reuse the engine without running an
+MCP server.
+
 `run_experiment` remains the backward-compatible synchronous path. It validates
 the complete definition before running, executes sequentially, and caps the
 Cartesian product at 1,000 points. Requirements are
