@@ -9,7 +9,7 @@ from pathlib import Path
 
 from checks import assert_between, assert_close, floor, peak
 from ltspice_wrapper import LTSPICE, parse_measurements, parse_step_values, parse_stepped_measurements, run_netlist
-from raw_parser import parse_raw
+from raw_parser import RawData, parse_raw, step_slices
 from report_runs import collect_records
 from examples.design_search_rc import choose_best
 
@@ -62,6 +62,21 @@ Measurement: gain_at_1k
             self.assertEqual(parse_step_values(path, "rval"), [1000.0, 2200.0])
             self.assertEqual(parse_stepped_measurements(path, "gain_at_1k"), [-16.0722, -22.8347])
 
+    def test_step_slices_preserve_nonuniform_blocks(self) -> None:
+        data = RawData(
+            flags="real stepped",
+            variables=["time", "V(out)"],
+            values={
+                "time": [0, 1, 2, 0, 0.5, 1.5, 2.5],
+                "V(out)": [0, 1, 2, 10, 11, 12, 13],
+            },
+            step_count=2,
+            points_per_step=None,
+        )
+
+        segments = step_slices(data)
+        self.assertEqual([(part.start, part.stop) for part in segments], [(0, 3), (3, 7)])
+
     def test_parse_real_compact_raw_file(self) -> None:
         header = """Title: test
 Flags: real forward
@@ -80,6 +95,26 @@ Binary:
 
         self.assertEqual(data.values["time"], [0.0, 0.1])
         self.assertAlmostEqual(data.values["V(out)"][1], 2.5)
+
+    def test_parse_ascii_raw_file(self) -> None:
+        header = """Title: test
+Flags: real forward
+No. Variables: 2
+No. Points: 2
+Variables:
+\t0\ttime\ttime
+\t1\tV(out)\tvoltage
+Values:
+"""
+        rows = "0\t0.0\n\t1.5\n1\t0.1\n\t2.5\n"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ascii.raw"
+            path.write_bytes((header + rows).encode("utf-16le"))
+            data = parse_raw(path)
+
+        self.assertEqual(data.variables, ["time", "V(out)"])
+        self.assertEqual(data.values["time"], [0.0, 0.1])
+        self.assertEqual(data.values["V(out)"], [1.5, 2.5])
 
     def test_parse_real_double_precision_raw_file(self) -> None:
         header = """Title: test

@@ -128,6 +128,75 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(result["rows"], 2)
         self.assertEqual(result["csv_path"], str(run_dir.resolve() / "result.csv"))
 
+    def test_analyze_waveform_uses_full_selected_step(self) -> None:
+        run_dir = self.make_run()
+        raw_path = run_dir / "stepped.raw"
+        raw_path.touch()
+        data = RawData(
+            flags="real stepped",
+            variables=["time", "V(out)"],
+            values={
+                "time": [0, 1, 2, 0, 1, 2, 3],
+                "V(out)": [0, 1, 2, 0, 4, 5.5, 5],
+            },
+            step_count=2,
+            points_per_step=None,
+        )
+        requirements = [
+            {"metric": "maximum", "operator": "<=", "target": 6.0},
+            {
+                "metric": "overshoot",
+                "operator": "<=",
+                "target": 11.0,
+                "initial_value": 0.0,
+                "final_value": 5.0,
+            },
+        ]
+        with patch.object(mcp_server.raw_parser, "parse_raw", return_value=data):
+            result = mcp_server.analyze_waveform(
+                str(run_dir),
+                "V(out)",
+                requirements,
+                step_index=1,
+                signal_unit="V",
+            )
+
+        self.assertEqual(result["source_points"], 4)
+        self.assertEqual(result["analysis_resolution"], "full")
+        self.assertTrue(result["all_passed"])
+        self.assertEqual(result["results"][0]["evidence"]["index"], 2)
+        self.assertEqual(result["results"][1]["value"], 10.0)
+        with patch.object(mcp_server.raw_parser, "parse_raw", return_value=data):
+            with self.assertRaisesRegex(ValueError, "step_index is required"):
+                mcp_server.analyze_waveform(str(run_dir), "V(out)", requirements)
+        with patch.object(mcp_server.raw_parser, "parse_raw", return_value=data):
+            with self.assertRaisesRegex(IndexError, "step_index"):
+                mcp_server.analyze_waveform(
+                    str(run_dir), "V(out)", requirements, step_index=1.5
+                )
+
+    def test_analyze_waveform_does_not_miss_a_narrow_spike(self) -> None:
+        run_dir = self.make_run()
+        (run_dir / "result.raw").touch()
+        values = [0.0] * 401
+        values[199] = 9.0
+        data = RawData(
+            flags="real forward",
+            variables=["time", "V(out)"],
+            values={"time": list(range(401)), "V(out)": values},
+        )
+        with patch.object(mcp_server.raw_parser, "parse_raw", return_value=data):
+            result = mcp_server.analyze_waveform(
+                str(run_dir),
+                "V(out)",
+                [{"metric": "maximum", "operator": ">=", "target": 9.0}],
+                signal_unit="V",
+            )
+
+        self.assertEqual(result["source_points"], 401)
+        self.assertTrue(result["all_passed"])
+        self.assertEqual(result["results"][0]["evidence"]["index"], 199)
+
     def test_run_parameter_sweep(self) -> None:
         def execute(netlist: str, filename: str, ascii_raw: bool, timeout: int, dest: Path) -> Path:
             dest.mkdir(parents=True)

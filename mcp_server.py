@@ -4,6 +4,7 @@
 Wraps ltspice_wrapper.py, raw_parser.py, and report_runs.py directly (no
 separate REST process required) so an MCP client can run netlists, pull
 measurements and waveform data, sweep a parameter, and browse run history.
+Waveform requirements are evaluated against full-resolution parsed vectors.
 
 Run directly for local stdio use:
 
@@ -22,12 +23,14 @@ import json
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from typing import TypedDict
 
 from mcp.server.mcpserver import MCPServer
 
 import ltspice_wrapper as wrapper
 import raw_parser
 import report_runs
+import waveform_metrics
 
 PROJECT_DIR = wrapper.PROJECT_DIR
 RUNS_DIR = wrapper.RUNS_DIR
@@ -43,6 +46,17 @@ mcp = MCPServer(
         "pull measurements or waveform data."
     ),
 )
+
+
+class WaveformAnalysisResult(TypedDict):
+    raw_file: str
+    variable: str
+    axis_variable: str
+    step_index: int
+    source_points: int
+    analysis_resolution: str
+    all_passed: bool
+    results: list[waveform_metrics.RequirementResult]
 
 
 # --- internal helpers -------------------------------------------------
@@ -240,6 +254,96 @@ def get_waveform(
         "total_points": total_points,
         "returned_points": len(indices),
         "data": series,
+    }
+
+
+@mcp.tool()
+def analyze_waveform(
+    run_dir: str,
+    variable: str,
+    requirements: list[waveform_metrics.WaveformRequirement],
+    axis_variable: str | None = None,
+    step_index: int | None = None,
+    signal_unit: str = "",
+    axis_unit: str = "s",
+    raw_filename: str | None = None,
+) -> WaveformAnalysisResult:
+    """Evaluate full-resolution waveform requirements for one real-valued vector.
+
+    Each requirement needs `metric`, `operator`, and `target`. Supported metrics
+    are minimum, maximum, mean, rms, peak_to_peak, rise_time, overshoot, and
+    settling_time. Optional per-requirement parameters are initial_value,
+    final_value, low_fraction, high_fraction, and settling_tolerance.
+    Stepped raw files require an explicit zero-based step_index.
+    """
+    if not requirements:
+        raise ValueError("requirements must be a non-empty list")
+    resolved = _resolve_run_dir(run_dir)
+    raw_path = _find_raw(resolved, raw_filename)
+    data = raw_parser.parse_raw(raw_path)
+    axis_name = axis_variable or data.variables[0]
+    unknown = sorted({variable, axis_name} - set(data.variables))
+    if unknown:
+        raise KeyError(f"Unknown variable(s) {unknown}; available: {data.variables}")
+
+    if data.step_count > 1:
+        if step_index is None:
+            raise ValueError("step_index is required for stepped waveform data")
+        slices = raw_parser.step_slices(data)
+        if (
+            not isinstance(step_index, int)
+            or isinstance(step_index, bool)
+            or not 0 <= step_index < len(slices)
+        ):
+            raise IndexError(f"step_index must be between 0 and {len(slices) - 1}")
+        selected = slices[step_index]
+    else:
+        invalid_type = not isinstance(step_index, int) or isinstance(step_index, bool)
+        if step_index is not None and (invalid_type or step_index != 0):
+            raise IndexError("step_index must be 0 for an unstepped waveform")
+        selected = slice(0, data.points)
+
+    axis = data.values[axis_name][selected]
+    values = data.values[variable][selected]
+    results: list[waveform_metrics.RequirementResult] = []
+    numeric_parameters = {
+        "initial_value",
+        "final_value",
+        "low_fraction",
+        "high_fraction",
+        "settling_tolerance",
+    }
+    for requirement in requirements:
+        try:
+            metric = str(requirement["metric"])
+            operator = str(requirement["operator"])
+            target = float(requirement["target"])
+        except KeyError as exc:
+            raise ValueError(f"requirement is missing {exc.args[0]}") from exc
+        parameters = {
+            name: float(requirement[name])
+            for name in numeric_parameters
+            if name in requirement
+        }
+        measurement = waveform_metrics.measure_metric(
+            axis,
+            values,
+            metric,
+            signal_unit=signal_unit,
+            axis_unit=axis_unit,
+            **parameters,
+        )
+        results.append(waveform_metrics.evaluate_requirement(measurement, operator, target))
+
+    return {
+        "raw_file": str(raw_path),
+        "variable": variable,
+        "axis_variable": axis_name,
+        "step_index": 0 if step_index is None else step_index,
+        "source_points": len(values),
+        "analysis_resolution": "full",
+        "all_passed": all(result["passed"] for result in results),
+        "results": results,
     }
 
 

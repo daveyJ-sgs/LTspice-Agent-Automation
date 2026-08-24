@@ -23,6 +23,25 @@ class RawData:
         return len(next(iter(self.values.values())))
 
 
+def step_slices(data: RawData) -> list[slice]:
+    """Return each stepped block using resets in the independent axis."""
+    axis = data.values[data.variables[0]]
+    real_axis = [float(value.real if isinstance(value, complex) else value) for value in axis]
+    boundaries = [
+        index
+        for index in range(1, len(real_axis))
+        if real_axis[index] <= real_axis[index - 1]
+    ]
+    starts = [0, *boundaries]
+    stops = [*boundaries, len(real_axis)]
+    slices = [slice(start, stop) for start, stop in zip(starts, stops)]
+    if len(slices) != data.step_count:
+        raise ValueError(
+            f"Expected {data.step_count} stepped blocks, found {len(slices)} axis segments"
+        )
+    return slices
+
+
 def _step_shape(values: list[float | complex]) -> tuple[int, int | None]:
     """Infer stepped blocks from a reset in the first, monotonic axis."""
     if len(values) < 2:

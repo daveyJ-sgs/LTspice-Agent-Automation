@@ -287,7 +287,8 @@ and authorization.
 `mcp_server.py` exposes the same automation surface as native tools over the
 Model Context Protocol, in-process (no REST server needed): `run_netlist`,
 `run_netlist_file`, `get_measurements`, `get_waveform`, `export_waveform_csv`,
-`run_parameter_sweep`, `list_runs`, `build_dashboard`, and `list_examples`.
+`analyze_waveform`, `run_parameter_sweep`, `list_runs`, `build_dashboard`, and
+`list_examples`.
 
 It depends on the `mcp` package. Homebrew/system Python is externally
 managed, so install it into a local virtualenv:
@@ -317,10 +318,27 @@ use `export_waveform_csv` for full resolution. This server has the same
 trust model as the REST API: it runs LTspice locally with no sandboxing, so
 only expose it to trusted agents.
 
+`analyze_waveform` always evaluates the full parsed vector rather than the
+downsampled agent payload. Requirements are structured metric/operator/target
+objects, for example:
+
+```json
+[
+  {"metric": "maximum", "operator": "<=", "target": 5.5},
+  {"metric": "overshoot", "operator": "<=", "target": 5.0, "final_value": 5.0},
+  {"metric": "settling_time", "operator": "<=", "target": 0.00002,
+   "final_value": 5.0, "settling_tolerance": 0.02}
+]
+```
+
+Each result includes units, pass/fail state, the threshold, metric parameters,
+and point or region evidence. A stepped raw file requires `step_index`; the
+tool splits on actual axis resets rather than assuming equal transient lengths.
+
 ## Windows
 
-Verified on Windows 11 with LTspice 26.0.2: the test suite passes 11 of 11 and
-the RC AC example matches its closed-form prediction. Install with:
+Verified on Windows 11 with LTspice 26.0.2: the baseline test suite passed and
+the RC AC example matched its closed-form prediction. Install with:
 
 ```powershell
 winget install --id AnalogDevices.LTspice
