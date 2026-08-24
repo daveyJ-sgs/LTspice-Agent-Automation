@@ -133,7 +133,7 @@ Generalize single-value parameter substitution into durable experiments with:
 - Stable requirement identities with regression and improvement classification
 - Content-addressed deterministic JSON and human-readable Markdown reports
 
-##### Phase 2C-B: Native stepping and cached-result reuse — in progress
+##### Phase 2C-B: Native stepping and cached-result reuse — complete
 
 ###### Phase 2C-B1: Provenance-safe simulation cache — complete
 
@@ -151,10 +151,12 @@ Generalize single-value parameter substitution into durable experiments with:
 - Native-batch duration, execution-source, cache, and mapping provenance
 - Fail-closed numeric-expression and deck eligibility checks
 
-###### Phase 2C-B3: Durable native-batch integration — planned
+###### Phase 2C-B3: Durable native-batch integration — complete
 
 - Atomic batch recovery and point checkpoint materialization
-- Cancellation, cache interaction, comparison, and Windows portability coverage
+- Cooperative cancellation with validated batch evidence preservation
+- Cache provenance retention and comparison-compatible structured results
+- Cross-platform restart, corruption, schema, and lifecycle regression coverage
 
 ##### Phase 2C-C: Experiment indexing and visualization — planned
 

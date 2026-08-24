@@ -107,6 +107,43 @@ class MCPServerTests(unittest.TestCase):
             "parameters": {"reference_frequency": 10.0},
         }
 
+    @staticmethod
+    def native_batch_result(
+        combinations: list[dict[str, str]],
+        batch_dir: Path,
+        *,
+        all_passed: bool = True,
+        error: str | None = None,
+        execution_source: str = "simulator",
+        cache_key: str | None = None,
+    ) -> tuple[list[dict[str, object]], dict[str, object]]:
+        batch_dir.mkdir(parents=True, exist_ok=True)
+        points = [
+            {
+                "index": index,
+                "parameters": combination,
+                "run_dir": str(batch_dir),
+                "simulation_status": "completed",
+                "duration_seconds": None,
+                "measurements": {"index": float(index)},
+                "analyses": [],
+                "all_passed": all_passed,
+                "error": error,
+                "native_step_index": index,
+            }
+            for index, combination in enumerate(combinations)
+        ]
+        batch: dict[str, object] = {
+            "run_dir": str(batch_dir),
+            "status": "completed",
+            "step_count": len(combinations),
+            "validated_step_order": list(range(len(combinations))),
+            "execution_source": execution_source,
+        }
+        if cache_key is not None:
+            batch.update(cache_hit=True, cache_key=cache_key)
+        return points, batch
+
     def test_run_netlist(self) -> None:
         output_dir = self.make_run()
         summary = {"run_dir": str(output_dir), "status": "completed"}
@@ -1602,6 +1639,440 @@ class MCPServerTests(unittest.TestCase):
             len(list(Path(finished["experiment_dir"]).glob("point-*/point_result.json"))),
             4,
         )
+
+    def test_durable_native_experiment_materializes_one_batch(self) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=2)
+        calls: list[Path] = []
+
+        def execute_native(
+            combinations: list[dict[str, str]],
+            batch_dir: Path,
+            *args: object,
+        ) -> tuple[list[dict[str, object]], dict[str, object]]:
+            calls.append(batch_dir)
+            return self.native_batch_result(combinations, batch_dir)
+
+        try:
+            with patch.object(
+                mcp_server, "_execute_native_experiment", side_effect=execute_native
+            ):
+                defined = manager.define(
+                    "R1 in out {R}\n.end\n",
+                    [{"name": "R", "values": ["1k", "2k", "3k"]}],
+                    execution_mode="native",
+                )
+                self.assertEqual(defined["execution_mode"], "native")
+                manager.start(defined["experiment_id"])
+                finished = manager.wait(defined["experiment_id"])
+        finally:
+            manager.shutdown()
+
+        self.assertEqual(finished["status"], "completed")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].name, "attempt-0000")
+        results = json.loads(Path(finished["results_json"]).read_text(encoding="utf-8"))
+        self.assertEqual(results["execution_mode"], "native")
+        self.assertEqual(results["native_batch"]["validated_step_order"], [0, 1, 2])
+        self.assertEqual([point["index"] for point in results["points"]], [0, 1, 2])
+        self.assertEqual(
+            len(list(Path(finished["experiment_dir"]).glob("point-*/point_result.json"))),
+            3,
+        )
+        self.assertTrue(
+            (Path(finished["experiment_dir"]) / "native-batch" / "batch_result.json").is_file()
+        )
+        comparison = mcp_server.compare_experiments(
+            finished["experiment_id"], finished["experiment_id"]
+        )
+        self.assertEqual(comparison["matched_points"], 3)
+
+    def test_durable_native_recovery_repairs_point_materialization_without_rerun(
+        self,
+    ) -> None:
+        first_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+
+        def execute_native(
+            combinations: list[dict[str, str]],
+            batch_dir: Path,
+            *args: object,
+        ) -> tuple[list[dict[str, object]], dict[str, object]]:
+            self.assertTrue(args[-2])
+            self.assertIsInstance(args[-1], threading.Event)
+            return self.native_batch_result(
+                combinations,
+                batch_dir,
+                execution_source="cache",
+                cache_key="native-key",
+            )
+
+        with patch.object(
+            mcp_server, "_execute_native_experiment", side_effect=execute_native
+        ):
+            defined = first_manager.define(
+                "R1 in out {R}\n.end\n",
+                [{"name": "R", "values": ["1k", "2k"]}],
+                reuse_cache=True,
+                execution_mode="native",
+            )
+            first_manager.start(defined["experiment_id"])
+            first_manager.wait(defined["experiment_id"])
+        first_manager.shutdown()
+
+        experiment_dir = Path(defined["experiment_dir"])
+        missing_checkpoint = experiment_dir / "point-0001" / "point_result.json"
+        missing_checkpoint.unlink()
+        (experiment_dir / "results.json").unlink()
+        (experiment_dir / "results.csv").unlink()
+        manifest = json.loads(Path(defined["manifest"]).read_text(encoding="utf-8"))
+        manifest["status"] = "running"
+        mcp_server._write_json(Path(defined["manifest"]), manifest)
+
+        with patch.object(mcp_server, "_execute_native_experiment") as execution:
+            resumed_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+            try:
+                finished = resumed_manager.wait(defined["experiment_id"])
+            finally:
+                resumed_manager.shutdown()
+
+        execution.assert_not_called()
+        self.assertEqual(finished["status"], "completed")
+        self.assertTrue(missing_checkpoint.is_file())
+        results = json.loads(Path(finished["results_json"]).read_text(encoding="utf-8"))
+        self.assertEqual(results["native_batch"]["execution_source"], "cache")
+        self.assertEqual(results["native_batch"]["cache_key"], "native-key")
+
+    def test_durable_native_recovers_cancelling_batch_without_rerun(self) -> None:
+        first_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        with patch.object(
+            mcp_server,
+            "_execute_native_experiment",
+            side_effect=lambda combinations, batch_dir, *args: self.native_batch_result(
+                combinations, batch_dir
+            ),
+        ):
+            defined = first_manager.define(
+                "R1 in out {R}\n.end\n",
+                [{"name": "R", "values": ["1k", "2k"]}],
+                execution_mode="native",
+            )
+            first_manager.start(defined["experiment_id"])
+            first_manager.wait(defined["experiment_id"])
+        first_manager.shutdown()
+
+        experiment_dir = Path(defined["experiment_dir"])
+        missing_checkpoint = experiment_dir / "point-0001" / "point_result.json"
+        missing_checkpoint.unlink()
+        (experiment_dir / "results.json").unlink()
+        (experiment_dir / "results.csv").unlink()
+        manifest = json.loads(Path(defined["manifest"]).read_text(encoding="utf-8"))
+        manifest["status"] = "cancelling"
+        mcp_server._write_json(Path(defined["manifest"]), manifest)
+
+        with patch.object(mcp_server, "_execute_native_experiment") as execution:
+            resumed_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+            try:
+                finished = resumed_manager.wait(defined["experiment_id"])
+            finally:
+                resumed_manager.shutdown()
+
+        execution.assert_not_called()
+        self.assertEqual(finished["status"], "cancelled")
+        self.assertTrue(missing_checkpoint.is_file())
+        results = json.loads(Path(finished["results_json"]).read_text(encoding="utf-8"))
+        self.assertEqual(results["status"], "cancelled")
+
+    def test_durable_native_queued_recovery_preserves_cancel_intent(self) -> None:
+        first_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        with patch.object(
+            mcp_server,
+            "_execute_native_experiment",
+            side_effect=lambda combinations, batch_dir, *args: self.native_batch_result(
+                combinations, batch_dir
+            ),
+        ):
+            defined = first_manager.define(
+                "R1 in out {R}\n.end\n",
+                [{"name": "R", "values": ["1k"]}],
+                execution_mode="native",
+            )
+            first_manager.start(defined["experiment_id"])
+            first_manager.wait(defined["experiment_id"])
+        first_manager.shutdown()
+
+        experiment_dir = Path(defined["experiment_dir"])
+        (experiment_dir / "results.json").unlink()
+        (experiment_dir / "results.csv").unlink()
+        manifest = json.loads(Path(defined["manifest"]).read_text(encoding="utf-8"))
+        manifest.update(status="queued", cancel_requested=True)
+        mcp_server._write_json(Path(defined["manifest"]), manifest)
+
+        with patch.object(mcp_server, "_execute_native_experiment") as execution:
+            resumed_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+            try:
+                finished = resumed_manager.wait(defined["experiment_id"])
+            finally:
+                resumed_manager.shutdown()
+
+        execution.assert_not_called()
+        self.assertEqual(finished["status"], "cancelled")
+        results = json.loads(Path(finished["results_json"]).read_text(encoding="utf-8"))
+        self.assertEqual(results["status"], "cancelled")
+
+    def test_durable_native_rechecks_cancellation_before_launch(self) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        original_persist = manager._persist_progress
+
+        def cancel_after_progress(*args: object, **kwargs: object) -> None:
+            original_persist(*args, **kwargs)
+            manager._events[str(args[0])].set()
+
+        try:
+            with (
+                patch.object(
+                    manager,
+                    "_persist_progress",
+                    side_effect=cancel_after_progress,
+                ),
+                patch.object(mcp_server, "_execute_native_experiment") as execution,
+            ):
+                defined = manager.define(
+                    "R1 in out {R}\n.end\n",
+                    [{"name": "R", "values": ["1k"]}],
+                    execution_mode="native",
+                )
+                manager.start(defined["experiment_id"])
+                finished = manager.wait(defined["experiment_id"])
+        finally:
+            manager.shutdown()
+
+        execution.assert_not_called()
+        self.assertEqual(finished["status"], "cancelled")
+        manifest = json.loads(Path(finished["manifest"]).read_text(encoding="utf-8"))
+        self.assertNotIn("native-batch/batch_result.json", manifest["artifacts"])
+
+    def test_durable_native_rejects_corrupt_batch_checkpoint(self) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        defined = manager.define(
+            "R1 in out {R}\n.end\n",
+            [{"name": "R", "values": ["1k"]}],
+            execution_mode="native",
+        )
+        manager.shutdown()
+        experiment_dir = Path(defined["experiment_dir"])
+        native_root = experiment_dir / "native-batch"
+        native_root.mkdir()
+        (native_root / "batch_result.json").write_text("not json", encoding="utf-8")
+        manifest = json.loads(Path(defined["manifest"]).read_text(encoding="utf-8"))
+        manifest["status"] = "running"
+        mcp_server._write_json(Path(defined["manifest"]), manifest)
+
+        with patch.object(mcp_server, "_execute_native_experiment") as execution:
+            resumed_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+            try:
+                finished = resumed_manager.wait(defined["experiment_id"])
+            finally:
+                resumed_manager.shutdown()
+
+        execution.assert_not_called()
+        self.assertEqual(finished["status"], "failed")
+        self.assertIn("invalid native batch checkpoint", finished["error"])
+
+    def test_durable_native_cancellation_preserves_validated_batch(self) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        started = threading.Event()
+        release = threading.Event()
+
+        def execute_native(
+            combinations: list[dict[str, str]],
+            batch_dir: Path,
+            *args: object,
+        ) -> tuple[list[dict[str, object]], dict[str, object]]:
+            started.set()
+            release.wait(2)
+            return self.native_batch_result(
+                combinations,
+                batch_dir,
+                all_passed=False,
+                error="experiment cancelled before waveform analysis",
+            )
+
+        try:
+            with patch.object(
+                mcp_server, "_execute_native_experiment", side_effect=execute_native
+            ):
+                defined = manager.define(
+                    "R1 in out {R}\n.end\n",
+                    [{"name": "R", "values": ["1k", "2k"]}],
+                    execution_mode="native",
+                )
+                manager.start(defined["experiment_id"])
+                self.assertTrue(started.wait(2))
+                cancelling = manager.cancel(defined["experiment_id"])
+                self.assertEqual(cancelling["status"], "cancelling")
+                release.set()
+                finished = manager.wait(defined["experiment_id"])
+        finally:
+            release.set()
+            manager.shutdown()
+
+        self.assertEqual(finished["status"], "cancelled")
+        self.assertEqual(finished["finished_points"], 2)
+        self.assertTrue(
+            (Path(finished["experiment_dir"]) / "native-batch" / "batch_result.json").is_file()
+        )
+
+    def test_durable_native_resume_starts_a_fresh_attempt_without_checkpoint(
+        self,
+    ) -> None:
+        first_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        defined = first_manager.define(
+            "R1 in out {R}\n.end\n",
+            [{"name": "R", "values": ["1k"]}],
+            execution_mode="native",
+        )
+        first_manager.shutdown()
+        experiment_dir = Path(defined["experiment_dir"])
+        interrupted_attempt = experiment_dir / "native-batch" / "attempt-0000"
+        interrupted_attempt.mkdir(parents=True)
+        manifest = json.loads(Path(defined["manifest"]).read_text(encoding="utf-8"))
+        manifest["status"] = "running"
+        mcp_server._write_json(Path(defined["manifest"]), manifest)
+        calls: list[Path] = []
+
+        def execute_native(
+            combinations: list[dict[str, str]],
+            batch_dir: Path,
+            *args: object,
+        ) -> tuple[list[dict[str, object]], dict[str, object]]:
+            calls.append(batch_dir)
+            return self.native_batch_result(combinations, batch_dir)
+
+        with patch.object(
+            mcp_server, "_execute_native_experiment", side_effect=execute_native
+        ):
+            resumed_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+            try:
+                finished = resumed_manager.wait(defined["experiment_id"])
+            finally:
+                resumed_manager.shutdown()
+
+        self.assertEqual(finished["status"], "completed")
+        self.assertEqual([path.name for path in calls], ["attempt-0001"])
+
+    def test_active_native_shutdown_recovers_completed_batch_without_rerun(
+        self,
+    ) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        started = threading.Event()
+        release = threading.Event()
+
+        def execute_native(
+            combinations: list[dict[str, str]],
+            batch_dir: Path,
+            *args: object,
+        ) -> tuple[list[dict[str, object]], dict[str, object]]:
+            started.set()
+            release.wait(2)
+            return self.native_batch_result(combinations, batch_dir)
+
+        with patch.object(
+            mcp_server, "_execute_native_experiment", side_effect=execute_native
+        ):
+            defined = manager.define(
+                "R1 in out {R}\n.end\n",
+                [{"name": "R", "values": ["1k", "2k"]}],
+                execution_mode="native",
+            )
+            manager.start(defined["experiment_id"])
+            self.assertTrue(started.wait(2))
+            shutdown_thread = threading.Thread(target=manager.shutdown)
+            shutdown_thread.start()
+            release.set()
+            shutdown_thread.join(2)
+
+        self.assertFalse(shutdown_thread.is_alive())
+        paused = manager.snapshot(defined["experiment_id"])
+        self.assertEqual(paused["status"], "queued")
+        self.assertEqual(paused["finished_points"], 2)
+
+        with patch.object(mcp_server, "_execute_native_experiment") as execution:
+            resumed_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+            try:
+                finished = resumed_manager.wait(defined["experiment_id"])
+            finally:
+                resumed_manager.shutdown()
+
+        execution.assert_not_called()
+        self.assertEqual(finished["status"], "completed")
+
+    def test_durable_native_rejects_invalid_callback_payload_before_checkpoint(
+        self,
+    ) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+
+        def execute_native(
+            combinations: list[dict[str, str]],
+            batch_dir: Path,
+            *args: object,
+        ) -> tuple[list[dict[str, object]], dict[str, object]]:
+            batch_dir.mkdir(parents=True)
+            return [], {
+                "run_dir": str(batch_dir),
+                "status": "completed",
+                "step_count": 1,
+                "validated_step_order": [0],
+                "execution_source": "simulator",
+            }
+
+        try:
+            with patch.object(
+                mcp_server, "_execute_native_experiment", side_effect=execute_native
+            ):
+                defined = manager.define(
+                    "R1 in out {R}\n.end\n",
+                    [{"name": "R", "values": ["1k"]}],
+                    execution_mode="native",
+                )
+                manager.start(defined["experiment_id"])
+                finished = manager.wait(defined["experiment_id"])
+        finally:
+            manager.shutdown()
+
+        self.assertEqual(finished["status"], "failed")
+        self.assertIn("checkpoint point count", finished["error"])
+        self.assertFalse(
+            (Path(finished["experiment_dir"]) / "native-batch" / "batch_result.json").exists()
+        )
+
+    def test_define_durable_native_rejects_unsafe_deck_before_output(self) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        try:
+            before = set(self.runs.iterdir())
+            with self.assertRaisesRegex(ValueError, "existing \\.step"):
+                manager.define(
+                    ".step param existing 1 2 1\nR1 in out {R}\n.end\n",
+                    [{"name": "R", "values": ["1k"]}],
+                    execution_mode="native",
+                )
+            after = set(self.runs.iterdir())
+        finally:
+            manager.shutdown()
+
+        self.assertEqual(after, before)
+
+    def test_define_experiment_schema_advertises_durable_native_mode(self) -> None:
+        tools = asyncio.run(mcp_server.mcp.list_tools())
+        tool = next(tool for tool in tools if tool.name == "define_experiment")
+
+        self.assertEqual(
+            tool.input_schema["properties"]["execution_mode"]["default"],
+            "independent",
+        )
+        self.assertEqual(
+            tool.input_schema["properties"]["execution_mode"]["enum"],
+            ["independent", "native"],
+        )
+        self.assertIn("execution_mode", tool.output_schema["properties"])
 
     def test_experiment_job_cancellation_stops_new_points(self) -> None:
         manager = mcp_server.ExperimentJobManager(self.runs, workers=2)

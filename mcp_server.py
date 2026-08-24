@@ -316,6 +316,7 @@ def _execute_native_experiment(
     timeout_seconds: int,
     analyses: list[ExperimentWaveformAnalysis],
     reuse_cache: bool,
+    cancel_event: threading.Event | None = None,
 ) -> tuple[list[ExperimentPointResult], dict[str, object]]:
     """Run one stepped deck and map its validated slices back to experiment points."""
     output_dir: Path | None = None
@@ -438,7 +439,11 @@ def _execute_native_experiment(
             "error": None,
             "native_step_index": index,
         }
-        points.append(_analyze_experiment_point(point, output_dir, analyses, index))
+        if cancel_event is not None and cancel_event.is_set():
+            point["error"] = "experiment cancelled before waveform analysis"
+            points.append(point)
+        else:
+            points.append(_analyze_experiment_point(point, output_dir, analyses, index))
     return points, batch
 
 
@@ -450,6 +455,9 @@ class ExperimentJobManager(experiment_engine.ExperimentJobManager):
             runs_dir,
             workers,
             execute_point=lambda *args, **kwargs: _execute_experiment_point(
+                *args, **kwargs
+            ),
+            execute_native=lambda *args, **kwargs: _execute_native_experiment(
                 *args, **kwargs
             ),
         )
@@ -891,8 +899,9 @@ def define_experiment(
     derived_parameters: list[ExperimentDerivedParameter] | None = None,
     max_concurrency: int = 2,
     reuse_cache: bool = False,
+    execution_mode: Literal["independent", "native"] = "independent",
 ) -> ExperimentJobSnapshot:
-    """Validate and persist an experiment definition without starting it."""
+    """Validate and persist an independent or native experiment without starting it."""
     return _get_experiment_manager().define(
         netlist_template,
         parameters,
@@ -903,6 +912,7 @@ def define_experiment(
         derived_parameters,
         max_concurrency,
         reuse_cache,
+        execution_mode,
     )
 
 

@@ -144,6 +144,7 @@ class ExperimentJobSnapshot(TypedDict):
     failed_points: int
     all_passed: bool | None
     error: str | None
+    execution_mode: str
 
 
 class MeasurementComparison(TypedDict):
@@ -1314,12 +1315,18 @@ class ExperimentJobManager:
         workers: int = MAX_EXPERIMENT_WORKERS,
         *,
         execute_point: Callable[..., ExperimentPointResult],
+        execute_native: Callable[
+            ...,
+            tuple[list[ExperimentPointResult], dict[str, object]],
+        ]
+        | None = None,
     ) -> None:
         if workers < 1 or workers > MAX_EXPERIMENT_WORKERS:
             raise ValueError(f"workers must be between 1 and {MAX_EXPERIMENT_WORKERS}")
         self.runs_dir = runs_dir
         self.workers = workers
         self._execute_point = execute_point
+        self._execute_native = execute_native
         self.runs_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._stopping = threading.Event()
@@ -1384,12 +1391,31 @@ class ExperimentJobManager:
                 manifest["status"] = "queued"
                 manifest["running_points"] = 0
                 self._save_manifest(manifest)
-                self._events[experiment_id] = threading.Event()
+                event = threading.Event()
+                if manifest.get("cancel_requested") is True:
+                    event.set()
+                self._events[experiment_id] = event
                 self._queue.put(experiment_id)
             elif status == "cancelling":
-                manifest["status"] = "cancelled"
-                manifest["running_points"] = 0
-                self._save_manifest(manifest)
+                definition = manifest.get("definition")
+                execution_mode = (
+                    definition.get("execution_mode", "independent")
+                    if isinstance(definition, dict)
+                    else "independent"
+                )
+                if execution_mode == "native":
+                    manifest["status"] = "queued"
+                    manifest["running_points"] = 0
+                    manifest["cancel_requested"] = True
+                    self._save_manifest(manifest)
+                    event = threading.Event()
+                    event.set()
+                    self._events[experiment_id] = event
+                    self._queue.put(experiment_id)
+                else:
+                    manifest["status"] = "cancelled"
+                    manifest["running_points"] = 0
+                    self._save_manifest(manifest)
 
     def define(
         self,
@@ -1402,14 +1428,26 @@ class ExperimentJobManager:
         derived_parameters: list[ExperimentDerivedParameter] | None = None,
         max_concurrency: int = 2,
         reuse_cache: bool = False,
+        execution_mode: str = "independent",
     ) -> ExperimentJobSnapshot:
         normalized_filename = _netlist_filename(filename)
         _validate_timeout(timeout_seconds)
         _validate_reuse_cache(reuse_cache)
+        if execution_mode not in {"independent", "native"}:
+            raise ValueError("execution_mode must be 'independent' or 'native'")
+        if execution_mode == "native" and self._execute_native is None:
+            raise ValueError("native execution requires an execute_native callback")
         if not isinstance(max_concurrency, int) or isinstance(max_concurrency, bool):
             raise ValueError("max_concurrency must be an integer")
-        if max_concurrency < 1 or max_concurrency > self.workers:
-            raise ValueError(f"max_concurrency must be between 1 and {self.workers}")
+        concurrency_limit = (
+            self.workers
+            if execution_mode == "independent"
+            else MAX_EXPERIMENT_WORKERS
+        )
+        if max_concurrency < 1 or max_concurrency > concurrency_limit:
+            raise ValueError(
+                f"max_concurrency must be between 1 and {concurrency_limit}"
+            )
         analyses = [] if waveform_analyses is None else waveform_analyses
         derived = [] if derived_parameters is None else derived_parameters
         parameter_order, derived_order, combinations, units = _prepare_experiment(
@@ -1418,6 +1456,13 @@ class ExperimentJobManager:
             analyses,
             derived,
         )
+        if execution_mode == "native":
+            _render_native_experiment_netlist(
+                netlist_template,
+                parameter_order,
+                derived_order,
+                combinations,
+            )
         definition: dict[str, object] = {
             "netlist_template": netlist_template,
             "parameters": parameters,
@@ -1431,6 +1476,7 @@ class ExperimentJobManager:
             "timeout_seconds": timeout_seconds,
             "max_concurrency": max_concurrency,
             "reuse_cache": reuse_cache,
+            "execution_mode": execution_mode,
         }
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         experiment_id = f"mcp-experiment-{stamp}-{uuid.uuid4().hex[:8]}"
@@ -1455,6 +1501,7 @@ class ExperimentJobManager:
             "passed_points": 0,
             "failed_points": 0,
             "all_passed": None,
+            "cancel_requested": False,
             "artifacts": [],
         }
         self._save_manifest(manifest)
@@ -1487,10 +1534,12 @@ class ExperimentJobManager:
             if status in {"defined", "queued"}:
                 manifest["status"] = "cancelled"
                 manifest["all_passed"] = False
+                manifest["cancel_requested"] = True
                 self._save_manifest(manifest)
                 self._events.setdefault(experiment_id, threading.Event()).set()
             elif status == "running":
                 manifest["status"] = "cancelling"
+                manifest["cancel_requested"] = True
                 self._save_manifest(manifest)
                 self._events.setdefault(experiment_id, threading.Event()).set()
         return self.snapshot(experiment_id)
@@ -1499,6 +1548,12 @@ class ExperimentJobManager:
         with self._lock:
             manifest = self._load_manifest(experiment_id)
         experiment_dir = self.runs_dir / experiment_id
+        definition = manifest.get("definition")
+        execution_mode = (
+            str(definition.get("execution_mode", "independent"))
+            if isinstance(definition, dict)
+            else "independent"
+        )
         snapshot: ExperimentJobSnapshot = {
             "experiment_id": experiment_id,
             "experiment_dir": str(experiment_dir),
@@ -1520,6 +1575,7 @@ class ExperimentJobManager:
             "error": str(manifest["error"])
             if isinstance(manifest.get("error"), str)
             else None,
+            "execution_mode": execution_mode,
         }
         return snapshot
 
@@ -1595,6 +1651,92 @@ class ExperimentJobManager:
         return points
 
     @staticmethod
+    def _validate_native_checkpoint(
+        value: object,
+        definition_hash: str,
+        combinations: list[dict[str, str]],
+    ) -> tuple[list[ExperimentPointResult], dict[str, object]]:
+        if not isinstance(value, dict):
+            raise TypeError("checkpoint must contain an object")
+        if value.get("schema_version") != 1:
+            raise ValueError("checkpoint schema version is not supported")
+        if value.get("definition_hash") != definition_hash:
+            raise ValueError("definition hash does not match")
+        points = value.get("points")
+        native_batch = value.get("native_batch")
+        if not isinstance(points, list) or not isinstance(native_batch, dict):
+            raise TypeError("checkpoint payload is incomplete")
+        if len(points) != len(combinations):
+            raise ValueError("checkpoint point count does not match")
+        required = {
+            "parameters",
+            "run_dir",
+            "simulation_status",
+            "duration_seconds",
+            "measurements",
+            "analyses",
+            "all_passed",
+            "error",
+            "native_step_index",
+        }
+        shared_run_dir = native_batch.get("run_dir")
+        for index, point in enumerate(points):
+            if (
+                not isinstance(point, dict)
+                or not required <= point.keys()
+                or type(point.get("index")) is not int
+                or type(point.get("native_step_index")) is not int
+                or point.get("index") != index
+                or point.get("parameters") != combinations[index]
+                or point.get("native_step_index") != index
+                or point.get("simulation_status")
+                not in {"completed", "error", "cancelled"}
+                or not isinstance(point.get("run_dir"), str)
+                or point.get("run_dir") != shared_run_dir
+                or not isinstance(point.get("measurements"), dict)
+                or not isinstance(point.get("analyses"), list)
+                or not isinstance(point.get("all_passed"), bool)
+                or (
+                    point.get("error") is not None
+                    and not isinstance(point.get("error"), str)
+                )
+            ):
+                raise ValueError("checkpoint point mapping does not match")
+        if native_batch.get("step_count") != len(combinations):
+            raise ValueError("checkpoint batch mapping does not match")
+        batch_status = native_batch.get("status")
+        if batch_status not in {"completed", "error"}:
+            raise ValueError("checkpoint batch status is not supported")
+        if batch_status == "error" and any(
+            point["simulation_status"] != "error" for point in points
+        ):
+            raise ValueError("checkpoint error batch contains a non-error point")
+        if (
+            batch_status != "error"
+            and native_batch.get("validated_step_order")
+            != list(range(len(combinations)))
+        ):
+            raise ValueError("checkpoint batch mapping does not match")
+        return points, native_batch
+
+    def _load_native_checkpoint(
+        self,
+        experiment_dir: Path,
+        definition_hash: str,
+        combinations: list[dict[str, str]],
+    ) -> tuple[list[ExperimentPointResult], dict[str, object]] | None:
+        path = experiment_dir / "native-batch" / "batch_result.json"
+        if not path.exists():
+            return None
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            return self._validate_native_checkpoint(
+                value, definition_hash, combinations
+            )
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise ValueError(f"invalid native batch checkpoint: {path}") from exc
+
+    @staticmethod
     def _next_attempt_dir(point_dir: Path) -> Path:
         point_dir.mkdir(parents=True, exist_ok=True)
         attempts = [
@@ -1643,6 +1785,23 @@ class ExperimentJobManager:
                 analyses,
                 derived,
             )
+            execution_mode = str(definition.get("execution_mode", "independent"))
+            if execution_mode == "native":
+                self._run_native_job(
+                    experiment_id,
+                    experiment_dir,
+                    manifest,
+                    definition,
+                    parameter_order,
+                    derived_order,
+                    combinations,
+                    units,
+                    analyses,
+                    event,
+                )
+                return
+            if execution_mode != "independent":
+                raise ValueError("experiment execution mode is not supported")
             checkpoints = self._load_checkpoints(experiment_dir)
             if any(index < 0 or index >= len(combinations) for index in checkpoints):
                 raise ValueError("point checkpoint index is outside the experiment")
@@ -1789,6 +1948,141 @@ class ExperimentJobManager:
                     self._save_manifest(manifest)
             except Exception:
                 pass
+
+    def _run_native_job(
+        self,
+        experiment_id: str,
+        experiment_dir: Path,
+        manifest: dict[str, object],
+        definition: dict[str, object],
+        parameter_order: list[str],
+        derived_order: list[str],
+        combinations: list[dict[str, str]],
+        units: dict[str, str],
+        analyses: list[ExperimentWaveformAnalysis],
+        event: threading.Event,
+    ) -> None:
+        definition_hash = str(manifest["definition_hash"])
+        checkpoint = self._load_native_checkpoint(
+            experiment_dir, definition_hash, combinations
+        )
+        if checkpoint is None:
+            if event.is_set():
+                points: list[ExperimentPointResult] = []
+                native_batch: dict[str, object] | None = None
+            else:
+                if self._execute_native is None:
+                    raise ValueError("native execution is unavailable")
+                native_root = experiment_dir / "native-batch"
+                netlist = _render_native_experiment_netlist(
+                    str(definition["netlist_template"]),
+                    parameter_order,
+                    derived_order,
+                    combinations,
+                )
+                self._persist_progress(
+                    experiment_id,
+                    [],
+                    len(combinations),
+                    len(combinations),
+                    "running",
+                )
+                if event.is_set():
+                    points = []
+                    native_batch = None
+                else:
+                    attempt_dir = self._next_attempt_dir(native_root)
+                    points, native_batch = self._execute_native(
+                        combinations,
+                        attempt_dir,
+                        netlist,
+                        str(definition["filename"]),
+                        bool(definition["ascii_raw"]),
+                        int(definition["timeout_seconds"]),
+                        analyses,
+                        bool(definition.get("reuse_cache", False)),
+                        event,
+                    )
+                    checkpoint_value = {
+                        "schema_version": 1,
+                        "definition_hash": definition_hash,
+                        "points": points,
+                        "native_batch": native_batch,
+                    }
+                    points, native_batch = self._validate_native_checkpoint(
+                        checkpoint_value, definition_hash, combinations
+                    )
+                    _write_json(native_root / "batch_result.json", checkpoint_value)
+        else:
+            points, native_batch = checkpoint
+
+        for point in points:
+            point_root = experiment_dir / f"point-{point['index']:04d}"
+            point_root.mkdir(parents=True, exist_ok=True)
+            _write_json(point_root / "point_result.json", point)
+
+        if self._stopping.is_set() and not event.is_set():
+            self._persist_progress(
+                experiment_id,
+                points,
+                len(combinations),
+                0,
+                "queued",
+            )
+            return
+
+        counts = _experiment_counts(points, len(combinations))
+        with self._lock:
+            manifest = self._load_manifest(experiment_id)
+            cancelled = event.is_set() or manifest.get("status") in {
+                "cancelling",
+                "cancelled",
+            }
+            final_status = "cancelled" if cancelled else "completed"
+            all_passed = (
+                final_status == "completed"
+                and len(points) == len(combinations)
+                and counts["passed_points"] == len(combinations)
+            )
+            result: ExperimentResult = {
+                "experiment_id": experiment_id,
+                "experiment_dir": str(experiment_dir),
+                "manifest": str(experiment_dir / "experiment_manifest.json"),
+                "results_json": str(experiment_dir / "results.json"),
+                "results_csv": str(experiment_dir / "results.csv"),
+                "status": final_status,
+                "parameter_order": parameter_order,
+                "derived_parameter_order": derived_order,
+                "parameter_units": units,
+                "point_count": len(combinations),
+                "completed_points": counts["completed_points"],
+                "error_points": counts["error_points"],
+                "passed_points": counts["passed_points"],
+                "failed_points": counts["failed_points"],
+                "all_passed": all_passed,
+                "points": points,
+                "execution_mode": "native",
+                "native_batch": native_batch,
+            }
+            _write_experiment_csv(
+                experiment_dir / "results.csv",
+                [*parameter_order, *derived_order],
+                points,
+            )
+            _write_json(experiment_dir / "results.json", result)
+            artifacts = ["results.json", "results.csv"]
+            if native_batch is not None:
+                artifacts.append("native-batch/batch_result.json")
+            manifest.update(
+                status=final_status,
+                running_points=0,
+                all_passed=all_passed,
+                finished_at=datetime.now().astimezone().isoformat(),
+                artifacts=artifacts,
+                native_batch=native_batch,
+                **counts,
+            )
+            self._save_manifest(manifest)
 
     def wait(self, experiment_id: str, timeout: float = 10.0) -> ExperimentJobSnapshot:
         deadline = time.monotonic() + timeout

@@ -44,7 +44,7 @@ design.
 - Binary and ASCII `.raw` waveform parsing, CSV export, and plots
 - `.meas` and native `.step` result extraction
 - Parameter sweeps, Monte Carlo analysis, and target-response search
-- Durable run manifests, SQLite history, and a static HTML dashboard
+- Durable run and experiment manifests, restart recovery, and a static HTML dashboard
 - An MCP server exposing the toolkit as native agent tools
 - Local synchronous and asynchronous REST API
 - Unit tests and small validation circuits, from a single-pole RC divider up
@@ -392,25 +392,33 @@ their original declaration order.
 
 The Phase 2B lifecycle keeps definition and execution separate. First call
 `define_experiment` with the same definition accepted by `run_experiment`, plus
-an optional `max_concurrency` from 1 through 4. The default is 2. Definition
-validates and persists the experiment but does not launch LTspice. Then call
+an optional `execution_mode` of `"independent"` or `"native"`. Independent mode
+accepts `max_concurrency` from 1 through 4; native mode always uses one stepped
+LTspice process. Definition validates and persists the experiment but does not
+launch LTspice. Then call
 `start_experiment` with the returned `experiment_id`, and poll
 `get_experiment` for `finished_points`, `pending_points`, `running_points`, and
 the existing pass/error counts.
 
-Experiment definitions, progress, and terminal point checkpoints are stored as
-atomic UTF-8 JSON. A restarted MCP manager automatically requeues jobs that
-were queued or running, skips valid `point_result.json` checkpoints, and places
-an interrupted point's next execution in a fresh attempt directory. Final JSON
-and CSV are always assembled in Cartesian index order, regardless of point
-completion order.
+Experiment definitions, progress, and terminal checkpoints are stored as atomic
+UTF-8 JSON. A restarted MCP manager automatically requeues jobs that were queued
+or running. Independent mode skips valid `point_result.json` checkpoints and
+places interrupted points in fresh attempt directories. Native mode treats the
+validated batch as one recovery unit: it atomically writes
+`native-batch/batch_result.json` before materializing ordered point checkpoints.
+If that batch checkpoint is absent after an interruption, the complete stepped
+deck is retried in a fresh attempt; a valid checkpoint is recovered without
+rerunning LTspice. Final JSON and CSV are always assembled in Cartesian order.
 
 `cancel_experiment` is idempotent and cooperative. It immediately cancels a
 defined or queued job. For a running job it prevents new points from being
 scheduled; already-running LTspice processes are allowed to finish so behavior
 does not depend on Unix signals and remains portable to Windows. If cancellation
-arrives before waveform analysis, that analysis is skipped. The terminal job
-status is `cancelled`, and partial results remain available.
+arrives before waveform analysis, that analysis is skipped. For native mode,
+the one in-flight LTspice process is also allowed to finish; any fully validated
+batch evidence is checkpointed before the terminal experiment is marked
+`cancelled`. Partial or completed simulation evidence therefore remains
+available without platform-specific process signals.
 
 The file-backed manager intentionally supports one active MCP process per
 `runs/` directory. Experiments are coordinated FIFO, while points within the
@@ -510,9 +518,15 @@ rejected before an experiment directory is created. All points share the
 `native-batch` run directory and keep their own `native_step_index`; batch
 duration, cache source, key, and validated ordering are recorded once in
 `native_batch`. `reuse_cache` can be enabled independently, and a cache hit is
-subject to the same log and waveform mapping checks. Durable job support for
-native batches is Phase 2C-B3; `define_experiment` remains independent-only for
-now.
+subject to the same log and waveform mapping checks.
+
+Phase 2C-B3 extends the same mode to `define_experiment`. Durable native jobs
+recover only from a complete, definition-bound batch checkpoint; torn point
+materialization is repaired from that checkpoint, while an interrupted batch
+without one starts a new numbered attempt. Corrupt, mismatched, or out-of-order
+batch checkpoints fail closed. The resulting `results.json` has the same shape
+as synchronous native output and can be passed directly to
+`compare_experiments`.
 
 `run_experiment` remains the backward-compatible synchronous path. It validates
 the complete definition before running, executes sequentially, and caps the
