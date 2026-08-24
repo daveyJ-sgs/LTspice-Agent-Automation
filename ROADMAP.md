@@ -105,7 +105,7 @@ Generalize single-value parameter substitution into durable experiments with:
 - Isolated per-point simulation and analysis failures
 - Portable experiment manifests plus structured JSON and flat CSV results
 
-#### Phase 2B: Durable experiment jobs — planned
+#### Phase 2B: Durable experiment jobs — complete
 
 ##### Phase 2B-A: Dependent and derived parameters — complete
 
@@ -113,14 +113,16 @@ Generalize single-value parameter substitution into durable experiments with:
 - Stable topological resolution, forward references, and cycle detection
 - Base-only Cartesian cardinality with resolved per-point provenance
 
-##### Phase 2B-B: Persistent bounded-concurrency jobs — planned
+##### Phase 2B-B: Persistent bounded-concurrency jobs — complete
 
-- Bounded concurrency, progress, cancellation, and resumable jobs
+- Atomic per-point checkpoints, bounded concurrency, and deterministic results
+- Portable progress state and restart-safe resume into new attempt directories
 
-##### Phase 2B-C: MCP job lifecycle — planned
+##### Phase 2B-C: MCP job lifecycle — complete
 
 - `define_experiment`, `get_experiment`, and `cancel_experiment` lifecycle tools
 - Explicit `start_experiment` operation so definition does not launch work
+- Idempotent cooperative cancellation with Windows-safe point boundaries
 
 #### Phase 2C: Execution efficiency and reporting — planned
 
@@ -128,9 +130,9 @@ Generalize single-value parameter substitution into durable experiments with:
 - Netlist/configuration hashing and cached-result reuse
 - SQLite, plots, human-readable experiment reports, and `compare_runs`
 
-Phase 2A provides synchronous `run_experiment`; later sections add the durable
-job lifecycle and comparison operations without changing the portable
-experiment definition.
+Phase 2A provides synchronous `run_experiment`; Phase 2B adds the durable job
+lifecycle without changing that contract. Phase 2C adds execution efficiency
+and comparison operations without changing the portable experiment definition.
 
 Windows acceptance criteria:
 

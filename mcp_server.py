@@ -19,11 +19,17 @@ Or register with Claude Code:
 from __future__ import annotations
 
 import csv
+import hashlib
 import itertools
 import json
+import os
+import queue
 import re
 import tempfile
+import threading
 import time
+import uuid
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime
 from pathlib import Path
 from typing import NotRequired, TypedDict
@@ -40,6 +46,8 @@ PROJECT_DIR = wrapper.PROJECT_DIR
 RUNS_DIR = wrapper.RUNS_DIR
 EXAMPLES_DIR = PROJECT_DIR / "examples"
 MAX_EXPERIMENT_POINTS = 1000
+MAX_EXPERIMENT_WORKERS = 4
+EXPERIMENT_ENGINE_VERSION = 1
 
 mcp = MCPServer(
     name="ltspice",
@@ -125,6 +133,25 @@ class ExperimentResult(TypedDict):
     failed_points: int
     all_passed: bool
     points: list[ExperimentPointResult]
+
+
+class ExperimentJobSnapshot(TypedDict):
+    experiment_id: str
+    experiment_dir: str
+    manifest: str
+    results_json: str
+    results_csv: str
+    status: str
+    point_count: int
+    finished_points: int
+    pending_points: int
+    running_points: int
+    completed_points: int
+    error_points: int
+    passed_points: int
+    failed_points: int
+    all_passed: bool | None
+    error: str | None
 
 
 # --- internal helpers -------------------------------------------------
@@ -219,10 +246,12 @@ def _run_netlist_text(
 
 
 def _write_json(path: Path, value: object) -> None:
-    path.write_text(
+    temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    temporary_path.write_text(
         json.dumps(value, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    os.replace(temporary_path, path)
 
 
 def _prepare_experiment(
@@ -513,6 +542,631 @@ def _write_experiment_csv(
                     },
                 }
             )
+
+
+def _execute_experiment_point(
+    index: int,
+    combination: dict[str, str],
+    point_dir: Path,
+    netlist_template: str,
+    filename: str,
+    ascii_raw: bool,
+    timeout_seconds: int,
+    analyses: list[ExperimentWaveformAnalysis],
+    cancel_event: threading.Event | None = None,
+) -> ExperimentPointResult:
+    point: ExperimentPointResult = {
+        "index": index,
+        "parameters": combination,
+        "run_dir": str(point_dir),
+        "simulation_status": "error",
+        "duration_seconds": None,
+        "measurements": {},
+        "analyses": [],
+        "all_passed": False,
+        "error": None,
+    }
+    if cancel_event is not None and cancel_event.is_set():
+        point["simulation_status"] = "cancelled"
+        point["error"] = "experiment cancelled before simulation"
+        return point
+
+    rendered = _render_experiment_netlist(netlist_template, combination)
+    try:
+        output_dir = _run_netlist_text(
+            rendered,
+            filename,
+            ascii_raw,
+            timeout_seconds,
+            point_dir,
+        )
+        summary = _summarize_run(output_dir)
+    except (FileNotFoundError, RuntimeError) as exc:
+        point["error"] = str(exc)
+        return point
+
+    point["simulation_status"] = str(summary.get("status", "completed"))
+    duration = summary.get("duration_seconds")
+    point["duration_seconds"] = (
+        float(duration) if isinstance(duration, (int, float)) else None
+    )
+    measurements = summary.get("measurements", {})
+    if isinstance(measurements, dict):
+        point["measurements"] = {
+            str(name): float(value) for name, value in measurements.items()
+        }
+
+    if cancel_event is not None and cancel_event.is_set():
+        point["error"] = "experiment cancelled before waveform analysis"
+        return point
+
+    for analysis in analyses:
+        analysis_name = analysis["name"]
+        options = {
+            name: analysis[name]
+            for name in (
+                "axis_variable",
+                "secondary_variable",
+                "signal_unit",
+                "axis_unit",
+                "raw_filename",
+            )
+            if name in analysis
+        }
+        try:
+            analysis_result = analyze_waveform(
+                str(output_dir),
+                analysis["variable"],
+                analysis["requirements"],
+                **options,
+            )
+        except (FileNotFoundError, IndexError, KeyError, ValueError) as exc:
+            point["analyses"].append(
+                {
+                    "name": analysis_name,
+                    "status": "error",
+                    "error": str(exc),
+                    "analysis": None,
+                }
+            )
+            if point["error"] is None:
+                point["error"] = f"analysis {analysis_name}: {exc}"
+            continue
+        point["analyses"].append(
+            {
+                "name": analysis_name,
+                "status": "completed",
+                "error": None,
+                "analysis": analysis_result,
+            }
+        )
+
+    point["all_passed"] = point["simulation_status"] == "completed" and all(
+        result["status"] == "completed"
+        and result["analysis"] is not None
+        and result["analysis"]["all_passed"]
+        for result in point["analyses"]
+    )
+    return point
+
+
+def _experiment_counts(
+    points: list[ExperimentPointResult], point_count: int
+) -> dict[str, int]:
+    completed_points = sum(
+        point["simulation_status"] == "completed" for point in points
+    )
+    error_points = sum(
+        point["simulation_status"] not in {"completed", "cancelled"}
+        or any(analysis["status"] == "error" for analysis in point["analyses"])
+        for point in points
+    )
+    passed_points = sum(point["all_passed"] for point in points)
+    return {
+        "finished_points": len(points),
+        "pending_points": point_count - len(points),
+        "completed_points": completed_points,
+        "error_points": error_points,
+        "passed_points": passed_points,
+        "failed_points": len(points) - passed_points,
+    }
+
+
+def _definition_hash(definition: dict[str, object]) -> str:
+    encoded = json.dumps(
+        definition,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+class ExperimentJobManager:
+    """Runs one durable experiment at a time with bounded point concurrency."""
+
+    def __init__(self, runs_dir: Path, workers: int = MAX_EXPERIMENT_WORKERS) -> None:
+        if workers < 1 or workers > MAX_EXPERIMENT_WORKERS:
+            raise ValueError(f"workers must be between 1 and {MAX_EXPERIMENT_WORKERS}")
+        self.runs_dir = runs_dir
+        self.workers = workers
+        self.runs_dir.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
+        self._stopping = threading.Event()
+        self._events: dict[str, threading.Event] = {}
+        self._queue: queue.Queue[str | None] = queue.Queue()
+        self._executor = ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="ltspice-experiment-point",
+        )
+        self._recover_jobs()
+        self._coordinator = threading.Thread(
+            target=self._coordinate,
+            name="ltspice-experiment-coordinator",
+            daemon=True,
+        )
+        self._coordinator.start()
+
+    def _experiment_dir(self, experiment_id: str) -> Path:
+        if (
+            not isinstance(experiment_id, str)
+            or not experiment_id.startswith("mcp-experiment-")
+            or Path(experiment_id).name != experiment_id
+            or "/" in experiment_id
+            or "\\" in experiment_id
+        ):
+            raise ValueError("invalid experiment_id")
+        experiment_dir = self.runs_dir / experiment_id
+        if not experiment_dir.is_dir():
+            raise FileNotFoundError(f"experiment not found: {experiment_id}")
+        return experiment_dir
+
+    def _load_manifest(self, experiment_id: str) -> dict[str, object]:
+        path = self._experiment_dir(experiment_id) / "experiment_manifest.json"
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"invalid experiment manifest: {experiment_id}") from exc
+        if not isinstance(value, dict):
+            raise ValueError(f"invalid experiment manifest: {experiment_id}")
+        if value.get("experiment_id") != experiment_id:
+            raise ValueError(f"experiment manifest ID does not match: {experiment_id}")
+        return value
+
+    def _save_manifest(self, manifest: dict[str, object]) -> None:
+        manifest["updated_at"] = datetime.now().astimezone().isoformat()
+        experiment_dir = self._experiment_dir(str(manifest["experiment_id"]))
+        _write_json(experiment_dir / "experiment_manifest.json", manifest)
+
+    def _recover_jobs(self) -> None:
+        for manifest_path in sorted(self.runs_dir.glob("mcp-experiment-*/experiment_manifest.json")):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(manifest, dict) or manifest.get("schema_version") != 2:
+                continue
+            status = manifest.get("status")
+            experiment_id = str(manifest.get("experiment_id", ""))
+            if experiment_id != manifest_path.parent.name:
+                continue
+            if status in {"queued", "running"}:
+                manifest["status"] = "queued"
+                manifest["running_points"] = 0
+                self._save_manifest(manifest)
+                self._events[experiment_id] = threading.Event()
+                self._queue.put(experiment_id)
+            elif status == "cancelling":
+                manifest["status"] = "cancelled"
+                manifest["running_points"] = 0
+                self._save_manifest(manifest)
+
+    def define(
+        self,
+        netlist_template: str,
+        parameters: list[ExperimentParameter],
+        waveform_analyses: list[ExperimentWaveformAnalysis] | None = None,
+        filename: str = "circuit.cir",
+        ascii_raw: bool = False,
+        timeout_seconds: int = 120,
+        derived_parameters: list[ExperimentDerivedParameter] | None = None,
+        max_concurrency: int = 2,
+    ) -> ExperimentJobSnapshot:
+        normalized_filename = _netlist_filename(filename)
+        _validate_timeout(timeout_seconds)
+        if not isinstance(max_concurrency, int) or isinstance(max_concurrency, bool):
+            raise ValueError("max_concurrency must be an integer")
+        if max_concurrency < 1 or max_concurrency > self.workers:
+            raise ValueError(f"max_concurrency must be between 1 and {self.workers}")
+        analyses = [] if waveform_analyses is None else waveform_analyses
+        derived = [] if derived_parameters is None else derived_parameters
+        parameter_order, derived_order, combinations, units = _prepare_experiment(
+            netlist_template,
+            parameters,
+            analyses,
+            derived,
+        )
+        definition: dict[str, object] = {
+            "netlist_template": netlist_template,
+            "parameters": parameters,
+            "parameter_order": parameter_order,
+            "derived_parameters": derived,
+            "derived_parameter_order": derived_order,
+            "parameter_units": units,
+            "waveform_analyses": analyses,
+            "filename": normalized_filename,
+            "ascii_raw": ascii_raw,
+            "timeout_seconds": timeout_seconds,
+            "max_concurrency": max_concurrency,
+        }
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        experiment_id = f"mcp-experiment-{stamp}-{uuid.uuid4().hex[:8]}"
+        experiment_dir = self.runs_dir / experiment_id
+        experiment_dir.mkdir(parents=True)
+        created_at = datetime.now().astimezone().isoformat()
+        manifest: dict[str, object] = {
+            "schema_version": 2,
+            "engine_version": EXPERIMENT_ENGINE_VERSION,
+            "experiment_id": experiment_id,
+            "status": "defined",
+            "created_at": created_at,
+            "updated_at": created_at,
+            "definition_hash": _definition_hash(definition),
+            "definition": definition,
+            "point_count": len(combinations),
+            "finished_points": 0,
+            "pending_points": len(combinations),
+            "running_points": 0,
+            "completed_points": 0,
+            "error_points": 0,
+            "passed_points": 0,
+            "failed_points": 0,
+            "all_passed": None,
+            "artifacts": [],
+        }
+        self._save_manifest(manifest)
+        return self.snapshot(experiment_id)
+
+    def start(self, experiment_id: str) -> ExperimentJobSnapshot:
+        with self._lock:
+            manifest = self._load_manifest(experiment_id)
+            status = str(manifest.get("status"))
+            if status == "defined":
+                manifest["status"] = "queued"
+                self._save_manifest(manifest)
+                self._events[experiment_id] = threading.Event()
+                self._queue.put(experiment_id)
+            elif status not in {
+                "queued",
+                "running",
+                "cancelling",
+                "cancelled",
+                "completed",
+                "failed",
+            }:
+                raise ValueError(f"cannot start experiment in status {status}")
+        return self.snapshot(experiment_id)
+
+    def cancel(self, experiment_id: str) -> ExperimentJobSnapshot:
+        with self._lock:
+            manifest = self._load_manifest(experiment_id)
+            status = str(manifest.get("status"))
+            if status in {"defined", "queued"}:
+                manifest["status"] = "cancelled"
+                manifest["all_passed"] = False
+                self._save_manifest(manifest)
+                self._events.setdefault(experiment_id, threading.Event()).set()
+            elif status == "running":
+                manifest["status"] = "cancelling"
+                self._save_manifest(manifest)
+                self._events.setdefault(experiment_id, threading.Event()).set()
+        return self.snapshot(experiment_id)
+
+    def snapshot(self, experiment_id: str) -> ExperimentJobSnapshot:
+        with self._lock:
+            manifest = self._load_manifest(experiment_id)
+        experiment_dir = self.runs_dir / experiment_id
+        snapshot: ExperimentJobSnapshot = {
+            "experiment_id": experiment_id,
+            "experiment_dir": str(experiment_dir),
+            "manifest": str(experiment_dir / "experiment_manifest.json"),
+            "results_json": str(experiment_dir / "results.json"),
+            "results_csv": str(experiment_dir / "results.csv"),
+            "status": str(manifest["status"]),
+            "point_count": int(manifest["point_count"]),
+            "finished_points": int(manifest.get("finished_points", 0)),
+            "pending_points": int(manifest.get("pending_points", 0)),
+            "running_points": int(manifest.get("running_points", 0)),
+            "completed_points": int(manifest.get("completed_points", 0)),
+            "error_points": int(manifest.get("error_points", 0)),
+            "passed_points": int(manifest.get("passed_points", 0)),
+            "failed_points": int(manifest.get("failed_points", 0)),
+            "all_passed": manifest.get("all_passed")
+            if isinstance(manifest.get("all_passed"), bool)
+            else None,
+            "error": str(manifest["error"])
+            if isinstance(manifest.get("error"), str)
+            else None,
+        }
+        return snapshot
+
+    def _coordinate(self) -> None:
+        while True:
+            experiment_id = self._queue.get()
+            if experiment_id is None:
+                self._queue.task_done()
+                return
+            try:
+                if self._stopping.is_set():
+                    continue
+                with self._lock:
+                    manifest = self._load_manifest(experiment_id)
+                    if manifest.get("status") != "queued":
+                        continue
+                    manifest["status"] = "running"
+                    self._save_manifest(manifest)
+                self._run_job(experiment_id)
+            except Exception as exc:
+                try:
+                    with self._lock:
+                        manifest = self._load_manifest(experiment_id)
+                        manifest.update(
+                            status="failed",
+                            running_points=0,
+                            all_passed=False,
+                            error=str(exc),
+                        )
+                        self._save_manifest(manifest)
+                except Exception:
+                    pass
+            finally:
+                self._queue.task_done()
+
+    def _load_checkpoints(
+        self, experiment_dir: Path
+    ) -> dict[int, ExperimentPointResult]:
+        points: dict[int, ExperimentPointResult] = {}
+        for path in sorted(experiment_dir.glob("point-*/point_result.json")):
+            try:
+                point = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(point, dict):
+                    raise TypeError("checkpoint must contain an object")
+                if not isinstance(point.get("index"), int) or isinstance(
+                    point.get("index"), bool
+                ):
+                    raise TypeError("checkpoint index must be an integer")
+                index = int(point["index"])
+                directory_index = int(path.parent.name.removeprefix("point-"))
+                required = {
+                    "parameters",
+                    "run_dir",
+                    "simulation_status",
+                    "duration_seconds",
+                    "measurements",
+                    "analyses",
+                    "all_passed",
+                    "error",
+                }
+                if (
+                    index != directory_index
+                    or not required <= point.keys()
+                    or point.get("simulation_status")
+                    not in {"completed", "error", "cancelled"}
+                ):
+                    raise ValueError("checkpoint shape does not match its directory")
+            except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                raise ValueError(f"invalid point checkpoint: {path}") from exc
+            if index in points:
+                raise ValueError(f"duplicate point checkpoint index: {index}")
+            points[index] = point
+        return points
+
+    @staticmethod
+    def _next_attempt_dir(point_dir: Path) -> Path:
+        point_dir.mkdir(parents=True, exist_ok=True)
+        attempts = [
+            int(path.name.removeprefix("attempt-"))
+            for path in point_dir.glob("attempt-[0-9][0-9][0-9][0-9]")
+            if path.is_dir()
+        ]
+        return point_dir / f"attempt-{max(attempts, default=-1) + 1:04d}"
+
+    def _persist_progress(
+        self,
+        experiment_id: str,
+        points: list[ExperimentPointResult],
+        point_count: int,
+        running_points: int,
+        status: str,
+    ) -> None:
+        counts = _experiment_counts(points, point_count)
+        counts["pending_points"] -= running_points
+        with self._lock:
+            manifest = self._load_manifest(experiment_id)
+            current_status = manifest.get("status")
+            if current_status in {"cancelling", "cancelled"}:
+                status = str(current_status)
+                self._events.setdefault(experiment_id, threading.Event()).set()
+            manifest.update(status=status, running_points=running_points, **counts)
+            self._save_manifest(manifest)
+
+    def _run_job(self, experiment_id: str) -> None:
+        experiment_dir = self._experiment_dir(experiment_id)
+        event = self._events.setdefault(experiment_id, threading.Event())
+        try:
+            manifest = self._load_manifest(experiment_id)
+            definition = manifest.get("definition")
+            if not isinstance(definition, dict):
+                raise ValueError("experiment definition is missing")
+            if manifest.get("engine_version") != EXPERIMENT_ENGINE_VERSION:
+                raise ValueError("experiment engine version is not supported")
+            if manifest.get("definition_hash") != _definition_hash(definition):
+                raise ValueError("experiment definition hash does not match")
+            analyses = definition["waveform_analyses"]
+            derived = definition["derived_parameters"]
+            parameter_order, derived_order, combinations, units = _prepare_experiment(
+                str(definition["netlist_template"]),
+                definition["parameters"],
+                analyses,
+                derived,
+            )
+            checkpoints = self._load_checkpoints(experiment_dir)
+            if any(index < 0 or index >= len(combinations) for index in checkpoints):
+                raise ValueError("point checkpoint index is outside the experiment")
+            if any(
+                point.get("parameters") != combinations[index]
+                for index, point in checkpoints.items()
+            ):
+                raise ValueError("point checkpoint parameters do not match the experiment")
+            self._persist_progress(
+                experiment_id,
+                list(checkpoints.values()),
+                len(combinations),
+                0,
+                "running",
+            )
+            pending = [index for index in range(len(combinations)) if index not in checkpoints]
+            active: dict[Future[ExperimentPointResult], tuple[int, Path]] = {}
+            next_pending = 0
+            concurrency = int(definition["max_concurrency"])
+            while next_pending < len(pending) or active:
+                while (
+                    not event.is_set()
+                    and not self._stopping.is_set()
+                    and len(active) < concurrency
+                    and next_pending < len(pending)
+                ):
+                    index = pending[next_pending]
+                    next_pending += 1
+                    point_root = experiment_dir / f"point-{index:04d}"
+                    attempt_dir = self._next_attempt_dir(point_root)
+                    future = self._executor.submit(
+                        _execute_experiment_point,
+                        index,
+                        combinations[index],
+                        attempt_dir,
+                        str(definition["netlist_template"]),
+                        str(definition["filename"]),
+                        bool(definition["ascii_raw"]),
+                        int(definition["timeout_seconds"]),
+                        analyses,
+                        event,
+                    )
+                    active[future] = (index, point_root)
+                self._persist_progress(
+                    experiment_id,
+                    list(checkpoints.values()),
+                    len(combinations),
+                    len(active),
+                    "running",
+                )
+                if not active:
+                    break
+                done, _ = wait(active, return_when=FIRST_COMPLETED)
+                for future in done:
+                    index, point_root = active.pop(future)
+                    try:
+                        point = future.result()
+                    except Exception as exc:
+                        point = {
+                            "index": index,
+                            "parameters": combinations[index],
+                            "run_dir": str(point_root),
+                            "simulation_status": "error",
+                            "duration_seconds": None,
+                            "measurements": {},
+                            "analyses": [],
+                            "all_passed": False,
+                            "error": str(exc),
+                        }
+                    _write_json(point_root / "point_result.json", point)
+                    checkpoints[index] = point
+
+            points = [checkpoints[index] for index in sorted(checkpoints)]
+            counts = _experiment_counts(points, len(combinations))
+            if self._stopping.is_set() and not event.is_set():
+                self._persist_progress(
+                    experiment_id,
+                    points,
+                    len(combinations),
+                    0,
+                    "queued",
+                )
+                return
+            with self._lock:
+                manifest = self._load_manifest(experiment_id)
+                cancelled = event.is_set() or manifest.get("status") in {
+                    "cancelling",
+                    "cancelled",
+                }
+                final_status = "cancelled" if cancelled else "completed"
+                all_passed = (
+                    final_status == "completed"
+                    and len(points) == len(combinations)
+                    and counts["passed_points"] == len(combinations)
+                )
+                result: ExperimentResult = {
+                    "experiment_id": experiment_id,
+                    "experiment_dir": str(experiment_dir),
+                    "manifest": str(experiment_dir / "experiment_manifest.json"),
+                    "results_json": str(experiment_dir / "results.json"),
+                    "results_csv": str(experiment_dir / "results.csv"),
+                    "status": final_status,
+                    "parameter_order": parameter_order,
+                    "derived_parameter_order": derived_order,
+                    "parameter_units": units,
+                    "point_count": len(combinations),
+                    "completed_points": counts["completed_points"],
+                    "error_points": counts["error_points"],
+                    "passed_points": counts["passed_points"],
+                    "failed_points": counts["failed_points"],
+                    "all_passed": all_passed,
+                    "points": points,
+                }
+                _write_experiment_csv(
+                    experiment_dir / "results.csv",
+                    [*parameter_order, *derived_order],
+                    points,
+                )
+                _write_json(experiment_dir / "results.json", result)
+                manifest.update(
+                    status=final_status,
+                    running_points=0,
+                    all_passed=all_passed,
+                    finished_at=datetime.now().astimezone().isoformat(),
+                    artifacts=["results.json", "results.csv"],
+                    **counts,
+                )
+                self._save_manifest(manifest)
+        except Exception as exc:
+            try:
+                with self._lock:
+                    manifest = self._load_manifest(experiment_id)
+                    manifest.update(
+                        status="failed",
+                        running_points=0,
+                        all_passed=False,
+                        error=str(exc),
+                        finished_at=datetime.now().astimezone().isoformat(),
+                    )
+                    self._save_manifest(manifest)
+            except Exception:
+                pass
+
+    def wait(self, experiment_id: str, timeout: float = 10.0) -> ExperimentJobSnapshot:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            snapshot = self.snapshot(experiment_id)
+            if snapshot["status"] in {"completed", "cancelled", "failed"}:
+                return snapshot
+            time.sleep(0.01)
+        raise TimeoutError(f"experiment did not finish within {timeout} seconds")
+
+    def shutdown(self) -> None:
+        self._stopping.set()
+        self._queue.put(None)
+        self._coordinator.join()
+        self._executor.shutdown(wait=True)
 
 
 # --- tools --------------------------------------------------------------
@@ -925,104 +1579,23 @@ def run_experiment(
     }
     _write_json(manifest_path, manifest)
 
-    points: list[ExperimentPointResult] = []
-    for index, combination in enumerate(combinations):
-        point_dir = experiment_dir / f"point-{index:04d}"
-        point: ExperimentPointResult = {
-            "index": index,
-            "parameters": combination,
-            "run_dir": str(point_dir),
-            "simulation_status": "error",
-            "duration_seconds": None,
-            "measurements": {},
-            "analyses": [],
-            "all_passed": False,
-            "error": None,
-        }
-        rendered = _render_experiment_netlist(netlist_template, combination)
-        try:
-            output_dir = _run_netlist_text(
-                rendered,
-                normalized_filename,
-                ascii_raw,
-                timeout_seconds,
-                point_dir,
-            )
-            summary = _summarize_run(output_dir)
-        except (FileNotFoundError, RuntimeError) as exc:
-            point["error"] = str(exc)
-            points.append(point)
-            continue
-
-        point["simulation_status"] = str(summary.get("status", "completed"))
-        duration = summary.get("duration_seconds")
-        point["duration_seconds"] = (
-            float(duration) if isinstance(duration, (int, float)) else None
+    points = [
+        _execute_experiment_point(
+            index,
+            combination,
+            experiment_dir / f"point-{index:04d}",
+            netlist_template,
+            normalized_filename,
+            ascii_raw,
+            timeout_seconds,
+            analyses,
         )
-        measurements = summary.get("measurements", {})
-        if isinstance(measurements, dict):
-            point["measurements"] = {
-                str(name): float(value) for name, value in measurements.items()
-            }
-
-        for analysis in analyses:
-            analysis_name = analysis["name"]
-            options = {
-                name: analysis[name]
-                for name in (
-                    "axis_variable",
-                    "secondary_variable",
-                    "signal_unit",
-                    "axis_unit",
-                    "raw_filename",
-                )
-                if name in analysis
-            }
-            try:
-                analysis_result = analyze_waveform(
-                    str(output_dir),
-                    analysis["variable"],
-                    analysis["requirements"],
-                    **options,
-                )
-            except (FileNotFoundError, IndexError, KeyError, ValueError) as exc:
-                point["analyses"].append(
-                    {
-                        "name": analysis_name,
-                        "status": "error",
-                        "error": str(exc),
-                        "analysis": None,
-                    }
-                )
-                if point["error"] is None:
-                    point["error"] = f"analysis {analysis_name}: {exc}"
-                continue
-            point["analyses"].append(
-                {
-                    "name": analysis_name,
-                    "status": "completed",
-                    "error": None,
-                    "analysis": analysis_result,
-                }
-            )
-
-        point["all_passed"] = point["simulation_status"] == "completed" and all(
-            result["status"] == "completed"
-            and result["analysis"] is not None
-            and result["analysis"]["all_passed"]
-            for result in point["analyses"]
-        )
-        points.append(point)
-
-    completed_points = sum(
-        point["simulation_status"] == "completed" for point in points
-    )
-    error_points = sum(
-        point["simulation_status"] != "completed"
-        or any(analysis["status"] == "error" for analysis in point["analyses"])
-        for point in points
-    )
-    passed_points = sum(point["all_passed"] for point in points)
+        for index, combination in enumerate(combinations)
+    ]
+    counts = _experiment_counts(points, len(combinations))
+    completed_points = counts["completed_points"]
+    error_points = counts["error_points"]
+    passed_points = counts["passed_points"]
     result: ExperimentResult = {
         "experiment_id": experiment_id,
         "experiment_dir": str(experiment_dir),
@@ -1074,6 +1647,63 @@ def run_experiment(
     return result
 
 
+_experiment_manager: ExperimentJobManager | None = None
+_experiment_manager_lock = threading.Lock()
+
+
+def _get_experiment_manager() -> ExperimentJobManager:
+    global _experiment_manager
+    with _experiment_manager_lock:
+        if _experiment_manager is not None and _experiment_manager.runs_dir != RUNS_DIR:
+            _experiment_manager.shutdown()
+            _experiment_manager = None
+        if _experiment_manager is None:
+            _experiment_manager = ExperimentJobManager(RUNS_DIR)
+        return _experiment_manager
+
+
+@mcp.tool()
+def define_experiment(
+    netlist_template: str,
+    parameters: list[ExperimentParameter],
+    waveform_analyses: list[ExperimentWaveformAnalysis] | None = None,
+    filename: str = "circuit.cir",
+    ascii_raw: bool = False,
+    timeout_seconds: int = 120,
+    derived_parameters: list[ExperimentDerivedParameter] | None = None,
+    max_concurrency: int = 2,
+) -> ExperimentJobSnapshot:
+    """Validate and persist an experiment definition without starting it."""
+    return _get_experiment_manager().define(
+        netlist_template,
+        parameters,
+        waveform_analyses,
+        filename,
+        ascii_raw,
+        timeout_seconds,
+        derived_parameters,
+        max_concurrency,
+    )
+
+
+@mcp.tool()
+def start_experiment(experiment_id: str) -> ExperimentJobSnapshot:
+    """Queue a defined experiment; repeated calls are idempotent."""
+    return _get_experiment_manager().start(experiment_id)
+
+
+@mcp.tool()
+def get_experiment(experiment_id: str) -> ExperimentJobSnapshot:
+    """Return durable progress and artifact paths for an experiment."""
+    return _get_experiment_manager().snapshot(experiment_id)
+
+
+@mcp.tool()
+def cancel_experiment(experiment_id: str) -> ExperimentJobSnapshot:
+    """Request cooperative cancellation without scheduling additional points."""
+    return _get_experiment_manager().cancel(experiment_id)
+
+
 @mcp.tool()
 def list_runs(limit: int = 20) -> list[dict[str, object]]:
     """List recent runs (newest first) with status, measurements, and artifacts."""
@@ -1103,4 +1733,8 @@ def list_examples() -> list[dict[str, str]]:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    try:
+        mcp.run()
+    finally:
+        if _experiment_manager is not None:
+            _experiment_manager.shutdown()

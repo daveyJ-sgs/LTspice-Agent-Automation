@@ -287,8 +287,9 @@ and authorization.
 `mcp_server.py` exposes the same automation surface as native tools over the
 Model Context Protocol, in-process (no REST server needed): `run_netlist`,
 `run_netlist_file`, `get_measurements`, `get_waveform`, `export_waveform_csv`,
-`analyze_waveform`, `run_parameter_sweep`, `run_experiment`, `list_runs`,
-`build_dashboard`, and `list_examples`.
+`analyze_waveform`, `run_parameter_sweep`, `run_experiment`,
+`define_experiment`, `start_experiment`, `get_experiment`,
+`cancel_experiment`, `list_runs`, `build_dashboard`, and `list_examples`.
 
 It depends on the `mcp` package. Homebrew/system Python is externally
 managed, so install it into a local virtualenv:
@@ -363,8 +364,38 @@ and parameters that cannot affect the netlist are rejected before LTspice runs.
 Returned point parameters and CSV columns contain resolved derived strings in
 their original declaration order.
 
-`run_experiment` validates the complete definition before running, executes
-sequentially, and caps the Cartesian product at 1,000 points. Requirements are
+### Run a durable experiment job
+
+The Phase 2B lifecycle keeps definition and execution separate. First call
+`define_experiment` with the same definition accepted by `run_experiment`, plus
+an optional `max_concurrency` from 1 through 4. The default is 2. Definition
+validates and persists the experiment but does not launch LTspice. Then call
+`start_experiment` with the returned `experiment_id`, and poll
+`get_experiment` for `finished_points`, `pending_points`, `running_points`, and
+the existing pass/error counts.
+
+Experiment definitions, progress, and terminal point checkpoints are stored as
+atomic UTF-8 JSON. A restarted MCP manager automatically requeues jobs that
+were queued or running, skips valid `point_result.json` checkpoints, and places
+an interrupted point's next execution in a fresh attempt directory. Final JSON
+and CSV are always assembled in Cartesian index order, regardless of point
+completion order.
+
+`cancel_experiment` is idempotent and cooperative. It immediately cancels a
+defined or queued job. For a running job it prevents new points from being
+scheduled; already-running LTspice processes are allowed to finish so behavior
+does not depend on Unix signals and remains portable to Windows. If cancellation
+arrives before waveform analysis, that analysis is skipped. The terminal job
+status is `cancelled`, and partial results remain available.
+
+The file-backed manager intentionally supports one active MCP process per
+`runs/` directory. Experiments are coordinated FIFO, while points within the
+active experiment use the declared concurrency bound. Multi-process locking is
+outside Phase 2B.
+
+`run_experiment` remains the backward-compatible synchronous path. It validates
+the complete definition before running, executes sequentially, and caps the
+Cartesian product at 1,000 points. Requirements are
 defined once and reused unchanged at every successful point. A failed
 simulation or analysis is recorded without preventing later points from
 running; a requirement miss remains a completed analysis with `all_passed`

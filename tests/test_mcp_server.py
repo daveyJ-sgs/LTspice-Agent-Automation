@@ -6,6 +6,8 @@ import csv
 import json
 import math
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -662,6 +664,32 @@ class MCPServerTests(unittest.TestCase):
                     )
         execution.assert_not_called()
 
+        with patch.object(mcp_server, "_run_netlist_text") as execution:
+            with self.assertRaisesRegex(ValueError, "parameter C is not reachable"):
+                mcp_server.run_experiment(
+                    "X={D}\n.end\n",
+                    [
+                        {"name": "R", "values": ["1k"]},
+                        {"name": "C", "values": ["1u"]},
+                    ],
+                    derived_parameters=[{"name": "D", "template": "{R}"}],
+                )
+        execution.assert_not_called()
+
+    def test_derived_values_preserve_inserted_placeholder_text(self) -> None:
+        _, derived_order, points, _ = mcp_server._prepare_experiment(
+            "X={D}\n.end\n",
+            [{"name": "R", "values": ["{LITERAL}"]}],
+            [],
+            [{"name": "D", "template": "value={R}"}],
+        )
+        self.assertEqual(derived_order, ["D"])
+        self.assertEqual(points[0]["D"], "value={LITERAL}")
+        self.assertEqual(
+            mcp_server._render_experiment_netlist("X={D}", points[0]),
+            "X=value={LITERAL}",
+        )
+
     def test_run_experiment_isolates_simulation_and_analysis_errors(self) -> None:
         def execute(
             netlist: str,
@@ -777,6 +805,7 @@ class MCPServerTests(unittest.TestCase):
         tools = asyncio.run(mcp_server.mcp.list_tools())
         tool = next(tool for tool in tools if tool.name == "run_experiment")
         parameter = tool.input_schema["$defs"]["ExperimentParameter"]
+        derived = tool.input_schema["$defs"]["ExperimentDerivedParameter"]
         analysis = tool.input_schema["$defs"]["ExperimentWaveformAnalysis"]
         requirement = tool.input_schema["$defs"]["WaveformRequirement"]
 
@@ -785,6 +814,10 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(parameter["properties"]["values"]["items"]["type"], "string")
         self.assertEqual(parameter["properties"]["unit"]["type"], "string")
         self.assertIn("derived_parameters", tool.input_schema["properties"])
+        self.assertEqual(derived["required"], ["name", "template"])
+        self.assertEqual(derived["properties"]["name"]["type"], "string")
+        self.assertEqual(derived["properties"]["template"]["type"], "string")
+        self.assertEqual(derived["properties"]["unit"]["type"], "string")
         self.assertIn("requirements", analysis["properties"])
         self.assertEqual(
             requirement["properties"]["maximum_harmonic"]["type"],
@@ -822,6 +855,523 @@ class MCPServerTests(unittest.TestCase):
             "2*1k",
         )
         self.assertTrue(result.structured_content["all_passed"])
+
+    def test_experiment_job_bounds_concurrency_and_sorts_results(self) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=3)
+        lock = threading.Lock()
+        active = 0
+        maximum_active = 0
+        completion_order: list[int] = []
+
+        def execute_point(
+            index: int,
+            combination: dict[str, str],
+            point_dir: Path,
+            *args: object,
+        ) -> dict[str, object]:
+            nonlocal active, maximum_active
+            with lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+            try:
+                time.sleep(0.01 * (4 - index))
+                point_dir.mkdir(parents=True)
+                completion_order.append(index)
+                return {
+                    "index": index,
+                    "parameters": combination,
+                    "run_dir": str(point_dir),
+                    "simulation_status": "completed",
+                    "duration_seconds": 0.01,
+                    "measurements": {"index": float(index)},
+                    "analyses": [],
+                    "all_passed": True,
+                    "error": None,
+                }
+            finally:
+                with lock:
+                    active -= 1
+
+        try:
+            with patch.object(mcp_server, "_execute_experiment_point", side_effect=execute_point):
+                defined = manager.define(
+                    "R1 in out {R}\n.end\n",
+                    [{"name": "R", "values": ["1k", "2k", "3k", "4k"]}],
+                    max_concurrency=2,
+                )
+                self.assertEqual(defined["status"], "defined")
+                manager.start(defined["experiment_id"])
+                manager.start(defined["experiment_id"])
+                finished = manager.wait(defined["experiment_id"])
+        finally:
+            manager.shutdown()
+
+        self.assertEqual(finished["status"], "completed")
+        self.assertEqual(finished["finished_points"], 4)
+        self.assertEqual(maximum_active, 2)
+        self.assertNotEqual(completion_order, [0, 1, 2, 3])
+        results = json.loads(Path(finished["results_json"]).read_text(encoding="utf-8"))
+        self.assertEqual([point["index"] for point in results["points"]], [0, 1, 2, 3])
+        self.assertEqual(
+            len(list(Path(finished["experiment_dir"]).glob("point-*/point_result.json"))),
+            4,
+        )
+
+    def test_experiment_job_cancellation_stops_new_points(self) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=2)
+        started = threading.Event()
+        release = threading.Event()
+        calls: list[int] = []
+        lock = threading.Lock()
+
+        def execute_point(
+            index: int,
+            combination: dict[str, str],
+            point_dir: Path,
+            *args: object,
+        ) -> dict[str, object]:
+            with lock:
+                calls.append(index)
+                if len(calls) == 2:
+                    started.set()
+            release.wait(2)
+            return {
+                "index": index,
+                "parameters": combination,
+                "run_dir": str(point_dir),
+                "simulation_status": "completed",
+                "duration_seconds": 0.01,
+                "measurements": {},
+                "analyses": [],
+                "all_passed": True,
+                "error": None,
+            }
+
+        try:
+            with patch.object(mcp_server, "_execute_experiment_point", side_effect=execute_point):
+                defined = manager.define(
+                    "R1 in out {R}\n.end\n",
+                    [{"name": "R", "values": [str(index) for index in range(6)]}],
+                    max_concurrency=2,
+                )
+                manager.start(defined["experiment_id"])
+                self.assertTrue(started.wait(2))
+                for _ in range(100):
+                    if manager.snapshot(defined["experiment_id"])["running_points"] == 2:
+                        break
+                    time.sleep(0.005)
+                cancelling = manager.cancel(defined["experiment_id"])
+                self.assertEqual(cancelling["status"], "cancelling")
+                self.assertEqual(cancelling["running_points"], 2)
+                self.assertEqual(cancelling["pending_points"], 4)
+                release.set()
+                finished = manager.wait(defined["experiment_id"])
+                manager.cancel(defined["experiment_id"])
+        finally:
+            release.set()
+            manager.shutdown()
+
+        self.assertEqual(finished["status"], "cancelled")
+        self.assertEqual(finished["finished_points"], 2)
+        self.assertEqual(finished["pending_points"], 4)
+        self.assertEqual(sorted(calls), [0, 1])
+
+    def test_cancel_after_queue_claim_cannot_be_lost(self) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        claimed = threading.Event()
+        release = threading.Event()
+        original_run_job = manager._run_job
+
+        def paused_run_job(experiment_id: str) -> None:
+            claimed.set()
+            release.wait(2)
+            original_run_job(experiment_id)
+
+        try:
+            with (
+                patch.object(manager, "_run_job", side_effect=paused_run_job),
+                patch.object(mcp_server, "_execute_experiment_point") as execution,
+            ):
+                defined = manager.define(
+                    "R1 in out {R}\n.end\n",
+                    [{"name": "R", "values": ["1k"]}],
+                    max_concurrency=1,
+                )
+                manager.start(defined["experiment_id"])
+                self.assertTrue(claimed.wait(2))
+                cancelling = manager.cancel(defined["experiment_id"])
+                self.assertEqual(cancelling["status"], "cancelling")
+                release.set()
+                finished = manager.wait(defined["experiment_id"])
+                execution.assert_not_called()
+        finally:
+            release.set()
+            manager.shutdown()
+
+        self.assertEqual(finished["status"], "cancelled")
+        self.assertEqual(finished["finished_points"], 0)
+
+    def test_experiment_job_resumes_only_uncheckpointed_points(self) -> None:
+        first_manager = mcp_server.ExperimentJobManager(self.runs, workers=2)
+        defined = first_manager.define(
+            "R1 in out {R}\n.end\n",
+            [{"name": "R", "values": ["1k", "2k", "3k"]}],
+            max_concurrency=2,
+        )
+        first_manager.shutdown()
+        experiment_dir = Path(defined["experiment_dir"])
+        completed_point = {
+            "index": 0,
+            "parameters": {"R": "1k"},
+            "run_dir": str(experiment_dir / "point-0000" / "attempt-0000"),
+            "simulation_status": "completed",
+            "duration_seconds": 0.01,
+            "measurements": {},
+            "analyses": [],
+            "all_passed": True,
+            "error": None,
+        }
+        point_zero = experiment_dir / "point-0000"
+        point_zero.mkdir()
+        mcp_server._write_json(point_zero / "point_result.json", completed_point)
+        interrupted_attempt = experiment_dir / "point-0001" / "attempt-0000"
+        interrupted_attempt.mkdir(parents=True)
+        manifest_path = experiment_dir / "experiment_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["status"] = "running"
+        mcp_server._write_json(manifest_path, manifest)
+        calls: list[tuple[int, Path]] = []
+
+        def execute_point(
+            index: int,
+            combination: dict[str, str],
+            point_dir: Path,
+            *args: object,
+        ) -> dict[str, object]:
+            calls.append((index, point_dir))
+            return {
+                "index": index,
+                "parameters": combination,
+                "run_dir": str(point_dir),
+                "simulation_status": "completed",
+                "duration_seconds": 0.01,
+                "measurements": {},
+                "analyses": [],
+                "all_passed": True,
+                "error": None,
+            }
+
+        with patch.object(mcp_server, "_execute_experiment_point", side_effect=execute_point):
+            resumed_manager = mcp_server.ExperimentJobManager(self.runs, workers=2)
+            try:
+                finished = resumed_manager.wait(defined["experiment_id"])
+            finally:
+                resumed_manager.shutdown()
+
+        self.assertEqual(finished["status"], "completed")
+        self.assertEqual([index for index, _ in calls], [1, 2])
+        self.assertEqual(calls[0][1].name, "attempt-0001")
+
+    def test_active_job_shutdown_leaves_unfinished_work_resumable(self) -> None:
+        first_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_point(
+            index: int,
+            combination: dict[str, str],
+            point_dir: Path,
+            *args: object,
+        ) -> dict[str, object]:
+            started.set()
+            release.wait(2)
+            return {
+                "index": index,
+                "parameters": combination,
+                "run_dir": str(point_dir),
+                "simulation_status": "completed",
+                "duration_seconds": 0.01,
+                "measurements": {},
+                "analyses": [],
+                "all_passed": True,
+                "error": None,
+            }
+
+        with patch.object(mcp_server, "_execute_experiment_point", side_effect=slow_point):
+            defined = first_manager.define(
+                "R1 in out {R}\n.end\n",
+                [{"name": "R", "values": ["1k", "2k", "3k"]}],
+                max_concurrency=1,
+            )
+            first_manager.start(defined["experiment_id"])
+            self.assertTrue(started.wait(2))
+            shutdown_thread = threading.Thread(target=first_manager.shutdown)
+            shutdown_thread.start()
+            release.set()
+            shutdown_thread.join(2)
+            self.assertFalse(shutdown_thread.is_alive())
+            self.assertFalse(first_manager._coordinator.is_alive())
+
+        paused = first_manager.snapshot(defined["experiment_id"])
+        self.assertEqual(paused["status"], "queued")
+        self.assertEqual(paused["finished_points"], 1)
+        resumed_calls: list[int] = []
+
+        def resumed_point(
+            index: int,
+            combination: dict[str, str],
+            point_dir: Path,
+            *args: object,
+        ) -> dict[str, object]:
+            resumed_calls.append(index)
+            return {
+                "index": index,
+                "parameters": combination,
+                "run_dir": str(point_dir),
+                "simulation_status": "completed",
+                "duration_seconds": 0.01,
+                "measurements": {},
+                "analyses": [],
+                "all_passed": True,
+                "error": None,
+            }
+
+        with patch.object(mcp_server, "_execute_experiment_point", side_effect=resumed_point):
+            resumed_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+            try:
+                finished = resumed_manager.wait(defined["experiment_id"])
+            finally:
+                resumed_manager.shutdown()
+
+        self.assertEqual(finished["status"], "completed")
+        self.assertEqual(resumed_calls, [1, 2])
+
+    def test_shutdown_cannot_race_with_point_submission(self) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        submitting = threading.Event()
+        release = threading.Event()
+        original_submit = manager._executor.submit
+
+        def blocked_submit(*args: object, **kwargs: object):
+            submitting.set()
+            release.wait(2)
+            return original_submit(*args, **kwargs)
+
+        def execute_point(
+            index: int,
+            combination: dict[str, str],
+            point_dir: Path,
+            *args: object,
+        ) -> dict[str, object]:
+            return {
+                "index": index,
+                "parameters": combination,
+                "run_dir": str(point_dir),
+                "simulation_status": "completed",
+                "duration_seconds": 0.01,
+                "measurements": {},
+                "analyses": [],
+                "all_passed": True,
+                "error": None,
+            }
+
+        with (
+            patch.object(manager._executor, "submit", side_effect=blocked_submit),
+            patch.object(mcp_server, "_execute_experiment_point", side_effect=execute_point),
+        ):
+            defined = manager.define(
+                "R1 in out {R}\n.end\n",
+                [{"name": "R", "values": ["1k", "2k"]}],
+                max_concurrency=1,
+            )
+            manager.start(defined["experiment_id"])
+            self.assertTrue(submitting.wait(2))
+            shutdown_thread = threading.Thread(target=manager.shutdown)
+            shutdown_thread.start()
+            release.set()
+            shutdown_thread.join(2)
+
+        self.assertFalse(shutdown_thread.is_alive())
+        paused = manager.snapshot(defined["experiment_id"])
+        self.assertEqual(paused["status"], "queued")
+        self.assertEqual(paused["finished_points"], 1)
+        self.assertIsNone(paused["error"])
+
+    def test_experiment_job_rejects_a_corrupt_checkpoint(self) -> None:
+        first_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        defined = first_manager.define(
+            "R1 in out {R}\n.end\n",
+            [{"name": "R", "values": ["1k"]}],
+            max_concurrency=1,
+        )
+        first_manager.shutdown()
+        experiment_dir = Path(defined["experiment_dir"])
+        point_dir = experiment_dir / "point-0000"
+        point_dir.mkdir()
+        (point_dir / "point_result.json").write_text("not json", encoding="utf-8")
+        manifest_path = experiment_dir / "experiment_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["status"] = "running"
+        mcp_server._write_json(manifest_path, manifest)
+
+        resumed_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        try:
+            finished = resumed_manager.wait(defined["experiment_id"])
+        finally:
+            resumed_manager.shutdown()
+
+        self.assertEqual(finished["status"], "failed")
+        self.assertIn("invalid point checkpoint", finished["error"])
+
+    def test_experiment_job_rejects_an_unsupported_engine_version(self) -> None:
+        first_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        defined = first_manager.define(
+            "R1 in out {R}\n.end\n",
+            [{"name": "R", "values": ["1k"]}],
+            max_concurrency=1,
+        )
+        first_manager.shutdown()
+        manifest_path = Path(defined["manifest"])
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest.update(status="running", engine_version=999)
+        mcp_server._write_json(manifest_path, manifest)
+
+        resumed_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        try:
+            finished = resumed_manager.wait(defined["experiment_id"])
+        finally:
+            resumed_manager.shutdown()
+
+        self.assertEqual(finished["status"], "failed")
+        self.assertIn("engine version", finished["error"])
+
+    def test_coordinator_continues_after_one_job_crashes(self) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        first = manager.define(
+            "R1 in out {R}\n.end\n",
+            [{"name": "R", "values": ["1k"]}],
+            max_concurrency=1,
+        )
+        second = manager.define(
+            "R1 in out {R}\n.end\n",
+            [{"name": "R", "values": ["2k"]}],
+            max_concurrency=1,
+        )
+        original_run_job = manager._run_job
+
+        def run_job(experiment_id: str) -> None:
+            if experiment_id == first["experiment_id"]:
+                raise RuntimeError("coordinator fixture failure")
+            original_run_job(experiment_id)
+
+        def execute_point(
+            index: int,
+            combination: dict[str, str],
+            point_dir: Path,
+            *args: object,
+        ) -> dict[str, object]:
+            return {
+                "index": index,
+                "parameters": combination,
+                "run_dir": str(point_dir),
+                "simulation_status": "completed",
+                "duration_seconds": 0.01,
+                "measurements": {},
+                "analyses": [],
+                "all_passed": True,
+                "error": None,
+            }
+
+        try:
+            with (
+                patch.object(manager, "_run_job", side_effect=run_job),
+                patch.object(mcp_server, "_execute_experiment_point", side_effect=execute_point),
+            ):
+                manager.start(first["experiment_id"])
+                manager.start(second["experiment_id"])
+                failed = manager.wait(first["experiment_id"])
+                completed = manager.wait(second["experiment_id"])
+        finally:
+            manager.shutdown()
+
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("fixture failure", failed["error"])
+        self.assertEqual(completed["status"], "completed")
+
+    def test_cancel_defined_experiment_is_idempotent(self) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        try:
+            defined = manager.define(
+                "R1 in out {R}\n.end\n",
+                [{"name": "R", "values": ["1k"]}],
+                max_concurrency=1,
+            )
+            cancelled = manager.cancel(defined["experiment_id"])
+            cancelled_again = manager.cancel(defined["experiment_id"])
+        finally:
+            manager.shutdown()
+
+        self.assertEqual(cancelled["status"], "cancelled")
+        self.assertEqual(cancelled_again["status"], "cancelled")
+        self.assertEqual(cancelled["finished_points"], 0)
+
+    def test_experiment_lifecycle_tools_work_through_mcp_protocol(self) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=2)
+
+        def execute_point(
+            index: int,
+            combination: dict[str, str],
+            point_dir: Path,
+            *args: object,
+        ) -> dict[str, object]:
+            return {
+                "index": index,
+                "parameters": combination,
+                "run_dir": str(point_dir),
+                "simulation_status": "completed",
+                "duration_seconds": 0.01,
+                "measurements": {},
+                "analyses": [],
+                "all_passed": True,
+                "error": None,
+            }
+
+        arguments = {
+            "netlist_template": "R1 in out {R}\n.end\n",
+            "parameters": [{"name": "R", "values": ["1k"]}],
+        }
+        try:
+            with (
+                patch.object(mcp_server, "_get_experiment_manager", return_value=manager),
+                patch.object(mcp_server, "_execute_experiment_point", side_effect=execute_point),
+            ):
+                defined = asyncio.run(
+                    mcp_server.mcp.call_tool("define_experiment", arguments)
+                )
+                experiment_id = defined.structured_content["experiment_id"]
+                started = asyncio.run(
+                    mcp_server.mcp.call_tool(
+                        "start_experiment", {"experiment_id": experiment_id}
+                    )
+                )
+                self.assertFalse(started.is_error)
+                manager.wait(experiment_id)
+                fetched = asyncio.run(
+                    mcp_server.mcp.call_tool(
+                        "get_experiment", {"experiment_id": experiment_id}
+                    )
+                )
+        finally:
+            manager.shutdown()
+
+        self.assertFalse(defined.is_error)
+        self.assertEqual(fetched.structured_content["status"], "completed")
+        tools = asyncio.run(mcp_server.mcp.list_tools())
+        names = {tool.name for tool in tools}
+        self.assertTrue(
+            {"define_experiment", "start_experiment", "get_experiment", "cancel_experiment"}
+            <= names
+        )
 
     def test_history_dashboard_and_examples(self) -> None:
         (self.examples / "a.cir").write_text("* AC example\n.end\n")
