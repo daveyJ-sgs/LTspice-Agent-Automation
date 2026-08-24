@@ -30,6 +30,7 @@ from mcp.server.mcpserver import MCPServer
 
 import experiment_engine
 import experiment_index
+import experiment_report
 import frequency_domain_metrics
 import ltspice_wrapper as wrapper
 import raw_parser
@@ -54,6 +55,7 @@ ExperimentJobSnapshot = experiment_engine.ExperimentJobSnapshot
 ExperimentComparisonResult = experiment_engine.ExperimentComparisonResult
 ExperimentIndexBuildResult = experiment_index.ExperimentIndexBuildResult
 ExperimentQueryResult = experiment_index.ExperimentQueryResult
+ExperimentReportResult = experiment_report.ExperimentReportResult
 
 ExperimentIndexStatus = Literal[
     "defined",
@@ -986,6 +988,12 @@ def query_experiments(
         all_passed=all_passed,
         parameters=parameters,
     )
+
+
+@mcp.tool()
+def build_experiment_report(experiment_id: str) -> ExperimentReportResult:
+    """Build a portable offline HTML report from completed experiment artifacts."""
+    return experiment_report.build_experiment_report(RUNS_DIR, experiment_id)
 
 
 @mcp.tool()

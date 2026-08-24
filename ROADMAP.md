@@ -168,11 +168,13 @@ Generalize single-value parameter substitution into durable experiments with:
 - Relative artifact paths, isolated diagnostics, and atomic replacement
 - MCP rebuild/query tools with cross-platform regression coverage
 
-###### Phase 2C-C2: Human experiment reports — planned
+###### Phase 2C-C2: Human experiment reports — complete
 
-- Portable offline HTML experiment reports
-- Interactive waveform overlays and structured requirement summaries
-- Display-only waveform downsampling with full-resolution evidence links
+- Portable offline HTML reports generated from completed experiment artifacts
+- Visible server-rendered SVG overlays with interactive trace inspection
+- Structured point, measurement, requirement, and error summaries
+- Display-only endpoint-preserving downsampling with full-resolution evidence links
+- Schema-v1/v2, independent/native, macOS/Windows, and confinement coverage
 
 ###### Phase 2C-C3: Comparison visualization and unified dashboard — planned
 

@@ -314,7 +314,8 @@ Model Context Protocol, in-process (no REST server needed): `run_netlist`,
 `analyze_waveform`, `run_parameter_sweep`, `run_experiment`,
 `define_experiment`, `start_experiment`, `get_experiment`,
 `cancel_experiment`, `compare_experiments`, `build_experiment_index`,
-`query_experiments`, `list_runs`, `build_dashboard`, and `list_examples`.
+`query_experiments`, `build_experiment_report`, `list_runs`, `build_dashboard`,
+and `list_examples`.
 
 It depends on the `mcp` package. Homebrew/system Python is externally
 managed, so install it into a local virtualenv:
@@ -480,6 +481,27 @@ values remain case-sensitive LTspice text, so `1k` and `1000` are distinct.
 Query responses include declared parameter metadata plus the available
 measurement names and requirement metrics. Full point data remains in the
 linked structured artifacts.
+
+### Build a portable experiment report
+
+Call `build_experiment_report` with a completed experiment ID to write a
+self-contained `report.html` beside that experiment's structured artifacts.
+The report opens directly from disk without a web server or CDN. It includes
+the experiment summary, point parameters and measurements, requirement
+outcomes, and an interactive SVG overlay for each completed waveform analysis.
+
+Waveforms are parsed from the existing RAW evidence without rerunning LTspice.
+Each trace is sliced to its validated native or independent step before a
+bounded, endpoint-preserving display sample is embedded in the report. The
+requirement engine's full-resolution result remains authoritative, and the
+report links relatively to `results.json`, `results.csv`, the manifest, and
+the original RAW file. Relative links and Windows/POSIX path normalization let
+the complete experiment directory move between machines.
+
+The builder rejects incomplete or inconsistent experiments, missing or
+escaped RAW artifacts, invalid step mappings, non-finite plot data, and
+oversized display payloads before replacing an existing report. User-provided
+labels and values are escaped in both HTML and embedded JSON.
 
 ### Reuse verified simulation artifacts
 

@@ -1624,6 +1624,38 @@ class MCPServerTests(unittest.TestCase):
         )
         self.assertIn("completed", query_schema["status"]["anyOf"][0]["enum"])
 
+    def test_experiment_report_works_through_mcp_protocol(self) -> None:
+        expected = {
+            "experiment_id": "mcp-experiment-20260824-180000-000000-a1b2c3d4",
+            "report_html": str(self.runs / "report.html"),
+            "plot_count": 1,
+            "trace_count": 2,
+            "source_points": 1202,
+            "displayed_points": 800,
+        }
+        with patch.object(
+            mcp_server.experiment_report,
+            "build_experiment_report",
+            return_value=expected,
+        ) as build:
+            result = asyncio.run(
+                mcp_server.mcp.call_tool(
+                    "build_experiment_report",
+                    {"experiment_id": expected["experiment_id"]},
+                )
+            )
+
+        self.assertFalse(result.is_error)
+        self.assertEqual(result.structured_content, expected)
+        build.assert_called_once_with(self.runs, expected["experiment_id"])
+        tools = asyncio.run(mcp_server.mcp.list_tools())
+        tool = next(tool for tool in tools if tool.name == "build_experiment_report")
+        self.assertEqual(
+            tool.input_schema["required"],
+            ["experiment_id"],
+        )
+        self.assertIn("report_html", tool.output_schema["properties"])
+
     def test_experiment_job_bounds_concurrency_and_sorts_results(self) -> None:
         manager = mcp_server.ExperimentJobManager(self.runs, workers=3)
         lock = threading.Lock()
