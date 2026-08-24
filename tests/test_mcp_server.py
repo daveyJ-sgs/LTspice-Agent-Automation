@@ -1579,6 +1579,51 @@ class MCPServerTests(unittest.TestCase):
         tool = next(tool for tool in tools if tool.name == "compare_experiments")
         self.assertIn("requirement_regressions", tool.output_schema["properties"])
 
+    def test_experiment_index_tools_work_through_mcp_protocol(self) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        try:
+            defined = manager.define(
+                "R1 in out {R}\n.end\n",
+                [{"name": "R", "values": ["1k"]}],
+                max_concurrency=1,
+            )
+        finally:
+            manager.shutdown()
+
+        built = asyncio.run(
+            mcp_server.mcp.call_tool("build_experiment_index", {})
+        )
+        queried = asyncio.run(
+            mcp_server.mcp.call_tool(
+                "query_experiments",
+                {"status": "defined", "parameters": {"R": "1k"}},
+            )
+        )
+
+        self.assertFalse(built.is_error)
+        self.assertEqual(built.structured_content["indexed_experiments"], 1)
+        self.assertFalse(queried.is_error)
+        self.assertEqual(queried.structured_content["total"], 0)
+        unfiltered = mcp_server.query_experiments(status="defined")
+        self.assertEqual(unfiltered["total"], 1)
+        self.assertEqual(
+            unfiltered["experiments"][0]["experiment_id"],
+            defined["experiment_id"],
+        )
+
+        tools = asyncio.run(mcp_server.mcp.list_tools())
+        by_name = {tool.name: tool for tool in tools}
+        self.assertIn("build_experiment_index", by_name)
+        query_schema = by_name["query_experiments"].input_schema["properties"]
+        self.assertEqual(query_schema["limit"]["default"], 50)
+        self.assertEqual(query_schema["offset"]["default"], 0)
+        self.assertIn("parameters", query_schema)
+        self.assertEqual(
+            query_schema["execution_mode"]["anyOf"][0]["enum"],
+            ["independent", "native"],
+        )
+        self.assertIn("completed", query_schema["status"]["anyOf"][0]["enum"])
+
     def test_experiment_job_bounds_concurrency_and_sorts_results(self) -> None:
         manager = mcp_server.ExperimentJobManager(self.runs, workers=3)
         lock = threading.Lock()

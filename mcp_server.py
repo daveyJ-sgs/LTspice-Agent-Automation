@@ -29,6 +29,7 @@ from typing import Literal
 from mcp.server.mcpserver import MCPServer
 
 import experiment_engine
+import experiment_index
 import frequency_domain_metrics
 import ltspice_wrapper as wrapper
 import raw_parser
@@ -51,6 +52,19 @@ ExperimentPointResult = experiment_engine.ExperimentPointResult
 ExperimentResult = experiment_engine.ExperimentResult
 ExperimentJobSnapshot = experiment_engine.ExperimentJobSnapshot
 ExperimentComparisonResult = experiment_engine.ExperimentComparisonResult
+ExperimentIndexBuildResult = experiment_index.ExperimentIndexBuildResult
+ExperimentQueryResult = experiment_index.ExperimentQueryResult
+
+ExperimentIndexStatus = Literal[
+    "defined",
+    "queued",
+    "running",
+    "cancelling",
+    "cancelled",
+    "completed",
+    "failed",
+]
+ExperimentExecutionMode = Literal["independent", "native"]
 
 _write_json = experiment_engine._write_json
 _prepare_experiment = experiment_engine._prepare_experiment
@@ -944,6 +958,33 @@ def compare_experiments(
         RUNS_DIR,
         baseline_experiment_id,
         candidate_experiment_id,
+    )
+
+
+@mcp.tool()
+def build_experiment_index() -> ExperimentIndexBuildResult:
+    """Atomically rebuild the derived SQLite index from experiment artifacts."""
+    return experiment_index.build_experiment_index(RUNS_DIR)
+
+
+@mcp.tool()
+def query_experiments(
+    limit: int = 50,
+    offset: int = 0,
+    status: ExperimentIndexStatus | None = None,
+    execution_mode: ExperimentExecutionMode | None = None,
+    all_passed: bool | None = None,
+    parameters: dict[str, str] | None = None,
+) -> ExperimentQueryResult:
+    """Query experiment summaries using exact, same-point parameter filters."""
+    return experiment_index.query_experiments(
+        RUNS_DIR,
+        limit=limit,
+        offset=offset,
+        status=status,
+        execution_mode=execution_mode,
+        all_passed=all_passed,
+        parameters=parameters,
     )
 
 

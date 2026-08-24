@@ -313,7 +313,8 @@ Model Context Protocol, in-process (no REST server needed): `run_netlist`,
 `run_netlist_file`, `get_measurements`, `get_waveform`, `export_waveform_csv`,
 `analyze_waveform`, `run_parameter_sweep`, `run_experiment`,
 `define_experiment`, `start_experiment`, `get_experiment`,
-`cancel_experiment`, `list_runs`, `build_dashboard`, and `list_examples`.
+`cancel_experiment`, `compare_experiments`, `build_experiment_index`,
+`query_experiments`, `list_runs`, `build_dashboard`, and `list_examples`.
 
 It depends on the `mcp` package. Homebrew/system Python is externally
 managed, so install it into a local virtualenv:
@@ -452,6 +453,33 @@ the same deterministic UTF-8 artifacts under
 `runs/comparisons/comparison-<id>/comparison.json` and `comparison.md`.
 Malformed, unfinished, ambiguous, or non-finite inputs are rejected before an
 output directory is created.
+
+### Build and query the experiment index
+
+Phase 2C-C1 adds a rebuildable SQLite catalog at
+`runs/experiments.sqlite3`. Call `build_experiment_index` to scan existing
+`experiment_manifest.json` and terminal `results.json` artifacts. The index
+stores experiment summaries, declared parameters, materialized point values,
+measurements, and requirement results. It never runs LTspice and is not an
+authoritative result store; deleting and rebuilding it leaves the source
+artifacts unchanged.
+
+The builder supports both synchronous schema-v1 experiments and durable
+schema-v2 jobs. Artifact paths stored in SQLite are relative to `runs/`, so a
+copied experiment tree does not retain machine-specific macOS or Windows
+paths. A malformed manifest is reported and skipped. A valid manifest with
+invalid terminal results remains discoverable with `index_state` set to
+`invalid_results`, but no untrusted point data is indexed. The complete staged
+database is integrity-checked, closed, and atomically replaces the previous
+index; a fatal build or replacement error leaves the prior database intact.
+
+`query_experiments` supports deterministic pagination and optional exact
+filters for status, execution mode, pass/fail state, and parameter values.
+Multiple parameter filters must occur together on the same materialized point;
+values remain case-sensitive LTspice text, so `1k` and `1000` are distinct.
+Query responses include declared parameter metadata plus the available
+measurement names and requirement metrics. Full point data remains in the
+linked structured artifacts.
 
 ### Reuse verified simulation artifacts
 
