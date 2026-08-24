@@ -134,9 +134,23 @@ Binary:
         self.assertEqual(choose_best(rows, -30.0), rows[1])
 
     def test_manifest_dashboard_records(self) -> None:
-        records = collect_records(Path("runs"))
-        self.assertTrue(records)
-        self.assertTrue(any(record["status"] == "completed" for record in records))
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "completed-run"
+            run_dir.mkdir()
+            (run_dir / "run_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "started_at": "2026-08-23T12:00:00+00:00",
+                        "duration_seconds": 0.1,
+                        "result_files": [],
+                    }
+                )
+            )
+            records = collect_records(Path(directory))
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["status"], "completed")
 
     @unittest.skipUnless(LTSPICE.is_file(), "LTspice integration test requires an installed simulator")
     def test_failed_run_writes_failed_manifest(self) -> None:
