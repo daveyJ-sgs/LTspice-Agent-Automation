@@ -142,10 +142,14 @@ Generalize single-value parameter substitution into durable experiments with:
 - Atomic entries, verified copied artifacts, and per-run cache provenance
 - Conservative bypass for implicit models and unresolved external inputs
 
-###### Phase 2C-B2: Native structured experiments — planned
+###### Phase 2C-B2: Native structured experiments — complete
 
-- Native LTspice stepping with deterministic point mapping
+- Opt-in synchronous native mode using one indexed LTspice stepped deck
+- Deterministic Cartesian mapping validated against exact log ordinals
+- Explicit stepped `.meas` row mapping and shared raw-vector slice validation
 - Shared stepped waveforms analyzed through the existing requirement engine
+- Native-batch duration, execution-source, cache, and mapping provenance
+- Fail-closed numeric-expression and deck eligibility checks
 
 ###### Phase 2C-B3: Durable native-batch integration — planned
 

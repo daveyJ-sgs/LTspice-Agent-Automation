@@ -479,6 +479,41 @@ and any bypass reason. Cache entries live under `runs/cache/`.
 B1 does not automatically evict entries; cache retention and cleanup policy are
 reserved for the later indexing/management work.
 
+### Run a structured experiment as one native LTspice batch
+
+Phase 2C-B2 adds an opt-in native execution mode to synchronous
+`run_experiment`. Set `execution_mode` to `"native"` to expand the same ordered
+Cartesian grid into one stepped LTspice deck instead of one process per point:
+
+```json
+{
+  "netlist_template": "V1 in 0 AC 1\nR1 in out {R}\nC1 out 0 {C}\n.ac dec 20 100 100k\n.end\n",
+  "parameters": [
+    {"name": "R", "values": ["1k", "2k"]},
+    {"name": "C", "values": ["10n", "20n"]}
+  ],
+  "execution_mode": "native"
+}
+```
+
+The engine uses one private integer `.step` and generated parameter tables, so
+the first declared parameter still changes slowest even though LTspice's nested
+`.step` ordering differs. After simulation it requires the log to report the
+exact private sequence `0..N-1`; waveform experiments must also contain exactly
+`N` raw-vector slices. Only then are stepped `.meas` rows and full-resolution
+waveform analyses attached to structured points.
+
+Native values are deliberately limited to safe numeric LTspice expressions.
+Existing `.step` directives, reserved `__mcp_` identifiers, ambiguous `.end`
+directives, unsafe value text, and path/model directive placeholders are
+rejected before an experiment directory is created. All points share the
+`native-batch` run directory and keep their own `native_step_index`; batch
+duration, cache source, key, and validated ordering are recorded once in
+`native_batch`. `reuse_cache` can be enabled independently, and a cache hit is
+subject to the same log and waveform mapping checks. Durable job support for
+native batches is Phase 2C-B3; `define_experiment` remains independent-only for
+now.
+
 `run_experiment` remains the backward-compatible synchronous path. It validates
 the complete definition before running, executes sequentially, and caps the
 Cartesian product at 1,000 points. Requirements are

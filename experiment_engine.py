@@ -103,6 +103,7 @@ class ExperimentPointResult(TypedDict):
     error: str | None
     cache_hit: NotRequired[bool]
     cache_key: NotRequired[str | None]
+    native_step_index: NotRequired[int]
 
 
 class ExperimentResult(TypedDict):
@@ -122,6 +123,8 @@ class ExperimentResult(TypedDict):
     failed_points: int
     all_passed: bool
     points: list[ExperimentPointResult]
+    execution_mode: str
+    native_batch: dict[str, object] | None
 
 
 class ExperimentJobSnapshot(TypedDict):
@@ -454,6 +457,107 @@ def _render_experiment_netlist(
         lambda match: parameters.get(match.group(1), match.group(0)),
         netlist_template,
     )
+
+
+_NATIVE_STEP_PARAMETER = "__mcp_step_index"
+_NATIVE_VALUE_PREFIX = "__mcp_value_"
+
+
+def _native_table_directive(name: str, values: list[str]) -> str:
+    entries = [f"{index},{value}" for index, value in enumerate(values)]
+    prefix = f".param {name}=table({_NATIVE_STEP_PARAMETER},"
+    lines: list[str] = []
+    current = prefix
+    for entry in entries:
+        separator = "" if current.endswith(",") else ","
+        if len(current) + len(separator) + len(entry) + 1 <= 78:
+            current += separator + entry
+            continue
+        if current == prefix or len("+ ," + entry + ")") > 78:
+            raise ValueError("native execution parameter expression is too long")
+        lines.append(current)
+        current = "+ ," + entry
+    lines.append(current + ")")
+    return "\n".join(lines)
+
+
+def _native_step_directive(point_count: int) -> str:
+    return f".step param {_NATIVE_STEP_PARAMETER} 0 {point_count - 1} 1"
+
+
+def _render_native_experiment_netlist(
+    netlist_template: str,
+    parameter_order: list[str],
+    derived_parameter_order: list[str],
+    combinations: list[dict[str, str]],
+) -> str:
+    """Render one indexed LTspice deck for an ordered Cartesian experiment."""
+    if re.search(r"(?im)^\s*\.step\b", netlist_template):
+        raise ValueError("native execution does not allow an existing .step directive")
+    if re.search(r"(?i)\b__mcp_[A-Za-z0-9_]*\b", netlist_template):
+        raise ValueError("native execution reserves the __mcp_ identifier namespace")
+
+    end_matches = list(
+        re.finditer(r"(?im)^\s*\.end\s*(?:;[^\r\n]*)?$", netlist_template)
+    )
+    if len(end_matches) != 1:
+        raise ValueError("native execution requires exactly one active .end directive")
+
+    names = [*parameter_order, *derived_parameter_order]
+    placeholder_pattern = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+    unsafe_directives = re.compile(
+        r"(?i)^\s*\.(?:include|inc|lib|model|subckt|ends|title|wave)\b"
+    )
+    declared_names = set(names)
+    for line in netlist_template.splitlines():
+        line_names = {
+            match.group(1)
+            for match in placeholder_pattern.finditer(line)
+            if match.group(1) in declared_names
+        }
+        if line_names and unsafe_directives.match(line):
+            raise ValueError(
+                "native execution only supports numeric-expression placeholders; "
+                f"unsupported directive context: {line.strip()}"
+            )
+
+    safe_expression = re.compile(r"[A-Za-z0-9_.+\-*/^() ]+")
+    for combination in combinations:
+        for name in names:
+            value = combination[name]
+            if (
+                not any(character.isdigit() for character in value)
+                or safe_expression.fullmatch(value) is None
+                or any(ord(character) < 32 or ord(character) == 127 for character in value)
+            ):
+                raise ValueError(
+                    "native execution parameter values must be safe numeric "
+                    f"expressions without commas or braces: {name}={value!r}"
+                )
+
+    generated_names = {
+        name: f"{_NATIVE_VALUE_PREFIX}{index}" for index, name in enumerate(names)
+    }
+    rendered = placeholder_pattern.sub(
+        lambda match: (
+            "{" + generated_names[match.group(1)] + "}"
+            if match.group(1) in generated_names
+            else match.group(0)
+        ),
+        netlist_template,
+    )
+    directives = [
+        _native_table_directive(
+            generated_names[name], [combination[name] for combination in combinations]
+        )
+        for name in names
+    ]
+    directives.append(_native_step_directive(len(combinations)))
+    newline = "\r\n" if "\r\n" in netlist_template else "\n"
+    insertion = ("\n".join(directives) + "\n").replace("\n", newline)
+    end_match = re.search(r"(?im)^\s*\.end\s*(?:;[^\r\n]*)?$", rendered)
+    assert end_match is not None
+    return rendered[: end_match.start()] + insertion + rendered[end_match.start() :]
 
 
 def _write_experiment_csv(
@@ -1047,11 +1151,17 @@ def run_experiment_sync(
     timeout_seconds: int = 120,
     derived_parameters: list[ExperimentDerivedParameter] | None = None,
     reuse_cache: bool = False,
+    execution_mode: str = "independent",
+    execute_native: Callable[..., tuple[list[ExperimentPointResult], dict[str, object]]] | None = None,
 ) -> ExperimentResult:
-    """Execute the backward-compatible sequential experiment path."""
+    """Execute an experiment independently or as one validated native batch."""
     normalized_filename = _netlist_filename(filename)
     _validate_timeout(timeout_seconds)
     _validate_reuse_cache(reuse_cache)
+    if execution_mode not in {"independent", "native"}:
+        raise ValueError("execution_mode must be 'independent' or 'native'")
+    if execution_mode == "native" and execute_native is None:
+        raise ValueError("native execution requires an execute_native callback")
     analyses = [] if waveform_analyses is None else waveform_analyses
     (
         parameter_order,
@@ -1061,6 +1171,14 @@ def run_experiment_sync(
     ) = _prepare_experiment(
         netlist_template, parameters, analyses, derived_parameters
     )
+    native_netlist = None
+    if execution_mode == "native":
+        native_netlist = _render_native_experiment_netlist(
+            netlist_template,
+            parameter_order,
+            derived_parameter_order,
+            combinations,
+        )
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     experiment_id = f"mcp-experiment-{stamp}"
@@ -1090,6 +1208,7 @@ def run_experiment_sync(
             "ascii_raw": ascii_raw,
             "timeout_seconds": timeout_seconds,
             "reuse_cache": reuse_cache,
+            "execution_mode": execution_mode,
         },
         "point_count": len(combinations),
     }
@@ -1110,7 +1229,23 @@ def run_experiment_sync(
             return execute_point(*arguments, None, True)
         return execute_point(*arguments)
 
-    points = [execute(index, combination) for index, combination in enumerate(combinations)]
+    native_batch: dict[str, object] | None = None
+    if execution_mode == "native":
+        assert execute_native is not None and native_netlist is not None
+        points, native_batch = execute_native(
+            combinations,
+            experiment_dir / "native-batch",
+            native_netlist,
+            normalized_filename,
+            ascii_raw,
+            timeout_seconds,
+            analyses,
+            reuse_cache,
+        )
+    else:
+        points = [
+            execute(index, combination) for index, combination in enumerate(combinations)
+        ]
     counts = _experiment_counts(points, len(combinations))
     completed_points = counts["completed_points"]
     error_points = counts["error_points"]
@@ -1132,6 +1267,8 @@ def run_experiment_sync(
         "failed_points": len(points) - passed_points,
         "all_passed": passed_points == len(points),
         "points": points,
+        "execution_mode": execution_mode,
+        "native_batch": native_batch,
     }
     _write_experiment_csv(
         results_csv_path,
@@ -1162,6 +1299,8 @@ def run_experiment_sync(
             for point in points
         ],
     )
+    if native_batch is not None:
+        manifest["native_batch"] = native_batch
     _write_json(manifest_path, manifest)
     return result
 
@@ -1618,6 +1757,8 @@ class ExperimentJobManager:
                     "failed_points": counts["failed_points"],
                     "all_passed": all_passed,
                     "points": points,
+                    "execution_mode": "independent",
+                    "native_batch": None,
                 }
                 _write_experiment_csv(
                     experiment_dir / "results.csv",

@@ -619,6 +619,309 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(rows[1]["parameter.C"], "22n")
         self.assertEqual(rows[3]["measurement.gain"], "3.0")
 
+    def test_run_experiment_native_maps_one_validated_batch(self) -> None:
+        rendered_netlists: list[str] = []
+
+        def execute(
+            netlist: str,
+            filename: str,
+            ascii_raw: bool,
+            timeout: int,
+            dest: Path,
+        ) -> Path:
+            rendered_netlists.append(netlist)
+            dest.mkdir(parents=True)
+            (dest / "circuit.log").write_text(
+                "\n".join(
+                    [
+                        ".step __mcp_step_index=0",
+                        ".step __mcp_step_index=1",
+                        ".step __mcp_step_index=2",
+                        ".step __mcp_step_index=3",
+                        "Measurement: gain",
+                        " step value",
+                        " 1 -1.0",
+                        " 2 -2.0",
+                        " 3 -3.0",
+                        " 4 -4.0",
+                    ]
+                ),
+                encoding="utf-16le",
+            )
+            (dest / "circuit.raw").write_bytes(b"raw")
+            return dest
+
+        raw_data = RawData(
+            flags="real stepped",
+            variables=["time", "V(out)"],
+            values={
+                "time": [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+                "V(out)": [0.0] * 8,
+            },
+            step_count=4,
+            points_per_step=2,
+        )
+        analyzed_steps: list[int] = []
+
+        def analyze(*args: object, **kwargs: object) -> dict[str, object]:
+            analyzed_steps.append(int(kwargs["step_index"]))
+            return {"all_passed": True, "results": []}
+
+        with (
+            patch.object(mcp_server, "_run_netlist_text", side_effect=execute) as run,
+            patch.object(
+                mcp_server,
+                "_summarize_run",
+                return_value={
+                    "status": "completed",
+                    "duration_seconds": 0.2,
+                    "execution_source": "simulator",
+                    "measurements": {"tnom": 27.0},
+                },
+            ),
+            patch.object(mcp_server.raw_parser, "parse_raw", return_value=raw_data),
+            patch.object(mcp_server, "analyze_waveform", side_effect=analyze),
+        ):
+            result = mcp_server.run_experiment(
+                "R1 in out {R}\nC1 out 0 {C}\n.param tau={TAU}\n.end\n",
+                [
+                    {"name": "R", "values": ["1k", "2k"]},
+                    {"name": "C", "values": ["10n", "20n"]},
+                ],
+                [
+                    {
+                        "name": "output",
+                        "variable": "V(out)",
+                        "requirements": [
+                            {"metric": "maximum", "operator": "<=", "target": 1}
+                        ],
+                    }
+                ],
+                derived_parameters=[{"name": "TAU", "template": "({R})*({C})"}],
+                execution_mode="native",
+            )
+
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(analyzed_steps, [0, 1, 2, 3])
+        self.assertEqual(result["execution_mode"], "native")
+        self.assertEqual(result["native_batch"]["validated_step_order"], [0, 1, 2, 3])
+        self.assertEqual(
+            [point["measurements"]["gain"] for point in result["points"]],
+            [-1.0, -2.0, -3.0, -4.0],
+        )
+        self.assertTrue(
+            all(point["measurements"]["tnom"] == 27.0 for point in result["points"])
+        )
+        self.assertEqual(
+            [point["parameters"] for point in result["points"]],
+            [
+                {"R": "1k", "C": "10n", "TAU": "(1k)*(10n)"},
+                {"R": "1k", "C": "20n", "TAU": "(1k)*(20n)"},
+                {"R": "2k", "C": "10n", "TAU": "(2k)*(10n)"},
+                {"R": "2k", "C": "20n", "TAU": "(2k)*(20n)"},
+            ],
+        )
+        self.assertTrue(all(point["duration_seconds"] is None for point in result["points"]))
+        deck = rendered_netlists[0]
+        self.assertIn("R1 in out {__mcp_value_0}", deck)
+        self.assertIn(".param tau={__mcp_value_2}\n", deck)
+        self.assertIn(".param __mcp_value_2=table(__mcp_step_index", deck)
+        self.assertIn(".step param __mcp_step_index 0 3 1", deck)
+        self.assertLess(deck.index(".step param"), deck.index(".end"))
+
+    def test_run_experiment_native_fails_closed_on_step_order_mismatch(self) -> None:
+        def execute(
+            netlist: str,
+            filename: str,
+            ascii_raw: bool,
+            timeout: int,
+            dest: Path,
+        ) -> Path:
+            dest.mkdir(parents=True)
+            (dest / "circuit.log").write_text(
+                ".step __mcp_step_index=1\n.step __mcp_step_index=0\n",
+                encoding="utf-16le",
+            )
+            return dest
+
+        with (
+            patch.object(mcp_server, "_run_netlist_text", side_effect=execute),
+            patch.object(
+                mcp_server,
+                "_summarize_run",
+                return_value={
+                    "status": "completed",
+                    "duration_seconds": 0.1,
+                    "execution_source": "cache",
+                    "cache": {"hit": True, "key": "native-cache-key"},
+                },
+            ),
+            patch.object(mcp_server, "analyze_waveform") as analyze,
+        ):
+            result = mcp_server.run_experiment(
+                "R1 in out {R}\n.end\n",
+                [{"name": "R", "values": ["1k", "2k"]}],
+                execution_mode="native",
+            )
+
+        analyze.assert_not_called()
+        self.assertEqual(result["completed_points"], 0)
+        self.assertEqual(result["error_points"], 2)
+        self.assertIn("step order mismatch", result["points"][0]["error"])
+        self.assertEqual(result["native_batch"]["execution_source"], "cache")
+        self.assertTrue(result["native_batch"]["cache_hit"])
+        self.assertEqual(result["native_batch"]["cache_key"], "native-cache-key")
+
+        def execute_bad_row(
+            netlist: str,
+            filename: str,
+            ascii_raw: bool,
+            timeout: int,
+            dest: Path,
+        ) -> Path:
+            dest.mkdir(parents=True)
+            (dest / "circuit.log").write_text(
+                ".step __mcp_step_index=0\n.step __mcp_step_index=1\n"
+                "Measurement: gain\n step value\n 3 -3.0\n",
+                encoding="utf-16le",
+            )
+            return dest
+
+        with (
+            patch.object(mcp_server, "_run_netlist_text", side_effect=execute_bad_row),
+            patch.object(
+                mcp_server,
+                "_summarize_run",
+                return_value={"status": "completed", "duration_seconds": 0.1},
+            ),
+        ):
+            bad_row = mcp_server.run_experiment(
+                "R1 in out {R}\n.end\n",
+                [{"name": "R", "values": ["1k", "2k"]}],
+                execution_mode="native",
+            )
+        self.assertIn("invalid step rows", bad_row["points"][0]["error"])
+
+    def test_run_experiment_native_validates_each_selected_raw_file(self) -> None:
+        def execute(
+            netlist: str,
+            filename: str,
+            ascii_raw: bool,
+            timeout: int,
+            dest: Path,
+        ) -> Path:
+            dest.mkdir(parents=True)
+            (dest / "circuit.log").write_text(
+                ".step __mcp_step_index=0\n.step __mcp_step_index=1\n",
+                encoding="utf-16le",
+            )
+            (dest / "circuit.raw").write_bytes(b"default")
+            (dest / "custom.raw").write_bytes(b"custom")
+            return dest
+
+        valid = RawData(
+            flags="real stepped",
+            variables=["time", "V(out)"],
+            values={"time": [0.0, 1.0, 0.0, 1.0], "V(out)": [0.0] * 4},
+            step_count=2,
+            points_per_step=2,
+        )
+        invalid = RawData(
+            flags="real",
+            variables=["time", "V(out)"],
+            values={"time": [0.0, 1.0], "V(out)": [0.0, 0.0]},
+            step_count=1,
+            points_per_step=2,
+        )
+
+        with (
+            patch.object(mcp_server, "_run_netlist_text", side_effect=execute),
+            patch.object(
+                mcp_server,
+                "_summarize_run",
+                return_value={"status": "completed", "duration_seconds": 0.1},
+            ),
+            patch.object(
+                mcp_server.raw_parser,
+                "parse_raw",
+                side_effect=lambda path: invalid if path.name == "custom.raw" else valid,
+            ),
+            patch.object(mcp_server, "analyze_waveform") as analyze,
+        ):
+            result = mcp_server.run_experiment(
+                "R1 in out {R}\n.end\n",
+                [{"name": "R", "values": ["1k", "2k"]}],
+                [
+                    {
+                        "name": "custom",
+                        "variable": "V(out)",
+                        "raw_filename": "custom.raw",
+                        "requirements": [
+                            {"metric": "maximum", "operator": "<=", "target": 1}
+                        ],
+                    }
+                ],
+                execution_mode="native",
+            )
+
+        analyze.assert_not_called()
+        self.assertIn("custom.raw", result["points"][0]["error"])
+        self.assertEqual(result["completed_points"], 0)
+
+    def test_native_step_range_and_parameter_tables_stay_within_line_limit(self) -> None:
+        values = [str(1000 + index) for index in range(40)]
+        _, _, combinations, _ = mcp_server._prepare_experiment(
+            "R1 in out {R}\n.end\n",
+            [{"name": "R", "values": values}],
+            [],
+        )
+        deck = mcp_server._render_native_experiment_netlist(
+            "R1 in out {R}\n.end\n", ["R"], [], combinations
+        )
+        lines = deck.splitlines()
+        step_line = next(line for line in lines if line.startswith(".step"))
+        self.assertEqual(step_line, ".step param __mcp_step_index 0 39 1")
+        self.assertLessEqual(max(map(len, lines)), 78)
+        crlf_deck = mcp_server._render_native_experiment_netlist(
+            "R1 in out {R}\r\n.end\r\n", ["R"], [], combinations
+        )
+        self.assertNotIn("\n", crlf_deck.replace("\r\n", ""))
+
+    def test_run_experiment_native_rejects_unsafe_decks_before_output(self) -> None:
+        invalid = [
+            ("R1 in out {R}\n.step param X 1 2\n.end\n", "existing .step"),
+            ("R1 in out {R}\n.param __MCP_X=1\n.end\n", "reserves"),
+            (".include {R}\n.end\n", "directive context"),
+            ("R1 in out {R}\n", "exactly one"),
+            ("R1 in out {R}\n.end\n.end\n", "exactly one"),
+        ]
+        for template, message in invalid:
+            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                mcp_server.run_experiment(
+                    template,
+                    [{"name": "R", "values": ["1k"]}],
+                    execution_mode="native",
+                )
+        with self.assertRaisesRegex(ValueError, "safe numeric expressions"):
+            mcp_server.run_experiment(
+                "R1 in out {R}\n.end\n",
+                [{"name": "R", "values": ["1k,2k"]}],
+                execution_mode="native",
+            )
+        with self.assertRaisesRegex(ValueError, "expression is too long"):
+            mcp_server.run_experiment(
+                "R1 in out {R}\n.end\n",
+                [{"name": "R", "values": ["1" * 80]}],
+                execution_mode="native",
+            )
+        with self.assertRaisesRegex(ValueError, "execution_mode"):
+            mcp_server.run_experiment(
+                "R1 in out {R}\n.end\n",
+                [{"name": "R", "values": ["1k"]}],
+                execution_mode="automatic",
+            )
+        self.assertEqual(list(self.runs.iterdir()), [])
+
     def test_run_experiment_substitutes_once_and_writes_utf8_artifacts(self) -> None:
         rendered_netlists: list[str] = []
 
@@ -916,6 +1219,15 @@ class MCPServerTests(unittest.TestCase):
         )
         self.assertIn("point_count", tool.output_schema["properties"])
         self.assertIn("derived_parameter_order", tool.output_schema["properties"])
+        self.assertEqual(
+            tool.input_schema["properties"]["execution_mode"]["default"],
+            "independent",
+        )
+        self.assertEqual(
+            tool.input_schema["properties"]["execution_mode"]["enum"],
+            ["independent", "native"],
+        )
+        self.assertIn("native_batch", tool.output_schema["properties"])
 
     def test_run_experiment_through_mcp_protocol(self) -> None:
         arguments = {

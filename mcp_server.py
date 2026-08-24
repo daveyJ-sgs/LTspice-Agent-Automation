@@ -24,6 +24,7 @@ import tempfile
 import threading
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from mcp.server.mcpserver import MCPServer
 
@@ -54,6 +55,7 @@ ExperimentComparisonResult = experiment_engine.ExperimentComparisonResult
 _write_json = experiment_engine._write_json
 _prepare_experiment = experiment_engine._prepare_experiment
 _render_experiment_netlist = experiment_engine._render_experiment_netlist
+_render_native_experiment_netlist = experiment_engine._render_native_experiment_netlist
 _netlist_filename = experiment_engine._netlist_filename
 _validate_timeout = experiment_engine._validate_timeout
 _validate_reuse_cache = experiment_engine._validate_reuse_cache
@@ -164,6 +166,61 @@ def _run_netlist_text(
         )
 
 
+def _analyze_experiment_point(
+    point: ExperimentPointResult,
+    output_dir: Path,
+    analyses: list[ExperimentWaveformAnalysis],
+    step_index: int | None = None,
+) -> ExperimentPointResult:
+    for analysis in analyses:
+        analysis_name = analysis["name"]
+        options: dict[str, object] = {
+            name: analysis[name]
+            for name in (
+                "axis_variable",
+                "secondary_variable",
+                "signal_unit",
+                "axis_unit",
+                "raw_filename",
+            )
+            if name in analysis
+        }
+        if step_index is not None:
+            options["step_index"] = step_index
+        try:
+            analysis_result = analyze_waveform(
+                str(output_dir),
+                analysis["variable"],
+                analysis["requirements"],
+                **options,
+            )
+        except (FileNotFoundError, IndexError, KeyError, ValueError) as exc:
+            point["analyses"].append(
+                {
+                    "name": analysis_name,
+                    "status": "error",
+                    "error": str(exc),
+                    "analysis": None,
+                }
+            )
+            if point["error"] is None:
+                point["error"] = f"analysis {analysis_name}: {exc}"
+            continue
+        point["analyses"].append(
+            {
+                "name": analysis_name,
+                "status": "completed",
+                "error": None,
+                "analysis": analysis_result,
+            }
+        )
+    point["all_passed"] = point["simulation_status"] == "completed" and all(
+        result["status"] == "completed"
+        and result["analysis"] is not None
+        and result["analysis"]["all_passed"]
+        for result in point["analyses"]
+    )
+    return point
 
 
 def _execute_experiment_point(
@@ -227,56 +284,162 @@ def _execute_experiment_point(
         point["error"] = "experiment cancelled before waveform analysis"
         return point
 
-    for analysis in analyses:
-        analysis_name = analysis["name"]
-        options = {
-            name: analysis[name]
-            for name in (
-                "axis_variable",
-                "secondary_variable",
-                "signal_unit",
-                "axis_unit",
-                "raw_filename",
-            )
-            if name in analysis
+    return _analyze_experiment_point(point, output_dir, analyses)
+
+
+def _native_error_points(
+    combinations: list[dict[str, str]], batch_dir: Path, error: str
+) -> list[ExperimentPointResult]:
+    return [
+        {
+            "index": index,
+            "parameters": combination,
+            "run_dir": str(batch_dir),
+            "simulation_status": "error",
+            "duration_seconds": None,
+            "measurements": {},
+            "analyses": [],
+            "all_passed": False,
+            "error": error,
+            "native_step_index": index,
         }
-        try:
-            analysis_result = analyze_waveform(
-                str(output_dir),
-                analysis["variable"],
-                analysis["requirements"],
-                **options,
+        for index, combination in enumerate(combinations)
+    ]
+
+
+def _execute_native_experiment(
+    combinations: list[dict[str, str]],
+    batch_dir: Path,
+    netlist: str,
+    filename: str,
+    ascii_raw: bool,
+    timeout_seconds: int,
+    analyses: list[ExperimentWaveformAnalysis],
+    reuse_cache: bool,
+) -> tuple[list[ExperimentPointResult], dict[str, object]]:
+    """Run one stepped deck and map its validated slices back to experiment points."""
+    output_dir: Path | None = None
+    summary: dict[str, object] | None = None
+    try:
+        arguments = (netlist, filename, ascii_raw, timeout_seconds, batch_dir)
+        output_dir = (
+            _run_netlist_text(*arguments, True)
+            if reuse_cache
+            else _run_netlist_text(*arguments)
+        )
+        summary = _summarize_run(output_dir)
+        log_path = output_dir / Path(filename).with_suffix(".log").name
+        if not log_path.is_file():
+            raise FileNotFoundError(f"Native batch log not found: {log_path}")
+        step_values = wrapper.parse_step_values(
+            log_path, experiment_engine._NATIVE_STEP_PARAMETER
+        )
+        expected_steps = [float(index) for index in range(len(combinations))]
+        if step_values != expected_steps:
+            raise ValueError(
+                "Native batch step order mismatch: "
+                f"expected {expected_steps}, found {step_values}"
             )
-        except (FileNotFoundError, IndexError, KeyError, ValueError) as exc:
-            point["analyses"].append(
-                {
-                    "name": analysis_name,
-                    "status": "error",
-                    "error": str(exc),
-                    "analysis": None,
-                }
+        measurement_rows = wrapper.parse_stepped_measurement_rows(log_path)
+        expected_rows = set(range(1, len(combinations) + 1))
+        for name, rows in measurement_rows.items():
+            unexpected_rows = sorted(set(rows) - expected_rows)
+            if unexpected_rows:
+                raise ValueError(
+                    f"Native batch measurement {name} has invalid step rows: "
+                    f"{unexpected_rows}"
+                )
+        if analyses:
+            raw_paths: list[Path] = []
+            for analysis in analyses:
+                raw_path = _find_raw(output_dir, analysis.get("raw_filename"))
+                if raw_path not in raw_paths:
+                    raw_paths.append(raw_path)
+            for raw_path in raw_paths:
+                raw_data = raw_parser.parse_raw(raw_path)
+                slices = raw_parser.step_slices(raw_data)
+                if (
+                    raw_data.step_count != len(combinations)
+                    or len(slices) != len(combinations)
+                ):
+                    raise ValueError(
+                        f"Native batch waveform count mismatch in {raw_path.name}: "
+                        f"expected {len(combinations)}, found {raw_data.step_count}"
+                    )
+    except (FileNotFoundError, OSError, RuntimeError, UnicodeError, ValueError) as exc:
+        error = str(exc)
+        failed_batch: dict[str, object] = {
+            "run_dir": str(batch_dir),
+            "status": "error",
+            "step_parameter": experiment_engine._NATIVE_STEP_PARAMETER,
+            "step_count": len(combinations),
+            "error": error,
+        }
+        run_manifest = batch_dir / "run_manifest.json"
+        if run_manifest.is_file():
+            failed_batch["run_manifest"] = str(run_manifest)
+        if summary is not None:
+            duration = summary.get("duration_seconds")
+            failed_batch["duration_seconds"] = (
+                float(duration) if isinstance(duration, (int, float)) else None
             )
-            if point["error"] is None:
-                point["error"] = f"analysis {analysis_name}: {exc}"
-            continue
-        point["analyses"].append(
+            failed_batch["execution_source"] = summary.get(
+                "execution_source", "simulator"
+            )
+            cache = summary.get("cache")
+            if isinstance(cache, dict):
+                failed_batch["cache_hit"] = cache.get("hit") is True
+                failed_batch["cache_key"] = cache.get("key")
+        return _native_error_points(combinations, batch_dir, error), failed_batch
+
+    assert output_dir is not None and summary is not None
+    duration = summary.get("duration_seconds")
+    cache = summary.get("cache")
+    batch: dict[str, object] = {
+        "run_dir": str(output_dir),
+        "run_manifest": str(output_dir / "run_manifest.json"),
+        "status": str(summary.get("status", "completed")),
+        "duration_seconds": (
+            float(duration) if isinstance(duration, (int, float)) else None
+        ),
+        "step_parameter": experiment_engine._NATIVE_STEP_PARAMETER,
+        "step_count": len(combinations),
+        "validated_step_order": list(range(len(combinations))),
+        "execution_source": summary.get("execution_source", "simulator"),
+    }
+    if isinstance(cache, dict):
+        batch["cache_hit"] = cache.get("hit") is True
+        batch["cache_key"] = cache.get("key")
+    shared_measurements = summary.get("measurements", {})
+    if not isinstance(shared_measurements, dict):
+        shared_measurements = {}
+
+    points: list[ExperimentPointResult] = []
+    for index, combination in enumerate(combinations):
+        point_measurements = {
+            str(name): float(value) for name, value in shared_measurements.items()
+        }
+        point_measurements.update(
             {
-                "name": analysis_name,
-                "status": "completed",
-                "error": None,
-                "analysis": analysis_result,
+                name: rows[index + 1]
+                for name, rows in measurement_rows.items()
+                if index + 1 in rows
             }
         )
-
-    point["all_passed"] = point["simulation_status"] == "completed" and all(
-        result["status"] == "completed"
-        and result["analysis"] is not None
-        and result["analysis"]["all_passed"]
-        for result in point["analyses"]
-    )
-    return point
-
-
+        point: ExperimentPointResult = {
+            "index": index,
+            "parameters": combination,
+            "run_dir": str(output_dir),
+            "simulation_status": str(summary.get("status", "completed")),
+            "duration_seconds": None,
+            "measurements": point_measurements,
+            "analyses": [],
+            "all_passed": False,
+            "error": None,
+            "native_step_index": index,
+        }
+        points.append(_analyze_experiment_point(point, output_dir, analyses, index))
+    return points, batch
 
 
 class ExperimentJobManager(experiment_engine.ExperimentJobManager):
@@ -673,6 +836,7 @@ def run_experiment(
     timeout_seconds: int = 120,
     derived_parameters: list[ExperimentDerivedParameter] | None = None,
     reuse_cache: bool = False,
+    execution_mode: Literal["independent", "native"] = "independent",
 ) -> ExperimentResult:
     """Run a deterministic Cartesian experiment and reuse analyses at every point.
 
@@ -681,7 +845,9 @@ def run_experiment(
     `{name}`. Declaration order defines Cartesian order: the first parameter
     changes slowest and the last changes fastest. Derived parameters are safe
     textual templates resolved in dependency order; they do not increase the
-    point count. Execution is sequential and is limited to 1,000 points.
+    point count. Execution is sequential and is limited to 1,000 points by
+    default. Set execution_mode to "native" to run the grid as one validated
+    LTspice stepped deck; native values must be numeric expressions.
     """
     return experiment_engine.run_experiment_sync(
         RUNS_DIR,
@@ -694,6 +860,8 @@ def run_experiment(
         timeout_seconds,
         derived_parameters,
         reuse_cache,
+        execution_mode,
+        _execute_native_experiment,
     )
 
 

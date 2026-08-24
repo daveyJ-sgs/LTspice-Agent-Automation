@@ -15,6 +15,7 @@ from ltspice_wrapper import (
     LTSPICE,
     parse_measurements,
     parse_step_values,
+    parse_stepped_measurement_rows,
     parse_stepped_measurements,
     run_netlist,
 )
@@ -345,6 +346,10 @@ Measurement: gain_at_1k
             path.write_text(log, encoding="utf-16le")
             self.assertEqual(parse_step_values(path, "rval"), [1000.0, 2200.0])
             self.assertEqual(parse_stepped_measurements(path, "gain_at_1k"), [-16.0722, -22.8347])
+            self.assertEqual(
+                parse_stepped_measurement_rows(path),
+                {"gain_at_1k": {1: -16.0722, 2: -22.8347}},
+            )
 
     def test_step_slices_preserve_nonuniform_blocks(self) -> None:
         data = RawData(
@@ -360,6 +365,21 @@ Measurement: gain_at_1k
 
         segments = step_slices(data)
         self.assertEqual([(part.start, part.stop) for part in segments], [(0, 3), (3, 7)])
+
+    def test_stepped_measurement_rows_never_accept_numeric_prefixes_or_infinity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "step.log"
+            path.write_text(
+                "Measurement: gain\n step value\n 1 (1.#INF,0°)\n",
+                encoding="utf-16le",
+            )
+            self.assertEqual(parse_stepped_measurement_rows(path), {"gain": {}})
+            path.write_text(
+                "Measurement: gain\n step value\n 1 1e999\n",
+                encoding="utf-16le",
+            )
+            with self.assertRaisesRegex(ValueError, "Non-finite row 1"):
+                parse_stepped_measurement_rows(path)
 
     def test_parse_real_compact_raw_file(self) -> None:
         header = """Title: test

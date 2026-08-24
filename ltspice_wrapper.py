@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import importlib.metadata
 import json
+import math
 import os
 import platform
 import plistlib
@@ -698,6 +699,44 @@ def parse_stepped_measurements(log_path: Path, name: str) -> list[float]:
                     values.append(float(match.group(0)))
             return values
     raise KeyError(f"Measurement not found: {name}")
+
+
+def parse_stepped_measurement_rows(log_path: Path) -> dict[str, dict[int, float]]:
+    """Read stepped `.meas` tables while preserving LTspice's row numbers."""
+    text = _decode_log(log_path)
+    tables: dict[str, dict[int, float]] = {}
+    current_name: str | None = None
+    measurement_pattern = re.compile(r"^Measurement:\s*([A-Za-z_][\w]*)\s*$")
+    row_pattern = re.compile(
+        r"^\s*(\d+)\s+\(?\s*"
+        r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
+        r"(?=\s|[A-Za-z°),]|$)"
+    )
+    for line in text.splitlines():
+        measurement = measurement_pattern.match(line.strip())
+        if measurement is not None:
+            current_name = measurement.group(1)
+            if current_name in tables:
+                raise ValueError(f"Duplicate stepped measurement table: {current_name}")
+            tables[current_name] = {}
+            continue
+        if current_name is None:
+            continue
+        row = row_pattern.match(line)
+        if row is None:
+            continue
+        step_number = int(row.group(1))
+        if step_number in tables[current_name]:
+            raise ValueError(
+                f"Duplicate row {step_number} for stepped measurement {current_name}"
+            )
+        value = float(row.group(2))
+        if not math.isfinite(value):
+            raise ValueError(
+                f"Non-finite row {step_number} for stepped measurement {current_name}"
+            )
+        tables[current_name][step_number] = value
+    return tables
 
 
 def parse_step_values(log_path: Path, parameter: str) -> list[float]:
