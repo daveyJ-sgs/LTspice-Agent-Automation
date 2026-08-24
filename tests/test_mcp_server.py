@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import cmath
+import csv
+import json
 import math
 import tempfile
 import unittest
@@ -426,6 +428,292 @@ class MCPServerTests(unittest.TestCase):
         self.assertTrue(Path(result["results_csv"]).is_file())
         with self.assertRaises(ValueError):
             mcp_server.run_parameter_sweep("R1 in out 1k", ["1k"])
+
+    def test_run_experiment_expands_cartesian_points_and_reuses_requirements(self) -> None:
+        rendered_netlists: list[str] = []
+
+        def execute(
+            netlist: str,
+            filename: str,
+            ascii_raw: bool,
+            timeout: int,
+            dest: Path,
+        ) -> Path:
+            rendered_netlists.append(netlist)
+            dest.mkdir(parents=True)
+            return dest
+
+        def summarize(output_dir: Path) -> dict[str, object]:
+            index = int(output_dir.name.rsplit("-", 1)[1])
+            return {
+                "status": "completed",
+                "duration_seconds": 0.1,
+                "measurements": {"gain": float(index)},
+            }
+
+        requirements = [
+            {"metric": "maximum", "operator": "<=", "target": 3.3}
+        ]
+
+        def analyze(
+            run_dir: str,
+            variable: str,
+            point_requirements: list[dict[str, object]],
+            **options: object,
+        ) -> dict[str, object]:
+            index = int(Path(run_dir).name.rsplit("-", 1)[1])
+            self.assertIs(point_requirements, requirements)
+            self.assertEqual(options, {"signal_unit": "V"})
+            return {"all_passed": index != 2, "results": [{"index": index}]}
+
+        with (
+            patch.object(mcp_server, "_run_netlist_text", side_effect=execute),
+            patch.object(mcp_server, "_summarize_run", side_effect=summarize),
+            patch.object(mcp_server, "analyze_waveform", side_effect=analyze) as analysis,
+        ):
+            result = mcp_server.run_experiment(
+                "R1 in out {R}\nC1 out 0 {C}\n.end\n",
+                [
+                    {"name": "R", "values": ["1k", "2k"], "unit": "ohm"},
+                    {"name": "C", "values": ["10n", "22n"], "unit": "F"},
+                ],
+                [
+                    {
+                        "name": "output_limit",
+                        "variable": "V(out)",
+                        "signal_unit": "V",
+                        "requirements": requirements,
+                    }
+                ],
+            )
+
+        self.assertEqual(
+            rendered_netlists,
+            [
+                "R1 in out 1k\nC1 out 0 10n\n.end\n",
+                "R1 in out 1k\nC1 out 0 22n\n.end\n",
+                "R1 in out 2k\nC1 out 0 10n\n.end\n",
+                "R1 in out 2k\nC1 out 0 22n\n.end\n",
+            ],
+        )
+        self.assertEqual(result["parameter_order"], ["R", "C"])
+        self.assertEqual(result["parameter_units"], {"R": "ohm", "C": "F"})
+        self.assertEqual(result["point_count"], 4)
+        self.assertEqual(result["completed_points"], 4)
+        self.assertEqual(result["error_points"], 0)
+        self.assertEqual(result["passed_points"], 3)
+        self.assertEqual(result["failed_points"], 1)
+        self.assertFalse(result["all_passed"])
+        self.assertEqual(analysis.call_count, 4)
+        self.assertEqual(
+            [point["parameters"] for point in result["points"]],
+            [
+                {"R": "1k", "C": "10n"},
+                {"R": "1k", "C": "22n"},
+                {"R": "2k", "C": "10n"},
+                {"R": "2k", "C": "22n"},
+            ],
+        )
+
+        persisted = json.loads(Path(result["results_json"]).read_text())
+        manifest = json.loads(Path(result["manifest"]).read_text())
+        with Path(result["results_csv"]).open(newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(persisted["points"], result["points"])
+        self.assertEqual(manifest["status"], "completed")
+        self.assertEqual(manifest["definition"]["parameter_units"], {"R": "ohm", "C": "F"})
+        self.assertEqual(len(rows), 4)
+        self.assertEqual(rows[1]["parameter.C"], "22n")
+        self.assertEqual(rows[3]["measurement.gain"], "3.0")
+
+    def test_run_experiment_substitutes_once_and_writes_utf8_artifacts(self) -> None:
+        rendered_netlists: list[str] = []
+
+        def execute(
+            netlist: str,
+            filename: str,
+            ascii_raw: bool,
+            timeout: int,
+            dest: Path,
+        ) -> Path:
+            rendered_netlists.append(netlist)
+            dest.mkdir(parents=True)
+            return dest
+
+        with (
+            patch.object(mcp_server, "_run_netlist_text", side_effect=execute),
+            patch.object(
+                mcp_server,
+                "_summarize_run",
+                return_value={"status": "completed", "measurements": {}},
+            ),
+        ):
+            result = mcp_server.run_experiment(
+                "A={A} B={B}\n.end\n",
+                [
+                    {"name": "A", "values": ["{B}µ"], "unit": "Ω"},
+                    {"name": "B", "values": ["10n"]},
+                ],
+            )
+
+        self.assertEqual(rendered_netlists, ["A={B}µ B=10n\n.end\n"])
+        persisted = json.loads(Path(result["results_json"]).read_text(encoding="utf-8"))
+        with Path(result["results_csv"]).open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(persisted["parameter_units"]["A"], "Ω")
+        self.assertEqual(rows[0]["parameter.A"], "{B}µ")
+
+    def test_run_experiment_isolates_simulation_and_analysis_errors(self) -> None:
+        def execute(
+            netlist: str,
+            filename: str,
+            ascii_raw: bool,
+            timeout: int,
+            dest: Path,
+        ) -> Path:
+            if dest.name == "point-0001":
+                raise RuntimeError("LTspice rejected point")
+            dest.mkdir(parents=True)
+            return dest
+
+        def summarize(output_dir: Path) -> dict[str, object]:
+            return {"status": "completed", "measurements": {}}
+
+        def analyze(
+            run_dir: str, variable: str, *args: object, **kwargs: object
+        ) -> dict[str, object]:
+            if Path(run_dir).name == "point-0000" and variable == "V(bad)":
+                raise ValueError("missing crossing")
+            return {"all_passed": True, "results": []}
+
+        with (
+            patch.object(mcp_server, "_run_netlist_text", side_effect=execute) as execution,
+            patch.object(mcp_server, "_summarize_run", side_effect=summarize),
+            patch.object(mcp_server, "analyze_waveform", side_effect=analyze) as analysis,
+        ):
+            result = mcp_server.run_experiment(
+                "R1 in out {R}\n.end\n",
+                [{"name": "R", "values": ["1k", "2k", "3k"]}],
+                [
+                    {
+                        "name": "bad_gain",
+                        "variable": "V(bad)",
+                        "requirements": [
+                            {"metric": "maximum", "operator": "<=", "target": 1}
+                        ],
+                    },
+                    {
+                        "name": "gain",
+                        "variable": "V(out)",
+                        "requirements": [
+                            {"metric": "maximum", "operator": "<=", "target": 1}
+                        ],
+                    }
+                ],
+            )
+
+        self.assertEqual(execution.call_count, 3)
+        self.assertEqual(analysis.call_count, 4)
+        self.assertEqual(result["completed_points"], 2)
+        self.assertEqual(result["error_points"], 2)
+        self.assertEqual(result["passed_points"], 1)
+        self.assertEqual(result["failed_points"], 2)
+        self.assertEqual(result["points"][0]["analyses"][0]["status"], "error")
+        self.assertEqual(result["points"][0]["analyses"][1]["status"], "completed")
+        self.assertEqual(result["points"][1]["simulation_status"], "error")
+        self.assertTrue(result["points"][2]["all_passed"])
+
+    def test_run_experiment_validates_the_definition_before_execution(self) -> None:
+        valid_analysis = [
+            {
+                "name": "output",
+                "variable": "V(out)",
+                "requirements": [
+                    {"metric": "maximum", "operator": "<=", "target": 1}
+                ],
+            }
+        ]
+        oversized_values = [str(index) for index in range(32)]
+        invalid_definitions = [
+            ([], valid_analysis, "non-empty"),
+            ([{"name": "1R", "values": ["1k"]}], valid_analysis, "names"),
+            (
+                [
+                    {"name": "R", "values": ["1k"]},
+                    {"name": "R", "values": ["2k"]},
+                ],
+                valid_analysis,
+                "duplicate parameter",
+            ),
+            ([{"name": "R", "values": []}], valid_analysis, "non-empty"),
+            ([{"name": "R", "values": ["1k", "1k"]}], valid_analysis, "unique"),
+            ([{"name": "L", "values": ["1m"]}], valid_analysis, "placeholder"),
+            (
+                [
+                    {"name": "R", "values": oversized_values},
+                    {"name": "C", "values": oversized_values},
+                ],
+                valid_analysis,
+                "1000",
+            ),
+            (
+                [{"name": "R", "values": ["1k"]}],
+                [{"name": "output", "variable": "V(out)", "requirements": []}],
+                "requirements",
+            ),
+            (
+                [{"name": "R", "values": ["1k"]}],
+                [*valid_analysis, *valid_analysis],
+                "duplicate waveform analysis",
+            ),
+        ]
+        with patch.object(mcp_server, "_run_netlist_text") as execution:
+            for parameters, analyses, message in invalid_definitions:
+                template = "R1 in out {R}\nC1 out 0 {C}\n.end\n"
+                with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                    mcp_server.run_experiment(template, parameters, analyses)
+        execution.assert_not_called()
+
+    def test_run_experiment_schema_advertises_ordered_parameters(self) -> None:
+        tools = asyncio.run(mcp_server.mcp.list_tools())
+        tool = next(tool for tool in tools if tool.name == "run_experiment")
+        parameter = tool.input_schema["$defs"]["ExperimentParameter"]
+        analysis = tool.input_schema["$defs"]["ExperimentWaveformAnalysis"]
+        requirement = tool.input_schema["$defs"]["WaveformRequirement"]
+
+        self.assertEqual(tool.input_schema["properties"]["parameters"]["type"], "array")
+        self.assertEqual(parameter["properties"]["name"]["type"], "string")
+        self.assertEqual(parameter["properties"]["values"]["items"]["type"], "string")
+        self.assertEqual(parameter["properties"]["unit"]["type"], "string")
+        self.assertIn("requirements", analysis["properties"])
+        self.assertEqual(
+            requirement["properties"]["maximum_harmonic"]["type"],
+            "integer",
+        )
+        self.assertIn("point_count", tool.output_schema["properties"])
+
+    def test_run_experiment_through_mcp_protocol(self) -> None:
+        arguments = {
+            "netlist_template": "R1 in out {R}\n.end\n",
+            "parameters": [{"name": "R", "values": ["1k"]}],
+        }
+        with (
+            patch.object(
+                mcp_server,
+                "_run_netlist_text",
+                side_effect=lambda netlist, filename, ascii_raw, timeout, dest: dest,
+            ),
+            patch.object(
+                mcp_server,
+                "_summarize_run",
+                return_value={"status": "completed", "measurements": {}},
+            ),
+        ):
+            result = asyncio.run(mcp_server.mcp.call_tool("run_experiment", arguments))
+
+        self.assertFalse(result.is_error)
+        self.assertEqual(result.structured_content["point_count"], 1)
+        self.assertTrue(result.structured_content["all_passed"])
 
     def test_history_dashboard_and_examples(self) -> None:
         (self.examples / "a.cir").write_text("* AC example\n.end\n")

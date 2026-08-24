@@ -19,11 +19,14 @@ Or register with Claude Code:
 from __future__ import annotations
 
 import csv
+import itertools
 import json
+import re
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from mcp.server.mcpserver import MCPServer
 
@@ -36,6 +39,7 @@ import waveform_metrics
 PROJECT_DIR = wrapper.PROJECT_DIR
 RUNS_DIR = wrapper.RUNS_DIR
 EXAMPLES_DIR = PROJECT_DIR / "examples"
+MAX_EXPERIMENT_POINTS = 1000
 
 mcp = MCPServer(
     name="ltspice",
@@ -44,7 +48,8 @@ mcp = MCPServer(
         "results. Provide a netlist as text (.cir-style) or a path to an "
         "existing netlist file; text netlists are the reliable automation "
         "boundary. Every run returns a run_dir that later tools accept to "
-        "pull measurements or waveform data."
+        "pull measurements or waveform data. Structured experiments expand "
+        "ordered parameter sets and reuse waveform requirements at every point."
     ),
 )
 
@@ -59,6 +64,60 @@ class WaveformAnalysisResult(TypedDict):
     all_passed: bool
     results: list[waveform_metrics.RequirementResult]
     secondary_variable: str | None
+
+
+class ExperimentParameter(TypedDict):
+    name: str
+    values: list[str]
+    unit: NotRequired[str]
+
+
+class ExperimentWaveformAnalysis(TypedDict):
+    name: str
+    variable: str
+    requirements: list[waveform_metrics.WaveformRequirement]
+    axis_variable: NotRequired[str]
+    secondary_variable: NotRequired[str]
+    signal_unit: NotRequired[str]
+    axis_unit: NotRequired[str]
+    raw_filename: NotRequired[str]
+
+
+class ExperimentAnalysisResult(TypedDict):
+    name: str
+    status: str
+    error: str | None
+    analysis: WaveformAnalysisResult | None
+
+
+class ExperimentPointResult(TypedDict):
+    index: int
+    parameters: dict[str, str]
+    run_dir: str
+    simulation_status: str
+    duration_seconds: float | None
+    measurements: dict[str, float]
+    analyses: list[ExperimentAnalysisResult]
+    all_passed: bool
+    error: str | None
+
+
+class ExperimentResult(TypedDict):
+    experiment_id: str
+    experiment_dir: str
+    manifest: str
+    results_json: str
+    results_csv: str
+    status: str
+    parameter_order: list[str]
+    parameter_units: dict[str, str]
+    point_count: int
+    completed_points: int
+    error_points: int
+    passed_points: int
+    failed_points: int
+    all_passed: bool
+    points: list[ExperimentPointResult]
 
 
 # --- internal helpers -------------------------------------------------
@@ -150,6 +209,184 @@ def _run_netlist_text(
             timeout_seconds=timeout_seconds,
             ascii_raw=ascii_raw,
         )
+
+
+def _write_json(path: Path, value: object) -> None:
+    path.write_text(
+        json.dumps(value, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _prepare_experiment(
+    netlist_template: str,
+    parameters: list[ExperimentParameter],
+    waveform_analyses: list[ExperimentWaveformAnalysis],
+) -> tuple[list[str], list[dict[str, str]], dict[str, str]]:
+    if not isinstance(netlist_template, str) or not netlist_template.strip():
+        raise ValueError("netlist_template must be a non-empty string")
+    if not isinstance(parameters, list) or not parameters:
+        raise ValueError("parameters must be a non-empty list")
+    if not isinstance(waveform_analyses, list):
+        raise ValueError("waveform_analyses must be a list")
+
+    names: list[str] = []
+    value_sets: list[list[str]] = []
+    units: dict[str, str] = {}
+    point_count = 1
+    for parameter in parameters:
+        if not isinstance(parameter, dict):
+            raise ValueError("parameters must contain objects")
+        name = parameter.get("name")
+        values = parameter.get("values")
+        if not isinstance(name, str) or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None:
+            raise ValueError("parameter names must match [A-Za-z_][A-Za-z0-9_]*")
+        if name in names:
+            raise ValueError(f"duplicate parameter name: {name}")
+        if not isinstance(values, list) or not values:
+            raise ValueError(f"parameter {name} values must be a non-empty list")
+        if any(not isinstance(value, str) or not value for value in values):
+            raise ValueError(f"parameter {name} values must be non-empty strings")
+        if len(set(values)) != len(values):
+            raise ValueError(f"parameter {name} values must be unique")
+        placeholder = "{" + name + "}"
+        if placeholder not in netlist_template:
+            raise ValueError(f"parameter placeholder {placeholder} is missing from netlist_template")
+        unit = parameter.get("unit", "")
+        if not isinstance(unit, str):
+            raise ValueError(f"parameter {name} unit must be a string")
+        names.append(name)
+        value_sets.append(values)
+        units[name] = unit
+        point_count *= len(values)
+        if point_count > MAX_EXPERIMENT_POINTS:
+            raise ValueError(
+                f"experiment is limited to {MAX_EXPERIMENT_POINTS} Cartesian points"
+            )
+
+    analysis_names: set[str] = set()
+    supported_metrics = (
+        waveform_metrics.SUPPORTED_METRICS | frequency_domain_metrics.SUPPORTED_METRICS
+    )
+    for analysis in waveform_analyses:
+        if not isinstance(analysis, dict):
+            raise ValueError("waveform_analyses must contain objects")
+        name = analysis.get("name")
+        variable = analysis.get("variable")
+        requirements = analysis.get("requirements")
+        if not isinstance(name, str) or not name:
+            raise ValueError("waveform analysis names must be non-empty strings")
+        if name in analysis_names:
+            raise ValueError(f"duplicate waveform analysis name: {name}")
+        if not isinstance(variable, str) or not variable:
+            raise ValueError(f"waveform analysis {name} variable must be non-empty")
+        if not isinstance(requirements, list) or not requirements:
+            raise ValueError(f"waveform analysis {name} requirements must be non-empty")
+        for field in (
+            "axis_variable",
+            "secondary_variable",
+            "signal_unit",
+            "axis_unit",
+            "raw_filename",
+        ):
+            if field in analysis and not isinstance(analysis[field], str):
+                raise ValueError(f"waveform analysis {name} {field} must be a string")
+        raw_filename = analysis.get("raw_filename")
+        if raw_filename is not None and (
+            Path(raw_filename).name != raw_filename
+            or "/" in raw_filename
+            or "\\" in raw_filename
+        ):
+            raise ValueError(
+                f"waveform analysis {name} raw_filename must be a plain file name"
+            )
+        for requirement in requirements:
+            if not isinstance(requirement, dict):
+                raise ValueError(f"waveform analysis {name} requirements must be objects")
+            missing = [
+                field for field in ("metric", "operator", "target") if field not in requirement
+            ]
+            if missing:
+                raise ValueError(
+                    f"waveform analysis {name} requirement is missing {missing[0]}"
+                )
+            if requirement["metric"] not in supported_metrics:
+                raise ValueError(
+                    f"waveform analysis {name} has unknown metric {requirement['metric']}"
+                )
+            if requirement["operator"] not in {"<", "<=", ">", ">="}:
+                raise ValueError(
+                    f"waveform analysis {name} has invalid comparison operator"
+                )
+            try:
+                float(requirement["target"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"waveform analysis {name} requirement target must be numeric"
+                ) from exc
+        analysis_names.add(name)
+
+    points = [
+        dict(zip(names, combination))
+        for combination in itertools.product(*value_sets)
+    ]
+    return names, points, units
+
+
+def _render_experiment_netlist(
+    netlist_template: str, parameters: dict[str, str]
+) -> str:
+    return re.sub(
+        r"\{([A-Za-z_][A-Za-z0-9_]*)\}",
+        lambda match: parameters.get(match.group(1), match.group(0)),
+        netlist_template,
+    )
+
+
+def _write_experiment_csv(
+    path: Path,
+    parameter_order: list[str],
+    points: list[ExperimentPointResult],
+) -> None:
+    measurement_names = sorted(
+        {
+            name
+            for point in points
+            for name in point["measurements"]
+        }
+    )
+    fieldnames = [
+        "point_index",
+        *(f"parameter.{name}" for name in parameter_order),
+        "simulation_status",
+        "all_passed",
+        "duration_seconds",
+        "run_dir",
+        "error",
+        *(f"measurement.{name}" for name in measurement_names),
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, restval="")
+        writer.writeheader()
+        for point in points:
+            writer.writerow(
+                {
+                    "point_index": point["index"],
+                    **{
+                        f"parameter.{name}": point["parameters"][name]
+                        for name in parameter_order
+                    },
+                    "simulation_status": point["simulation_status"],
+                    "all_passed": point["all_passed"],
+                    "duration_seconds": point["duration_seconds"],
+                    "run_dir": point["run_dir"],
+                    "error": point["error"],
+                    **{
+                        f"measurement.{name}": value
+                        for name, value in point["measurements"].items()
+                    },
+                }
+            )
 
 
 # --- tools --------------------------------------------------------------
@@ -499,6 +736,204 @@ def run_parameter_sweep(
             )
 
     return {"sweep_dir": str(sweep_dir), "results_csv": str(csv_path), "points": rows}
+
+
+@mcp.tool()
+def run_experiment(
+    netlist_template: str,
+    parameters: list[ExperimentParameter],
+    waveform_analyses: list[ExperimentWaveformAnalysis] | None = None,
+    filename: str = "circuit.cir",
+    ascii_raw: bool = False,
+    timeout_seconds: int = 120,
+) -> ExperimentResult:
+    """Run a deterministic Cartesian experiment and reuse analyses at every point.
+
+    Parameters are ordered records with a name, explicit string values, and an
+    optional metadata-only unit. The corresponding template placeholder is
+    `{name}`. Declaration order defines Cartesian order: the first parameter
+    changes slowest and the last changes fastest. Execution is sequential in
+    Phase 2A and is limited to 1,000 points.
+    """
+    normalized_filename = _netlist_filename(filename)
+    _validate_timeout(timeout_seconds)
+    analyses = [] if waveform_analyses is None else waveform_analyses
+    parameter_order, combinations, parameter_units = _prepare_experiment(
+        netlist_template,
+        parameters,
+        analyses,
+    )
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    experiment_id = f"mcp-experiment-{stamp}"
+    experiment_dir = RUNS_DIR / experiment_id
+    experiment_dir.mkdir(parents=True)
+    manifest_path = experiment_dir / "experiment_manifest.json"
+    results_json_path = experiment_dir / "results.json"
+    results_csv_path = experiment_dir / "results.csv"
+    started_at = datetime.now().astimezone()
+    started_clock = time.monotonic()
+    manifest: dict[str, object] = {
+        "schema_version": 1,
+        "experiment_id": experiment_id,
+        "status": "running",
+        "started_at": started_at.isoformat(),
+        "definition": {
+            "netlist_template": netlist_template,
+            "parameters": parameters,
+            "parameter_order": parameter_order,
+            "parameter_units": parameter_units,
+            "waveform_analyses": analyses,
+            "filename": normalized_filename,
+            "ascii_raw": ascii_raw,
+            "timeout_seconds": timeout_seconds,
+        },
+        "point_count": len(combinations),
+    }
+    _write_json(manifest_path, manifest)
+
+    points: list[ExperimentPointResult] = []
+    for index, combination in enumerate(combinations):
+        point_dir = experiment_dir / f"point-{index:04d}"
+        point: ExperimentPointResult = {
+            "index": index,
+            "parameters": combination,
+            "run_dir": str(point_dir),
+            "simulation_status": "error",
+            "duration_seconds": None,
+            "measurements": {},
+            "analyses": [],
+            "all_passed": False,
+            "error": None,
+        }
+        rendered = _render_experiment_netlist(netlist_template, combination)
+        try:
+            output_dir = _run_netlist_text(
+                rendered,
+                normalized_filename,
+                ascii_raw,
+                timeout_seconds,
+                point_dir,
+            )
+            summary = _summarize_run(output_dir)
+        except (FileNotFoundError, RuntimeError) as exc:
+            point["error"] = str(exc)
+            points.append(point)
+            continue
+
+        point["simulation_status"] = str(summary.get("status", "completed"))
+        duration = summary.get("duration_seconds")
+        point["duration_seconds"] = (
+            float(duration) if isinstance(duration, (int, float)) else None
+        )
+        measurements = summary.get("measurements", {})
+        if isinstance(measurements, dict):
+            point["measurements"] = {
+                str(name): float(value) for name, value in measurements.items()
+            }
+
+        for analysis in analyses:
+            analysis_name = analysis["name"]
+            options = {
+                name: analysis[name]
+                for name in (
+                    "axis_variable",
+                    "secondary_variable",
+                    "signal_unit",
+                    "axis_unit",
+                    "raw_filename",
+                )
+                if name in analysis
+            }
+            try:
+                analysis_result = analyze_waveform(
+                    str(output_dir),
+                    analysis["variable"],
+                    analysis["requirements"],
+                    **options,
+                )
+            except (FileNotFoundError, IndexError, KeyError, ValueError) as exc:
+                point["analyses"].append(
+                    {
+                        "name": analysis_name,
+                        "status": "error",
+                        "error": str(exc),
+                        "analysis": None,
+                    }
+                )
+                if point["error"] is None:
+                    point["error"] = f"analysis {analysis_name}: {exc}"
+                continue
+            point["analyses"].append(
+                {
+                    "name": analysis_name,
+                    "status": "completed",
+                    "error": None,
+                    "analysis": analysis_result,
+                }
+            )
+
+        point["all_passed"] = point["simulation_status"] == "completed" and all(
+            result["status"] == "completed"
+            and result["analysis"] is not None
+            and result["analysis"]["all_passed"]
+            for result in point["analyses"]
+        )
+        points.append(point)
+
+    completed_points = sum(
+        point["simulation_status"] == "completed" for point in points
+    )
+    error_points = sum(
+        point["simulation_status"] != "completed"
+        or any(analysis["status"] == "error" for analysis in point["analyses"])
+        for point in points
+    )
+    passed_points = sum(point["all_passed"] for point in points)
+    result: ExperimentResult = {
+        "experiment_id": experiment_id,
+        "experiment_dir": str(experiment_dir),
+        "manifest": str(manifest_path),
+        "results_json": str(results_json_path),
+        "results_csv": str(results_csv_path),
+        "status": "completed",
+        "parameter_order": parameter_order,
+        "parameter_units": parameter_units,
+        "point_count": len(points),
+        "completed_points": completed_points,
+        "error_points": error_points,
+        "passed_points": passed_points,
+        "failed_points": len(points) - passed_points,
+        "all_passed": passed_points == len(points),
+        "points": points,
+    }
+    _write_experiment_csv(results_csv_path, parameter_order, points)
+    _write_json(results_json_path, result)
+
+    manifest.update(
+        status="completed",
+        finished_at=datetime.now().astimezone().isoformat(),
+        duration_seconds=time.monotonic() - started_clock,
+        completed_points=completed_points,
+        error_points=error_points,
+        passed_points=passed_points,
+        failed_points=len(points) - passed_points,
+        all_passed=result["all_passed"],
+        artifacts=[results_json_path.name, results_csv_path.name],
+        points=[
+            {
+                "index": point["index"],
+                "parameters": point["parameters"],
+                "run_dir": point["run_dir"],
+                "simulation_status": point["simulation_status"],
+                "all_passed": point["all_passed"],
+                "error": point["error"],
+            }
+            for point in points
+        ],
+    )
+    _write_json(manifest_path, manifest)
+    return result
 
 
 @mcp.tool()

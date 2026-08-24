@@ -287,8 +287,8 @@ and authorization.
 `mcp_server.py` exposes the same automation surface as native tools over the
 Model Context Protocol, in-process (no REST server needed): `run_netlist`,
 `run_netlist_file`, `get_measurements`, `get_waveform`, `export_waveform_csv`,
-`analyze_waveform`, `run_parameter_sweep`, `list_runs`, `build_dashboard`, and
-`list_examples`.
+`analyze_waveform`, `run_parameter_sweep`, `run_experiment`, `list_runs`,
+`build_dashboard`, and `list_examples`.
 
 It depends on the `mcp` package. Homebrew/system Python is externally
 managed, so install it into a local virtualenv:
@@ -317,6 +317,43 @@ keep vectors small in an agent's context; request a higher `max_points` or
 use `export_waveform_csv` for full resolution. This server has the same
 trust model as the REST API: it runs LTspice locally with no sandboxing, so
 only expose it to trusted agents.
+
+### Run a structured experiment
+
+Phase 2A adds synchronous, deterministic Cartesian experiments. Parameters are
+ordered records; declaration order is significant, each value order is
+preserved, and the first parameter changes slowest. Units are metadata only and
+do not modify the rendered value. A parameter named `R` replaces every `{R}`
+placeholder in the netlist template.
+
+```json
+{
+  "netlist_template": "R1 in out {R}\nC1 out 0 {C}\n.ac dec 100 10 1Meg\n.end\n",
+  "parameters": [
+    {"name": "R", "values": ["1k", "2.2k"], "unit": "ohm"},
+    {"name": "C", "values": ["10n", "22n"], "unit": "F"}
+  ],
+  "waveform_analyses": [
+    {
+      "name": "bandwidth",
+      "variable": "V(out)",
+      "requirements": [
+        {"metric": "cutoff_frequency", "operator": ">=", "target": 1000,
+         "reference_frequency": 10}
+      ]
+    }
+  ]
+}
+```
+
+`run_experiment` validates the complete definition before running, executes
+sequentially, and caps the Cartesian product at 1,000 points. Requirements are
+defined once and reused unchanged at every successful point. A failed
+simulation or analysis is recorded without preventing later points from
+running; a requirement miss remains a completed analysis with `all_passed`
+false. Each experiment writes `experiment_manifest.json`, full `results.json`,
+and a deliberately flat `results.csv` under a stable `point-0000`,
+`point-0001`, ... directory layout.
 
 `analyze_waveform` always evaluates the full parsed vector rather than the
 downsampled agent payload. Requirements are structured metric/operator/target

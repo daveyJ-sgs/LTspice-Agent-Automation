@@ -97,16 +97,29 @@ Windows acceptance criteria:
 
 Generalize single-value parameter substitution into durable experiments with:
 
-- Multiple named parameters and units
-- Explicit value sets, Cartesian sweeps, and native LTspice stepping
-- Parameter dependencies and derived values
-- Reusable requirements and waveform properties
-- Bounded concurrency, progress, cancellation, and resumable jobs
-- Netlist/configuration hashing and cached-result reuse
-- CSV, JSON, SQLite, plots, and human-readable experiment reports
+#### Phase 2A: Deterministic Cartesian experiments — complete
 
-Proposed MCP operations include `define_experiment`, `run_experiment`,
-`get_experiment`, `cancel_experiment`, and `compare_runs`.
+- Multiple named parameters and units
+- Ordered explicit value sets and deterministic Cartesian expansion
+- Reusable requirements and waveform properties
+- Isolated per-point simulation and analysis failures
+- Portable experiment manifests plus structured JSON and flat CSV results
+
+#### Phase 2B: Durable experiment jobs — planned
+
+- Parameter dependencies and derived values
+- Bounded concurrency, progress, cancellation, and resumable jobs
+- `define_experiment`, `get_experiment`, and `cancel_experiment` lifecycle tools
+
+#### Phase 2C: Execution efficiency and reporting — planned
+
+- Native LTspice stepping
+- Netlist/configuration hashing and cached-result reuse
+- SQLite, plots, human-readable experiment reports, and `compare_runs`
+
+Phase 2A provides synchronous `run_experiment`; later sections add the durable
+job lifecycle and comparison operations without changing the portable
+experiment definition.
 
 Windows acceptance criteria:
 
