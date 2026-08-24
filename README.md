@@ -3,6 +3,30 @@
 Python-controlled LTspice simulation, analysis, experiment history, and local
 MCP and REST automation for agent-driven electronics workflows.
 
+## What this project does
+
+This project turns LTspice into a structured, agent-operated circuit laboratory,
+not merely a simulation launcher. An engineer or AI agent can describe an
+experiment, run controlled LTspice simulations, recover the waveform and
+measurement data, evaluate design requirements, and produce traceable results.
+
+```text
+Experiment request → LTspice simulation → structured data → analysis → report
+```
+
+Instead of manually changing components, rerunning a schematic, reading plots,
+and copying results into notes, an agent can sweep component values and
+operating conditions, calculate time- and frequency-domain metrics, identify
+failed requirements, and compare a candidate design with an earlier experiment.
+The outputs are saved as reproducible JSON, CSV, Markdown, waveform, and run
+artifacts so a human can inspect the evidence behind every conclusion.
+
+LTspice remains the trusted circuit-simulation engine. This toolkit supplies
+the repeatable execution, data extraction, experiment management, measurement,
+comparison, and agent-friendly MCP interface around it. The long-term goal is
+to help engineers explore designs, find weak operating corners, detect
+regressions, and generate review-ready evidence with far less manual lab work.
+
 **[View this project on claude_projs →](https://claudeprojs.vercel.app/projects/ltspice-agent-automation)**
 
 See [ROADMAP.md](ROADMAP.md) for the approved MCP development sequence,
