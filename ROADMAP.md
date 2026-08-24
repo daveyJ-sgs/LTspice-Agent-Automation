@@ -124,7 +124,7 @@ Generalize single-value parameter substitution into durable experiments with:
 - Explicit `start_experiment` operation so definition does not launch work
 - Idempotent cooperative cancellation with Windows-safe point boundaries
 
-#### Phase 2C: Execution efficiency and reporting — in progress
+#### Phase 2C: Execution efficiency and reporting — complete
 
 ##### Phase 2C-A: Experiment comparison and reports — complete
 
@@ -193,6 +193,38 @@ Generalize single-value parameter substitution into durable experiments with:
 Phase 2A provides synchronous `run_experiment`; Phase 2B adds the durable job
 lifecycle without changing that contract. Phase 2C adds execution efficiency
 and comparison operations without changing the portable experiment definition.
+
+#### Phase 2D: Foundation hardening — complete
+
+##### Phase 2D-A: Artifact trust boundaries — complete
+
+- Resolved-path confinement for run, RAW, log, report, and experiment artifacts
+- Symlink-safe atomic CSV and dashboard publication
+- Direct-child enforcement for durable experiment directories
+
+##### Phase 2D-B: Portable simulator inputs and text decoding — complete
+
+- Shared BOM/null-pattern-aware UTF-8 and UTF-16LE LTspice log decoding
+- Encoding-preserving real and complex ASCII RAW parsing
+- Isolated explicit output directories and source-relative include/library staging
+
+##### Phase 2D-C: Evidence integrity — complete
+
+- One canonical manifest/results validator for index, reports, and comparisons
+- Schema-v2 definition-hash verification and point-derived aggregate checks
+- SHA-256/size provenance for new simulation and analyzed RAW artifacts
+
+##### Phase 2D-D: Process and REST safety — complete
+
+- Cross-platform runs-directory ownership lock for durable experiment managers
+- Explicit SQLite connection closure and strict REST input typing
+- Loopback-only REST binding until an authenticated network mode exists
+
+##### Phase 2D-E: Bounded, faithful presentation — complete
+
+- Extrema-preserving report sampling and endpoint-preserving MCP previews
+- Bounded legacy sweeps, waveform responses, analyses, and requirements
+- Spreadsheet-safe CSV text and repeated-axis step inference
 
 Windows acceptance criteria:
 

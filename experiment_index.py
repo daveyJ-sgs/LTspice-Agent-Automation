@@ -12,7 +12,7 @@ import sqlite3
 import threading
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TypedDict
 
 INDEX_SCHEMA_VERSION = 1
@@ -94,6 +94,24 @@ def _load_json(path: Path) -> tuple[dict[str, object], str]:
     return value, hashlib.sha256(raw).hexdigest()
 
 
+def _definition_hash(definition: dict[str, object]) -> str:
+    encoded = json.dumps(
+        definition,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _plain_int(value: object, field: str) -> int:
     if (
         not isinstance(value, int)
@@ -138,6 +156,32 @@ def _relative_path(path: Path, root: Path) -> str:
         return path.resolve().relative_to(root.resolve()).as_posix()
     except ValueError as exc:
         raise ValueError("artifact must remain inside the runs directory") from exc
+
+
+def waveform_artifact_path(
+    reference: object, experiment_dir: Path, experiment_id: str
+) -> tuple[Path, str]:
+    """Resolve a portable waveform reference within its experiment directory."""
+    if not isinstance(reference, str) or not reference:
+        raise ValueError("waveform raw_file must be a non-empty string")
+    parts = PurePosixPath(reference.replace("\\", "/")).parts
+    if experiment_id in parts:
+        parts = parts[parts.index(experiment_id) + 1 :]
+    elif reference.startswith(("/", "\\")) or (parts and ":" in parts[0]):
+        raise ValueError("waveform raw_file does not identify this experiment")
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("waveform raw_file path is invalid")
+    relative = Path(*parts)
+    path = (experiment_dir / relative).resolve()
+    try:
+        path.relative_to(experiment_dir.resolve())
+    except ValueError as exc:
+        raise ValueError(
+            "waveform artifact must remain inside the experiment directory"
+        ) from exc
+    if not path.is_file():
+        raise FileNotFoundError(f"Waveform artifact not found: {relative.as_posix()}")
+    return path, relative.as_posix()
 
 
 def _database_path(root: Path, database_path: Path | None) -> Path:
@@ -285,6 +329,11 @@ def _manifest_record(
     definition = manifest.get("definition")
     if not isinstance(definition, dict):
         raise ValueError("experiment definition must contain an object")
+    definition_hash = _optional_string(
+        manifest.get("definition_hash"), "manifest definition_hash"
+    )
+    if schema_version == 2 and definition_hash != _definition_hash(definition):
+        raise ValueError("manifest definition_hash does not match its definition")
     execution_mode = definition.get("execution_mode", "independent")
     if execution_mode not in EXECUTION_MODES:
         raise ValueError("unsupported experiment execution_mode")
@@ -334,9 +383,7 @@ def _manifest_record(
         "engine_version": engine_version,
         "status": status,
         "execution_mode": execution_mode,
-        "definition_hash": _optional_string(
-            manifest.get("definition_hash"), "manifest definition_hash"
-        ),
+        "definition_hash": definition_hash,
         "recorded_at": _timestamp(manifest, experiment_id),
         "created_at": _optional_string(manifest.get("created_at"), "manifest created_at"),
         "updated_at": _optional_string(manifest.get("updated_at"), "manifest updated_at"),
@@ -661,6 +708,80 @@ def _result_children(
     return points, point_parameters, measurements, requirements, derived_counts
 
 
+def _verify_waveform_artifacts(
+    results: dict[str, object], experiment_dir: Path, experiment_id: str
+) -> None:
+    points = results.get("points")
+    assert isinstance(points, list)
+    artifact_hashes: dict[Path, tuple[str, int]] = {}
+    for point in points:
+        assert isinstance(point, dict)
+        analyses = point.get("analyses")
+        assert isinstance(analyses, list)
+        for analysis_record in analyses:
+            assert isinstance(analysis_record, dict)
+            analysis = analysis_record.get("analysis")
+            if not isinstance(analysis, dict):
+                continue
+            expected_hash = analysis.get("raw_sha256")
+            expected_size = analysis.get("raw_size_bytes")
+            if expected_hash is None and expected_size is None:
+                continue
+            raw_path, _ = waveform_artifact_path(
+                analysis.get("raw_file"), experiment_dir, experiment_id
+            )
+            if raw_path not in artifact_hashes:
+                artifact_hashes[raw_path] = (
+                    _sha256_file(raw_path),
+                    raw_path.stat().st_size,
+                )
+            digest, size = artifact_hashes[raw_path]
+            if (
+                not isinstance(expected_hash, str)
+                or len(expected_hash) != 64
+                or digest != expected_hash
+            ):
+                raise ValueError("waveform RAW artifact hash does not match its analysis")
+            if (
+                not isinstance(expected_size, int)
+                or isinstance(expected_size, bool)
+                or expected_size < 0
+                or size != expected_size
+            ):
+                raise ValueError("waveform RAW artifact size does not match its analysis")
+
+
+def load_completed_experiment(
+    root: Path, experiment_id: str
+) -> tuple[Path, dict[str, object], dict[str, object], dict[str, object]]:
+    """Load one completed experiment through the canonical artifact validator."""
+    root = root.resolve()
+    _id_timestamp(experiment_id)
+    experiment_dir = (root / experiment_id).resolve()
+    _relative_path(experiment_dir, root)
+    if experiment_dir.name != experiment_id or not experiment_dir.is_dir():
+        raise FileNotFoundError(f"Experiment not found: {experiment_id}")
+    manifest_path = experiment_dir / "experiment_manifest.json"
+    results_path = experiment_dir / "results.json"
+    _relative_path(manifest_path, root)
+    _relative_path(results_path, root)
+    manifest, manifest_hash = _load_json(manifest_path)
+    record, parameters, ordinals = _manifest_record(
+        manifest, experiment_id, manifest_path, root, manifest_hash
+    )
+    if record["status"] != "completed":
+        raise ValueError(f"Experiment {experiment_id} is not completed")
+    results, results_hash = _load_json(results_path)
+    _result_children(results, record, parameters, ordinals)
+    _verify_waveform_artifacts(results, experiment_dir, experiment_id)
+    record.update(
+        index_state="results_valid",
+        results_path=_relative_path(results_path, root),
+        results_sha256=results_hash,
+    )
+    return experiment_dir, manifest, results, record
+
+
 def _create_schema(connection: sqlite3.Connection) -> None:
     connection.executescript(
         """
@@ -900,6 +1021,9 @@ def build_experiment_index(
                             child_rows = _result_children(
                                 results, record, parameters, ordinals
                             )
+                            _verify_waveform_artifacts(
+                                results, experiment_dir, experiment_id
+                            )
                             record.update(
                                 index_state="results_valid",
                                 results_path=results_path.relative_to(root).as_posix(),
@@ -913,6 +1037,7 @@ def build_experiment_index(
                             json.JSONDecodeError,
                             ValueError,
                         ) as exc:
+                            child_rows = None
                             record["index_state"] = "invalid_results"
                             record["all_passed"] = None
                             issues.append(

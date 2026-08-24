@@ -55,21 +55,70 @@ class MCPServerTests(unittest.TestCase):
     ) -> Path:
         experiment_dir = self.runs / experiment_id
         experiment_dir.mkdir(parents=True, exist_ok=True)
-        path = experiment_dir / "results.json"
-        mcp_server._write_json(
-            path,
+        parameter_names = list(points[0]["parameters"]) if points else ["R"]
+        parameters = [
             {
+                "name": name,
+                "values": list(
+                    dict.fromkeys(str(point["parameters"][name]) for point in points)
+                )
+                or ["1k"],
+            }
+            for name in parameter_names
+        ]
+        definition = {
+            "netlist_template": ".end\n",
+            "parameters": parameters,
+            "parameter_order": parameter_names,
+            "derived_parameters": [],
+            "derived_parameter_order": [],
+            "parameter_units": {name: "" for name in parameter_names},
+            "waveform_analyses": [],
+            "filename": "circuit.cir",
+            "ascii_raw": False,
+            "timeout_seconds": 120,
+            "reuse_cache": False,
+            "execution_mode": "independent",
+        }
+        passed_points = sum(bool(point["all_passed"]) for point in points)
+        manifest = {
+            "schema_version": 2,
+            "engine_version": 1,
+            "experiment_id": experiment_id,
+            "status": status,
+            "definition": definition,
+            "definition_hash": mcp_server.experiment_index._definition_hash(definition),
+            "created_at": "2026-08-24T12:00:00-07:00",
+            "updated_at": "2026-08-24T12:00:01-07:00",
+            "point_count": max(1, len(points)),
+            "finished_points": len(points),
+            "completed_points": len(points),
+            "error_points": 0,
+            "passed_points": passed_points,
+            "failed_points": len(points) - passed_points,
+            "all_passed": status == "completed" and passed_points == len(points),
+        }
+        mcp_server._write_json(
+            experiment_dir / "experiment_manifest.json", manifest
+        )
+        path = experiment_dir / "results.json"
+        if status == "completed":
+            mcp_server._write_json(path, {
                 "experiment_id": experiment_id,
                 "status": status,
+                "execution_mode": "independent",
+                "parameter_order": parameter_names,
+                "derived_parameter_order": [],
+                "parameter_units": {name: "" for name in parameter_names},
                 "point_count": len(points),
                 "completed_points": len(points),
                 "error_points": 0,
-                "passed_points": sum(bool(point["all_passed"]) for point in points),
-                "failed_points": sum(not bool(point["all_passed"]) for point in points),
+                "passed_points": passed_points,
+                "failed_points": len(points) - passed_points,
                 "all_passed": all(bool(point["all_passed"]) for point in points),
                 "points": points,
-            },
-        )
+                "native_batch": None,
+            })
         return path
 
     @staticmethod
@@ -82,13 +131,19 @@ class MCPServerTests(unittest.TestCase):
         return {
             "index": index,
             "parameters": parameters,
+            "run_dir": "",
+            "simulation_status": "completed",
+            "duration_seconds": 0.1,
             "measurements": measurements,
             "analyses": [
                 {
                     "name": "bandwidth|check `<img src=x>",
                     "status": "completed",
                     "error": None,
-                    "analysis": {"results": checks},
+                    "analysis": {
+                        "all_passed": all(check["passed"] for check in checks),
+                        "results": checks,
+                    },
                 }
             ],
             "all_passed": all(check["passed"] for check in checks),
@@ -224,6 +279,23 @@ class MCPServerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             mcp_server.get_measurements(str(self.root))
 
+    def test_raw_and_log_discovery_reject_symlink_escapes(self) -> None:
+        run_dir = self.make_run()
+        outside_raw = self.root / "outside.raw"
+        outside_log = self.root / "outside.log"
+        outside_raw.touch()
+        outside_log.touch()
+        try:
+            (run_dir / "escape.raw").symlink_to(outside_raw)
+            (run_dir / "escape.log").symlink_to(outside_log)
+        except OSError as exc:
+            self.skipTest(f"file symlinks unavailable: {exc}")
+
+        with self.assertRaisesRegex(ValueError, "inside the run directory"):
+            mcp_server.get_waveform(str(run_dir))
+        with self.assertRaisesRegex(ValueError, "inside the run directory"):
+            mcp_server.get_measurements(str(run_dir))
+
     def test_get_waveform(self) -> None:
         run_dir = self.make_run()
         raw_path = run_dir / "result.raw"
@@ -242,9 +314,13 @@ class MCPServerTests(unittest.TestCase):
             )
 
         self.assertEqual(result["returned_points"], 2)
-        self.assertEqual(result["data"]["V(out)"], {"real": [1.0, 3.0], "imag": [-1.0, -3.0]})
+        self.assertEqual(result["data"]["V(out)"], {"real": [1.0, 4.0], "imag": [-1.0, -4.0]})
         with self.assertRaises(ValueError):
             mcp_server.get_waveform(str(run_dir), max_points=0)
+        with self.assertRaises(ValueError):
+            mcp_server.get_waveform(
+                str(run_dir), max_points=mcp_server.MAX_WAVEFORM_RESPONSE_POINTS + 1
+            )
         with self.assertRaises(ValueError):
             mcp_server.get_waveform(str(run_dir), raw_filename="../result.raw")
 
@@ -253,15 +329,44 @@ class MCPServerTests(unittest.TestCase):
         raw_path = run_dir / "result.raw"
         raw_path.touch()
         data = RawData(flags="real", variables=["time"], values={"time": [0.0, 1.0]})
+        def export_csv(_: RawData, path: Path) -> None:
+            path.touch()
+
         with (
             patch.object(mcp_server.raw_parser, "parse_raw", return_value=data),
-            patch.object(mcp_server.raw_parser, "export_csv") as export,
+            patch.object(mcp_server.raw_parser, "export_csv", side_effect=export_csv) as export,
         ):
             result = mcp_server.export_waveform_csv(str(run_dir))
 
-        export.assert_called_once_with(data, run_dir.resolve() / "result.csv")
+        export_path = export.call_args.args[1]
+        self.assertEqual(export.call_args.args[0], data)
+        self.assertEqual(export_path.parent, run_dir.resolve())
+        self.assertTrue(export_path.name.startswith(".result.csv."))
+        self.assertTrue(export_path.name.endswith(".tmp"))
         self.assertEqual(result["rows"], 2)
         self.assertEqual(result["csv_path"], str(run_dir.resolve() / "result.csv"))
+        self.assertTrue((run_dir / "result.csv").is_file())
+
+    def test_export_waveform_csv_does_not_follow_an_output_symlink(self) -> None:
+        run_dir = self.make_run()
+        (run_dir / "result.raw").touch()
+        outside = self.root / "outside.csv"
+        outside.write_text("sentinel", encoding="utf-8")
+        try:
+            (run_dir / "result.csv").symlink_to(outside)
+        except OSError as exc:
+            self.skipTest(f"file symlinks unavailable: {exc}")
+        data = RawData(flags="real", variables=["time"], values={"time": [0.0]})
+
+        with (
+            patch.object(mcp_server.raw_parser, "parse_raw", return_value=data),
+            patch.object(mcp_server.raw_parser, "export_csv") as export,
+            self.assertRaisesRegex(ValueError, "must not be a symlink"),
+        ):
+            mcp_server.export_waveform_csv(str(run_dir))
+
+        export.assert_not_called()
+        self.assertEqual(outside.read_text(encoding="utf-8"), "sentinel")
 
     def test_analyze_waveform_uses_full_selected_step(self) -> None:
         run_dir = self.make_run()
@@ -299,6 +404,8 @@ class MCPServerTests(unittest.TestCase):
 
         self.assertEqual(result["source_points"], 4)
         self.assertEqual(result["analysis_resolution"], "full")
+        self.assertEqual(len(result["raw_sha256"]), 64)
+        self.assertEqual(result["raw_size_bytes"], 0)
         self.assertTrue(result["all_passed"])
         self.assertEqual(result["results"][0]["evidence"]["index"], 2)
         self.assertEqual(result["results"][1]["value"], 10.0)
@@ -558,6 +665,11 @@ class MCPServerTests(unittest.TestCase):
         self.assertTrue(Path(result["results_csv"]).is_file())
         with self.assertRaises(ValueError):
             mcp_server.run_parameter_sweep("R1 in out 1k", ["1k"])
+        with self.assertRaisesRegex(ValueError, "limited"):
+            mcp_server.run_parameter_sweep(
+                "R1 in out {value}",
+                ["1k"] * (mcp_server.MAX_LEGACY_SWEEP_POINTS + 1),
+            )
 
     def test_run_experiment_expands_cartesian_points_and_reuses_requirements(self) -> None:
         rendered_netlists: list[str] = []
@@ -1224,6 +1336,20 @@ class MCPServerTests(unittest.TestCase):
                 [*valid_analysis, *valid_analysis],
                 "duplicate waveform analysis",
             ),
+            (
+                [{"name": "R", "values": ["1k"]}],
+                [
+                    {
+                        "name": "output",
+                        "variable": "V(out)",
+                        "requirements": [
+                            {"metric": "maximum", "operator": "<=", "target": 1}
+                        ]
+                        * (mcp_server.experiment_engine.MAX_REQUIREMENTS_PER_EXPERIMENT + 1),
+                    }
+                ],
+                "256 waveform requirements",
+            ),
         ]
         with patch.object(mcp_server, "_run_netlist_text") as execution:
             for parameters, analyses, message in invalid_definitions:
@@ -1399,14 +1525,14 @@ class MCPServerTests(unittest.TestCase):
                 self.assertFalse(cache_property["default"])
 
     def test_compare_experiments_reports_deltas_and_requirement_changes(self) -> None:
-        baseline_id = "mcp-experiment-baseline"
-        candidate_id = "mcp-experiment-candidate"
+        baseline_id = "mcp-experiment-20260824-180000-000000-a1b2c3d4"
+        candidate_id = "mcp-experiment-20260824-180100-000000-b1c2d3e4"
         self.make_experiment_result(
             baseline_id,
             [
                 self.experiment_point(
                     0,
-                    {"R": "1k", "C": "10n"},
+                    {"R": "1k"},
                     {"gain": 2.0, "baseline_only": 4.0},
                     [self.experiment_check(1200.0, True)],
                 ),
@@ -1416,26 +1542,26 @@ class MCPServerTests(unittest.TestCase):
                     {},
                     [self.experiment_check(900.0, False)],
                 ),
-                self.experiment_point(2, {"R": "1k"}, {}, []),
+                self.experiment_point(2, {"R": "3k"}, {}, []),
             ],
         )
         self.make_experiment_result(
             candidate_id,
             [
                 self.experiment_point(
-                    7,
-                    {"C": "10n", "R": "1k"},
+                    0,
+                    {"R": "1k"},
                     {"gain": 1.5},
                     [self.experiment_check(900.0, False)],
                 ),
                 self.experiment_point(
-                    9,
+                    1,
                     {"R": "2k"},
                     {},
                     [self.experiment_check(1200.0, True)],
                 ),
                 self.experiment_point(
-                    8,
+                    2,
                     {"R": "1000"},
                     {"candidate_only": 3.0},
                     [],
@@ -1473,8 +1599,8 @@ class MCPServerTests(unittest.TestCase):
         self.assertNotIn(b"<img", first_markdown)
 
     def test_compare_experiments_rejects_invalid_artifacts_before_output(self) -> None:
-        baseline_id = "mcp-experiment-baseline"
-        candidate_id = "mcp-experiment-candidate"
+        baseline_id = "mcp-experiment-20260824-180000-000000-a1b2c3d4"
+        candidate_id = "mcp-experiment-20260824-180100-000000-b1c2d3e4"
         duplicate = self.experiment_point(
             0,
             {"R": "1k"},
@@ -1484,7 +1610,7 @@ class MCPServerTests(unittest.TestCase):
         self.make_experiment_result(baseline_id, [duplicate, {**duplicate, "index": 1}])
         self.make_experiment_result(candidate_id, [], status="running")
 
-        with self.assertRaisesRegex(ValueError, "duplicate parameter map"):
+        with self.assertRaisesRegex(ValueError, "Cartesian definition"):
             mcp_server.compare_experiments(baseline_id, candidate_id)
         self.assertFalse((self.runs / "comparisons").exists())
 
@@ -1506,8 +1632,8 @@ class MCPServerTests(unittest.TestCase):
         self.assertFalse((self.runs / "comparisons").exists())
 
     def test_compare_experiments_rejects_nonfinite_deltas_before_output(self) -> None:
-        baseline_id = "mcp-experiment-baseline"
-        candidate_id = "mcp-experiment-candidate"
+        baseline_id = "mcp-experiment-20260824-180000-000000-a1b2c3d4"
+        candidate_id = "mcp-experiment-20260824-180100-000000-b1c2d3e4"
         self.make_experiment_result(
             baseline_id,
             [self.experiment_point(0, {"R": "1k"}, {"extreme": -1e308}, [])],
@@ -1537,8 +1663,8 @@ class MCPServerTests(unittest.TestCase):
         self.assertFalse((self.runs / "comparisons").exists())
 
     def test_compare_experiments_confines_comparison_output(self) -> None:
-        baseline_id = "mcp-experiment-baseline"
-        candidate_id = "mcp-experiment-candidate"
+        baseline_id = "mcp-experiment-20260824-180000-000000-a1b2c3d4"
+        candidate_id = "mcp-experiment-20260824-180100-000000-b1c2d3e4"
         point = self.experiment_point(0, {"R": "1k"}, {}, [])
         self.make_experiment_result(baseline_id, [point])
         self.make_experiment_result(candidate_id, [point])
@@ -1554,8 +1680,8 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(list(outside.iterdir()), [])
 
     def test_compare_experiments_works_through_mcp_protocol(self) -> None:
-        baseline_id = "mcp-experiment-baseline"
-        candidate_id = "mcp-experiment-candidate"
+        baseline_id = "mcp-experiment-20260824-180000-000000-a1b2c3d4"
+        candidate_id = "mcp-experiment-20260824-180100-000000-b1c2d3e4"
         point = self.experiment_point(
             0, {"R": "1k"}, {"gain": 2.0}, [self.experiment_check(1200.0, True)]
         )
@@ -1623,6 +1749,17 @@ class MCPServerTests(unittest.TestCase):
             ["independent", "native"],
         )
         self.assertIn("completed", query_schema["status"]["anyOf"][0]["enum"])
+
+    def test_only_one_durable_manager_can_own_a_runs_directory(self) -> None:
+        first = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "already owns"):
+                mcp_server.ExperimentJobManager(self.runs, workers=1)
+        finally:
+            first.shutdown()
+
+        replacement = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        replacement.shutdown()
 
     def test_experiment_report_works_through_mcp_protocol(self) -> None:
         expected = {
@@ -2516,6 +2653,26 @@ class MCPServerTests(unittest.TestCase):
 
         self.assertEqual(finished["status"], "failed")
         self.assertIn("invalid point checkpoint", finished["error"])
+
+    def test_experiment_job_rejects_a_symlinked_directory_outside_runs(self) -> None:
+        experiment_id = "mcp-experiment-20260824-120000-000000-deadbeef"
+        outside = self.root / "outside" / experiment_id
+        outside.mkdir(parents=True)
+        (outside / "experiment_manifest.json").write_text(
+            json.dumps({"experiment_id": experiment_id, "status": "defined"}),
+            encoding="utf-8",
+        )
+        try:
+            (self.runs / experiment_id).symlink_to(outside, target_is_directory=True)
+        except OSError as exc:
+            self.skipTest(f"directory symlinks unavailable: {exc}")
+
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        try:
+            with self.assertRaisesRegex(ValueError, "inside the runs directory"):
+                manager.snapshot(experiment_id)
+        finally:
+            manager.shutdown()
 
     def test_experiment_job_rejects_an_unsupported_engine_version(self) -> None:
         first_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)

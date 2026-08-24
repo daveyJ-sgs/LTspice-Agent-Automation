@@ -24,6 +24,8 @@ import waveform_metrics
 
 MAX_EXPERIMENT_POINTS = 1000
 MAX_EXPERIMENT_WORKERS = 4
+MAX_WAVEFORM_ANALYSES = 32
+MAX_REQUIREMENTS_PER_EXPERIMENT = 256
 EXPERIMENT_ENGINE_VERSION = 1
 
 
@@ -51,6 +53,8 @@ def _validate_reuse_cache(reuse_cache: bool) -> None:
 
 class WaveformAnalysisResult(TypedDict):
     raw_file: str
+    raw_sha256: NotRequired[str]
+    raw_size_bytes: NotRequired[int]
     variable: str
     axis_variable: str
     step_index: int
@@ -228,6 +232,10 @@ def _prepare_experiment(
         raise ValueError("parameters must be a non-empty list")
     if not isinstance(waveform_analyses, list):
         raise ValueError("waveform_analyses must be a list")
+    if len(waveform_analyses) > MAX_WAVEFORM_ANALYSES:
+        raise ValueError(
+            f"experiment is limited to {MAX_WAVEFORM_ANALYSES} waveform analyses"
+        )
     if derived_parameters is None:
         derived_parameters = []
     if not isinstance(derived_parameters, list):
@@ -348,6 +356,7 @@ def _prepare_experiment(
                 )
 
     analysis_names: set[str] = set()
+    requirement_count = 0
     supported_metrics = (
         waveform_metrics.SUPPORTED_METRICS | frequency_domain_metrics.SUPPORTED_METRICS
     )
@@ -365,6 +374,12 @@ def _prepare_experiment(
             raise ValueError(f"waveform analysis {name} variable must be non-empty")
         if not isinstance(requirements, list) or not requirements:
             raise ValueError(f"waveform analysis {name} requirements must be non-empty")
+        requirement_count += len(requirements)
+        if requirement_count > MAX_REQUIREMENTS_PER_EXPERIMENT:
+            raise ValueError(
+                "experiment is limited to "
+                f"{MAX_REQUIREMENTS_PER_EXPERIMENT} waveform requirements"
+            )
         for field in (
             "axis_variable",
             "secondary_variable",
@@ -566,6 +581,11 @@ def _write_experiment_csv(
     parameter_order: list[str],
     points: list[ExperimentPointResult],
 ) -> None:
+    def spreadsheet_safe(value: object) -> object:
+        if isinstance(value, str) and value.startswith(("=", "+", "-", "@")):
+            return f"'{value}"
+        return value
+
     measurement_names = sorted(
         {
             name
@@ -591,14 +611,14 @@ def _write_experiment_csv(
                 {
                     "point_index": point["index"],
                     **{
-                        f"parameter.{name}": point["parameters"][name]
+                        f"parameter.{name}": spreadsheet_safe(point["parameters"][name])
                         for name in parameter_order
                     },
                     "simulation_status": point["simulation_status"],
                     "all_passed": point["all_passed"],
                     "duration_seconds": point["duration_seconds"],
-                    "run_dir": point["run_dir"],
-                    "error": point["error"],
+                    "run_dir": spreadsheet_safe(point["run_dir"]),
+                    "error": spreadsheet_safe(point["error"]),
                     **{
                         f"measurement.{name}": value
                         for name, value in point["measurements"].items()
@@ -809,48 +829,12 @@ def _normalize_comparison_point(point: object) -> dict[str, object]:
 def _load_comparison_experiment(
     runs_dir: Path, experiment_id: str
 ) -> tuple[list[dict[str, object]], str]:
-    experiment_dir = _comparison_experiment_path(runs_dir, experiment_id)
-    results_path = experiment_dir / "results.json"
-    try:
-        raw = results_path.read_bytes()
-        document = json.loads(raw.decode("utf-8"))
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Experiment results not found: {experiment_id}") from None
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"Invalid results.json for {experiment_id}: {exc}") from exc
-    if not isinstance(document, dict):
-        raise ValueError(f"results.json for {experiment_id} must contain an object")
-    if document.get("experiment_id") != experiment_id:
-        raise ValueError(f"results.json experiment_id does not match {experiment_id}")
-    if document.get("status") != "completed":
-        raise ValueError(f"Experiment {experiment_id} is not completed")
-    if not isinstance(document.get("points"), list):
-        raise ValueError(f"results.json for {experiment_id} must contain a points list")
+    import experiment_index
+
+    _, _, document, record = experiment_index.load_completed_experiment(
+        runs_dir, experiment_id
+    )
     points = [_normalize_comparison_point(point) for point in document["points"]]
-    counts: dict[str, int] = {}
-    for field in (
-        "point_count",
-        "completed_points",
-        "error_points",
-        "passed_points",
-        "failed_points",
-    ):
-        value = document.get(field)
-        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-            raise ValueError(f"results.json {field} must be a nonnegative integer")
-        counts[field] = value
-    all_passed = document.get("all_passed")
-    if not isinstance(all_passed, bool):
-        raise ValueError("results.json all_passed must be a boolean")
-    if counts["point_count"] == 0 or counts["point_count"] != len(points):
-        raise ValueError("results.json point_count must match its non-empty points list")
-    if (
-        counts["completed_points"] > counts["point_count"]
-        or counts["error_points"] > counts["point_count"]
-        or counts["passed_points"] + counts["failed_points"] != counts["point_count"]
-        or all_passed != (counts["passed_points"] == counts["point_count"])
-    ):
-        raise ValueError("results.json aggregate counts are inconsistent")
     indexes: set[int] = set()
     parameter_keys: set[str] = set()
     for point in points:
@@ -863,7 +847,7 @@ def _load_comparison_experiment(
         indexes.add(index)  # type: ignore[arg-type]
         parameter_keys.add(parameter_key)  # type: ignore[arg-type]
     points.sort(key=lambda point: point["index"])
-    return points, hashlib.sha256(raw).hexdigest()
+    return points, str(record["results_sha256"])
 
 
 def _compare_measurements(
@@ -1306,6 +1290,52 @@ def run_experiment_sync(
     return result
 
 
+class _RunsProcessLock:
+    """Hold one cross-platform advisory lock for a runs directory."""
+
+    def __init__(self, path: Path) -> None:
+        if path.is_symlink():
+            raise ValueError("experiment manager lock must not be a symlink")
+        self._handle = path.open("a+b")
+        self._handle.seek(0, os.SEEK_END)
+        if self._handle.tell() == 0:
+            self._handle.write(b"\0")
+            self._handle.flush()
+        self._handle.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            self._handle.close()
+            raise RuntimeError(
+                "another experiment manager already owns this runs directory"
+            ) from exc
+        self._released = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+        try:
+            self._handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._handle.close()
+            self._released = True
+
+
 class ExperimentJobManager:
     """Runs one durable experiment at a time with bounded point concurrency."""
 
@@ -1328,21 +1358,26 @@ class ExperimentJobManager:
         self._execute_point = execute_point
         self._execute_native = execute_native
         self.runs_dir.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.RLock()
-        self._stopping = threading.Event()
-        self._events: dict[str, threading.Event] = {}
-        self._queue: queue.Queue[str | None] = queue.Queue()
-        self._executor = ThreadPoolExecutor(
-            max_workers=workers,
-            thread_name_prefix="ltspice-experiment-point",
-        )
-        self._recover_jobs()
-        self._coordinator = threading.Thread(
-            target=self._coordinate,
-            name="ltspice-experiment-coordinator",
-            daemon=True,
-        )
-        self._coordinator.start()
+        self._process_lock = _RunsProcessLock(self.runs_dir / ".experiment-manager.lock")
+        try:
+            self._lock = threading.RLock()
+            self._stopping = threading.Event()
+            self._events: dict[str, threading.Event] = {}
+            self._queue: queue.Queue[str | None] = queue.Queue()
+            self._executor = ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="ltspice-experiment-point",
+            )
+            self._recover_jobs()
+            self._coordinator = threading.Thread(
+                target=self._coordinate,
+                name="ltspice-experiment-coordinator",
+                daemon=True,
+            )
+            self._coordinator.start()
+        except Exception:
+            self._process_lock.release()
+            raise
 
     def _experiment_dir(self, experiment_id: str) -> Path:
         if (
@@ -1353,9 +1388,17 @@ class ExperimentJobManager:
             or "\\" in experiment_id
         ):
             raise ValueError("invalid experiment_id")
-        experiment_dir = self.runs_dir / experiment_id
-        if not experiment_dir.is_dir():
+        candidate = self.runs_dir / experiment_id
+        if not candidate.is_dir():
             raise FileNotFoundError(f"experiment not found: {experiment_id}")
+        runs_dir = self.runs_dir.resolve()
+        experiment_dir = candidate.resolve()
+        try:
+            experiment_dir.relative_to(runs_dir)
+        except ValueError as exc:
+            raise ValueError("experiment must remain inside the runs directory") from exc
+        if experiment_dir.parent != runs_dir or experiment_dir.name != experiment_id:
+            raise ValueError("experiment directory must be a direct, named child of runs")
         return experiment_dir
 
     def _load_manifest(self, experiment_id: str) -> dict[str, object]:
@@ -2094,7 +2137,10 @@ class ExperimentJobManager:
         raise TimeoutError(f"experiment did not finish within {timeout} seconds")
 
     def shutdown(self) -> None:
+        if self._stopping.is_set():
+            return
         self._stopping.set()
         self._queue.put(None)
         self._coordinator.join()
         self._executor.shutdown(wait=True)
+        self._process_lock.release()

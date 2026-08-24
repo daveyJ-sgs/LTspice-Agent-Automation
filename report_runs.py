@@ -5,31 +5,63 @@ from __future__ import annotations
 
 import html
 import json
+import os
+import uuid
 from pathlib import Path
 from urllib.parse import quote
 
 from ltspice_wrapper import RUNS_DIR, parse_measurements
 
 
+def _inside(path: Path, root: Path) -> Path:
+    resolved = path.resolve(strict=False)
+    try:
+        resolved.relative_to(root.resolve())
+    except ValueError as exc:
+        raise ValueError("dashboard artifact must remain inside the runs directory") from exc
+    return resolved
+
+
+def _write_text(path: Path, value: str) -> None:
+    if path.is_symlink():
+        raise ValueError("dashboard output path must not be a symlink")
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(value, encoding="utf-8", newline="\n")
+        os.replace(temporary, path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
 def collect_records(root: Path = RUNS_DIR) -> list[dict[str, object]]:
+    root = root.resolve()
     records: list[dict[str, object]] = []
     for manifest_path in root.rglob("run_manifest.json"):
         try:
+            manifest_path = _inside(manifest_path, root)
             manifest = json.loads(manifest_path.read_text())
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError, ValueError):
             continue
         run_dir = manifest_path.parent
         measurements: dict[str, float] = {}
         for log_path in sorted(run_dir.glob("*.log")):
             try:
+                log_path = _inside(log_path, run_dir)
                 measurements.update(parse_measurements(log_path))
             except (OSError, UnicodeError, ValueError):
                 pass
         relative_run = run_dir.relative_to(root)
         artifacts = []
-        for name in manifest.get("result_files", []):
-            path = run_dir / str(name)
-            if path.exists():
+        result_files = manifest.get("result_files", [])
+        if not isinstance(result_files, list):
+            result_files = []
+        for name in result_files:
+            try:
+                path = _inside(run_dir / str(name), run_dir)
+            except ValueError:
+                continue
+            if path.is_file():
                 relative_artifact = path.relative_to(root)
                 artifacts.append(
                     {"name": str(name), "href": quote(relative_artifact.as_posix(), safe="/")}
@@ -50,10 +82,16 @@ def collect_records(root: Path = RUNS_DIR) -> list[dict[str, object]]:
 
 
 def write_dashboard(root: Path = RUNS_DIR) -> tuple[Path, Path]:
-    records = collect_records(root)
     root.mkdir(parents=True, exist_ok=True)
-    json_path = root / "index.json"
-    json_path.write_text(json.dumps(records, indent=2, sort_keys=True) + "\n")
+    root = root.resolve()
+    json_candidate = root / "index.json"
+    html_candidate = root / "index.html"
+    if json_candidate.is_symlink() or html_candidate.is_symlink():
+        raise ValueError("dashboard output path must not be a symlink")
+    json_path = _inside(json_candidate, root)
+    html_path = _inside(html_candidate, root)
+    records = collect_records(root)
+    _write_text(json_path, json.dumps(records, indent=2, sort_keys=True) + "\n")
 
     rows = []
     for record in records:
@@ -74,8 +112,8 @@ def write_dashboard(root: Path = RUNS_DIR) -> tuple[Path, Path]:
             f"<td>{links}</td>"
             "</tr>"
         )
-    html_path = root / "index.html"
-    html_path.write_text(
+    _write_text(
+        html_path,
         """<!doctype html>
 <html lang="en"><meta charset="utf-8"><title>LTspice runs</title>
 <style>body{font:15px system-ui;margin:2rem}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccc;padding:.45rem;text-align:left;vertical-align:top}th{background:#eee}code{font-size:.85em}</style>
@@ -84,7 +122,7 @@ def write_dashboard(root: Path = RUNS_DIR) -> tuple[Path, Path]:
 <table><thead><tr><th>Status</th><th>Started</th><th>Run</th><th>Seconds</th><th>Measurements</th><th>Artifacts</th></tr></thead>
 <tbody>"""
         + "\n".join(rows)
-        + "</tbody></table></html>\n"
+        + "</tbody></table></html>\n",
     )
     return html_path, json_path
 

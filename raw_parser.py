@@ -9,6 +9,8 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
+from ltspice_text import text_encoding
+
 
 @dataclass
 class RawData:
@@ -30,7 +32,7 @@ def step_slices(data: RawData) -> list[slice]:
     boundaries = [
         index
         for index in range(1, len(real_axis))
-        if real_axis[index] <= real_axis[index - 1]
+        if real_axis[index] < real_axis[index - 1]
     ]
     starts = [0, *boundaries]
     stops = [*boundaries, len(real_axis)]
@@ -47,7 +49,7 @@ def _step_shape(values: list[float | complex]) -> tuple[int, int | None]:
     if len(values) < 2:
         return 1, len(values)
     axis = [float(value.real if isinstance(value, complex) else value) for value in values]
-    boundaries = [index for index in range(1, len(axis)) if axis[index] <= axis[index - 1]]
+    boundaries = [index for index in range(1, len(axis)) if axis[index] < axis[index - 1]]
     if not boundaries:
         return 1, len(axis)
     starts = [0, *boundaries]
@@ -55,20 +57,22 @@ def _step_shape(values: list[float | complex]) -> tuple[int, int | None]:
     return len(lengths), lengths[0] if len(set(lengths)) == 1 else None
 
 
-def _header_and_data_offset(raw: bytes) -> tuple[str, int, str]:
-    for encoding in ("utf-16le", "utf-8"):
-        for section, mode in (("Binary:\n", "binary"), ("Values:\n", "values")):
-            marker = section.encode(encoding)
+def _header_and_data_offset(raw: bytes) -> tuple[str, int, str, str]:
+    encoding = text_encoding(raw)
+    for section, mode in (("Binary:", "binary"), ("Values:", "values")):
+        for newline in ("\r\n", "\n"):
+            marker = (section + newline).encode(encoding)
             offset = raw.find(marker)
             if offset >= 0:
                 end = offset + len(marker)
-                return raw[:end].decode(encoding), end, mode
+                header = raw[:end].decode(encoding).removeprefix("\ufeff")
+                return header, end, mode, encoding
     raise ValueError("Could not find a Binary or Values section in the .raw file")
 
 
 def parse_raw(path: Path) -> RawData:
     raw = path.read_bytes()
-    header, data_offset, data_mode = _header_and_data_offset(raw)
+    header, data_offset, data_mode, text_encoding_name = _header_and_data_offset(raw)
     lines = header.splitlines()
 
     def header_value(prefix: str) -> str:
@@ -97,9 +101,20 @@ def parse_raw(path: Path) -> RawData:
         )
 
     if data_mode == "values":
-        text = raw[data_offset:].decode("utf-16le")
+        text = raw[data_offset:].decode(text_encoding_name)
         rows = [line for line in text.splitlines() if line.strip()]
         values = {name: [] for name in variables}
+        is_complex = "complex" in flags.lower()
+
+        def ascii_value(token: str) -> float | complex:
+            token = token.strip().strip("()")
+            if not is_complex:
+                return float(token)
+            parts = token.split(",")
+            if len(parts) != 2:
+                raise ValueError(f"Invalid complex Values entry in {path}")
+            return complex(float(parts[0]), float(parts[1]))
+
         cursor = 0
         for point in range(point_count):
             if cursor >= len(rows):
@@ -112,7 +127,7 @@ def parse_raw(path: Path) -> RawData:
                     parts = parts[1:]
                 if not parts:
                     raise ValueError(f"Missing value at point {point} in {path}")
-                values[name].append(float(parts[-1]))
+                values[name].append(ascii_value(parts[-1]))
                 cursor += 1
         step_count, points_per_step = _step_shape(values[variables[0]])
         return RawData(flags=flags, variables=variables, values=values, step_count=step_count, points_per_step=points_per_step)
@@ -187,13 +202,18 @@ def parse_raw(path: Path) -> RawData:
 
 def export_csv(data: RawData, path: Path) -> None:
     """Write each vector as real/imaginary columns in a portable CSV file."""
+    def spreadsheet_safe(value: str) -> str:
+        return f"'{value}" if value.startswith(("=", "+", "-", "@")) else value
+
     columns = ["point"]
     for name in data.variables:
         sample = data.values[name][0]
         if isinstance(sample, complex):
-            columns.extend([f"{name}_real", f"{name}_imag"])
+            columns.extend(
+                [spreadsheet_safe(f"{name}_real"), spreadsheet_safe(f"{name}_imag")]
+            )
         else:
-            columns.append(name)
+            columns.append(spreadsheet_safe(name))
 
     with path.open("w", newline="") as handle:
         writer = csv.writer(handle)

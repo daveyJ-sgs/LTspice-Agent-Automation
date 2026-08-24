@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import experiment_visualization
+import experiment_index
 from raw_parser import RawData
 
 
@@ -54,6 +55,7 @@ class ExperimentVisualizationTests(unittest.TestCase):
             "all_passed": passed,
             "created_at": "2026-08-24T18:00:00-07:00",
             "updated_at": "2026-08-24T18:00:01-07:00",
+            "definition_hash": experiment_index._definition_hash(definition),
         }
         requirement = {
             "metric": "ac_gain_db",
@@ -120,6 +122,9 @@ class ExperimentVisualizationTests(unittest.TestCase):
         manifest_path = directory / "experiment_manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["definition"]["parameters"][0]["values"].append("2k")
+        manifest["definition_hash"] = experiment_index._definition_hash(
+            manifest["definition"]
+        )
         manifest["point_count"] = 2
         manifest["finished_points"] = 2
         manifest["completed_points"] = 2
@@ -261,10 +266,13 @@ class ExperimentVisualizationTests(unittest.TestCase):
 
     def test_comparison_report_confines_output_to_runs(self) -> None:
         outside = Path(self.temporary_directory.name) / "outside"
-        with patch.object(
-            experiment_visualization.experiment_engine,
-            "compare_experiments",
-            return_value={"comparison_dir": str(outside)},
+        with (
+            patch.object(experiment_visualization, "_comparison_plots", return_value=[]),
+            patch.object(
+                experiment_visualization.experiment_engine,
+                "compare_experiments",
+                return_value={"comparison_dir": str(outside)},
+            ),
         ):
             with self.assertRaisesRegex(ValueError, "inside the runs directory"):
                 experiment_visualization.build_comparison_report(

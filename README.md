@@ -121,7 +121,8 @@ Each run gets its own timestamped directory under `runs/`. LTspice writes the
 simulation results there, including the `.raw` and `.log` files. Scalar `.meas`
 results are also extracted from the log and printed. Every run includes a
 `run_manifest.json` file containing the command, paths, netlist hash, options,
-timing, status, and output file list.
+timing, status, output file list, and SHA-256/size records for generated
+artifacts.
 
 ## Run an existing netlist
 
@@ -134,6 +135,12 @@ Use `--output-dir` when a stable output location is preferable:
 ```bash
 python3 ltspice_wrapper.py examples/rc_lowpass.cir --output-dir runs/latest
 ```
+
+An explicit output directory must not already exist; the wrapper creates it
+atomically. This prevents concurrent callers from sharing a directory and an older
+RAW or log file from being mistaken for evidence from the current simulation.
+Resolvable relative `.include`, `.inc`, and `.lib` references are rewritten in
+the staged deck so they retain their source-directory meaning.
 
 Text netlists (`.cir`/`.net`) are the most portable automation boundary. The
 wrapper can attempt `.asc` schematics, but older or version-specific schematic
@@ -303,8 +310,8 @@ The service exposes `GET /health`, `GET /runs`, `GET /jobs`, `GET /jobs/{job_id}
 JSON containing `netlist`, optional `filename`, optional `ascii`, and optional
 `timeout`. The async endpoint returns a job ID immediately; poll its job URL
 until the status is `completed` or `failed`. It binds to `127.0.0.1` by
-default; do not expose it on a network interface without adding authentication
-and authorization.
+default. The current server accepts only numeric `127.0.0.1`; an authenticated
+network mode is intentionally outside this local bridge.
 
 ## Use the MCP server
 
@@ -341,8 +348,9 @@ Or run it directly for any stdio MCP client:
 Every run tool returns a `run_dir`; pass it to `get_measurements`,
 `get_waveform`, or `export_waveform_csv` to pull results without re-running
 the simulation. `get_waveform` downsamples by default (`max_points=200`) to
-keep vectors small in an agent's context; request a higher `max_points` or
-use `export_waveform_csv` for full resolution. This server has the same
+keep vectors small in an agent's context and always retains both endpoints;
+responses are capped at 10,000 points. Use `export_waveform_csv` for full
+resolution. This server has the same
 trust model as the REST API: it runs LTspice locally with no sandboxing, so
 only expose it to trusted agents.
 
@@ -504,6 +512,14 @@ escaped RAW artifacts, invalid step mappings, non-finite plot data, and
 oversized display payloads before replacing an existing report. User-provided
 labels and values are escaped in both HTML and embedded JSON.
 
+Phase 2D applies the same canonical manifest/results validation to indexing,
+individual reports, and comparisons. Schema-v2 definition hashes are
+recomputed, aggregate pass/fail counts are derived from points, and new
+waveform analyses bind their RAW evidence by SHA-256 and byte size. Reports use
+extrema-preserving display sampling so narrow glitches found by full-resolution
+analysis remain visible; the structured JSON, RAW, and CSV artifacts remain
+authoritative.
+
 ### Visualize comparisons and browse experiments
 
 Phase 2C-C3 adds two derived, human-facing views while keeping JSON, CSV, RAW,
@@ -552,10 +568,11 @@ new run directory; measurement and waveform analysis still execute normally
 against those copied artifacts.
 
 Caching is disabled by default and fails closed. B1 deliberately bypasses
-model-dependent devices, unresolved includes, dynamic file inputs, corrupt
-entries, and pre-existing nonempty output directories because LTspice may
-resolve data through implicit installation or user libraries that cannot yet
-be fingerprinted confidently. These runs continue through LTspice normally.
+model-dependent devices, unresolved includes, dynamic file inputs, and corrupt
+entries because LTspice may resolve data through implicit installation or user
+libraries that cannot yet be fingerprinted confidently. Explicit nonempty
+output directories are rejected before any input, manifest, or simulation
+artifact is written.
 Every `run_manifest.json` records whether caching was requested, whether the
 run was eligible, its cache key, hit/miss state, whether a new entry was stored,
 and any bypass reason. Cache entries live under `runs/cache/`.

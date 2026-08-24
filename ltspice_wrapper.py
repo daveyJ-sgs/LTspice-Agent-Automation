@@ -22,6 +22,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable
 
+from ltspice_text import decode_text
+
 
 def _default_ltspice() -> Path:
     configured = os.environ.get("LTSPICE_EXECUTABLE")
@@ -163,6 +165,25 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _result_artifacts(output_dir: Path, netlist_name: str) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    for path in sorted(output_dir.iterdir()):
+        if (
+            not path.is_file()
+            or path.is_symlink()
+            or path.name in {"run_manifest.json", netlist_name}
+        ):
+            continue
+        records.append(
+            {
+                "name": path.name,
+                "sha256": _sha256_file(path),
+                "size_bytes": path.stat().st_size,
+            }
+        )
+    return records
+
+
 _DEPENDENCY_DIRECTIVE = re.compile(
     r"^\s*\.(?:include|inc|lib)\s+(?:\"([^\"]+)\"|'([^']+)'|(\S+))",
     re.IGNORECASE | re.MULTILINE,
@@ -171,6 +192,45 @@ _UNSUPPORTED_EXTERNAL_INPUT = re.compile(
     r"(?:\bfile\s*(?:=|\()|^\s*\.(?:loadbias|savebias|wave)\b)",
     re.IGNORECASE | re.MULTILINE,
 )
+
+
+def _stage_netlist(source: Path, destination: Path) -> None:
+    """Stage a deck while keeping resolvable relative include paths meaningful."""
+    text = source.read_text(encoding="utf-8")
+
+    def absolute_reference(match: re.Match[str]) -> str:
+        group = next(index for index in range(1, 4) if match.group(index) is not None)
+        reference = match.group(group)
+        assert reference is not None
+        candidate = Path(reference).expanduser()
+        if not candidate.is_absolute():
+            candidate = source.parent / candidate
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            return match.group(0)
+        if not resolved.is_file() or Path(reference).is_absolute():
+            return match.group(0)
+        replacement = str(resolved)
+        if '"' in replacement:
+            raise ValueError("relative include path cannot contain a double quote")
+        start, end = match.span(group)
+        relative_start = start - match.start()
+        relative_end = end - match.start()
+        if group in {1, 2}:
+            relative_start -= 1
+            relative_end += 1
+        return (
+            match.group(0)[:relative_start]
+            + f'"{replacement}"'
+            + match.group(0)[relative_end:]
+        )
+
+    destination.write_text(
+        _DEPENDENCY_DIRECTIVE.sub(absolute_reference, text),
+        encoding="utf-8",
+        newline="",
+    )
 
 
 def _unsupported_cache_input(text: str, source: Path) -> str | None:
@@ -456,11 +516,13 @@ def run_netlist(
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         output_dir = RUNS_DIR / stamp
     output_dir = output_dir.expanduser().resolve()
-    output_was_nonempty = output_dir.is_dir() and any(output_dir.iterdir())
-    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        output_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise ValueError("output directory must not already exist") from exc
 
     run_netlist_path = output_dir / netlist_path.name
-    shutil.copy2(netlist_path, run_netlist_path)
+    _stage_netlist(netlist_path, run_netlist_path)
     manifest_path = output_dir / "run_manifest.json"
     started_at = datetime.now().astimezone()
     started_clock = time.monotonic()
@@ -505,8 +567,6 @@ def run_netlist(
             timeout_seconds,
             ascii_raw,
         )
-        if output_was_nonempty:
-            cache_problem = "output directory was not empty before this run"
         if cache_key is not None and cache_problem is None:
             cache_entry = resolved_cache_dir / f"simulation-{cache_key}"
             if cache_entry.is_dir() and not cache_entry.is_symlink() and _restore_cache_entry(
@@ -542,6 +602,7 @@ def run_netlist(
                         {item.name for item in output_dir.iterdir()}
                         | {"run_manifest.json"}
                     ),
+                    result_artifacts=_result_artifacts(output_dir, netlist_path.name),
                 )
                 _write_manifest(manifest_path, manifest)
                 return output_dir
@@ -606,6 +667,7 @@ def run_netlist(
         stdout=completed.stdout[-4000:],
         stderr=completed.stderr[-4000:],
         result_files=sorted(item.name for item in output_dir.iterdir()),
+        result_artifacts=_result_artifacts(output_dir, netlist_path.name),
         execution_source="simulator",
     )
     if reuse_cache and cache_key is not None and cache_request is not None:
@@ -648,15 +710,7 @@ def run_netlist(
 
 def parse_measurements(log_path: Path) -> dict[str, float]:
     """Extract scalar .meas values from an LTspice log file."""
-    raw_log = log_path.read_bytes()
-    for encoding in ("utf-16le", "utf-8"):
-        try:
-            text = raw_log.decode(encoding)
-            break
-        except UnicodeDecodeError:
-            continue
-    else:
-        raise UnicodeDecodeError("unknown", raw_log, 0, len(raw_log), "unsupported log encoding")
+    text = _decode_log(log_path)
 
     measurements: dict[str, float] = {}
     pattern = re.compile(
@@ -670,13 +724,7 @@ def parse_measurements(log_path: Path) -> dict[str, float]:
 
 
 def _decode_log(log_path: Path) -> str:
-    raw_log = log_path.read_bytes()
-    for encoding in ("utf-16le", "utf-8"):
-        try:
-            return raw_log.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-    raise UnicodeDecodeError("unknown", raw_log, 0, len(raw_log), "unsupported log encoding")
+    return decode_text(log_path.read_bytes())
 
 
 def parse_stepped_measurements(log_path: Path, name: str) -> list[float]:

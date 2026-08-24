@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import tempfile
 import threading
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -42,6 +44,8 @@ PROJECT_DIR = wrapper.PROJECT_DIR
 RUNS_DIR = wrapper.RUNS_DIR
 EXAMPLES_DIR = PROJECT_DIR / "examples"
 MAX_EXPERIMENT_WORKERS = experiment_engine.MAX_EXPERIMENT_WORKERS
+MAX_WAVEFORM_RESPONSE_POINTS = 10_000
+MAX_LEGACY_SWEEP_POINTS = experiment_engine.MAX_EXPERIMENT_POINTS
 
 # Re-export schema types and tested helper seams while keeping their
 # implementation independent of MCP.
@@ -98,13 +102,17 @@ def _series_to_json(values: list[float | complex]) -> list[float] | dict[str, li
     return list(values)
 
 
-def _within_runs(path: Path) -> Path:
+def _within_directory(path: Path, root: Path, message: str) -> Path:
     resolved = path.expanduser().resolve()
     try:
-        resolved.relative_to(RUNS_DIR.resolve())
+        resolved.relative_to(root.resolve())
     except ValueError as exc:
-        raise ValueError(f"Path must be inside the runs directory: {resolved}") from exc
+        raise ValueError(f"{message}: {resolved}") from exc
     return resolved
+
+
+def _within_runs(path: Path) -> Path:
+    return _within_directory(path, RUNS_DIR, "Path must be inside the runs directory")
 
 
 def _resolve_run_dir(run_dir: str) -> Path:
@@ -131,11 +139,23 @@ def _find_raw(run_dir: Path, raw_filename: str | None) -> Path:
     if raw_filename:
         if Path(raw_filename).name != raw_filename or "/" in raw_filename or "\\" in raw_filename:
             raise ValueError("raw_filename must be a plain file name")
-        candidate = run_dir / raw_filename
+        candidate = _within_directory(
+            run_dir / raw_filename,
+            run_dir,
+            "Raw file must remain inside the run directory",
+        )
         if not candidate.is_file():
             raise FileNotFoundError(f"Raw file not found: {candidate}")
         return candidate
-    raw_files = sorted(run_dir.glob("*.raw"))
+    raw_files = [
+        _within_directory(
+            path,
+            run_dir,
+            "Raw file must remain inside the run directory",
+        )
+        for path in sorted(run_dir.glob("*.raw"))
+    ]
+    raw_files = [path for path in raw_files if path.is_file()]
     if not raw_files:
         raise FileNotFoundError(f"No .raw file found in {run_dir}")
     # Prefer a transient/AC/step result over a bias-point (.op.raw) file.
@@ -147,6 +167,11 @@ def _summarize_run(output_dir: Path) -> dict[str, object]:
     manifest = json.loads((output_dir / "run_manifest.json").read_text())
     measurements: dict[str, float] = {}
     for log_path in sorted(output_dir.glob("*.log")):
+        log_path = _within_directory(
+            log_path,
+            output_dir,
+            "Log file must remain inside the run directory",
+        )
         try:
             measurements.update(wrapper.parse_measurements(log_path))
         except (OSError, UnicodeError, ValueError):
@@ -548,7 +573,15 @@ def run_netlist_file(
 def get_measurements(run_dir: str) -> dict[str, float]:
     """Return the scalar .meas values recorded in a run's log file(s)."""
     resolved = _resolve_run_dir(run_dir)
-    logs = sorted(resolved.glob("*.log"))
+    logs = [
+        _within_directory(
+            path,
+            resolved,
+            "Log file must remain inside the run directory",
+        )
+        for path in sorted(resolved.glob("*.log"))
+    ]
+    logs = [path for path in logs if path.is_file()]
     if not logs:
         raise FileNotFoundError(f"No .log file found in {resolved}")
     measurements: dict[str, float] = {}
@@ -571,8 +604,14 @@ def get_waveform(
     downsamples each vector; set it high (or to the reported total_points)
     for full resolution.
     """
-    if not isinstance(max_points, int) or isinstance(max_points, bool) or max_points <= 0:
-        raise ValueError("max_points must be a positive integer")
+    if (
+        not isinstance(max_points, int)
+        or isinstance(max_points, bool)
+        or not 1 <= max_points <= MAX_WAVEFORM_RESPONSE_POINTS
+    ):
+        raise ValueError(
+            f"max_points must be between 1 and {MAX_WAVEFORM_RESPONSE_POINTS}"
+        )
     resolved = _resolve_run_dir(run_dir)
     raw_path = _find_raw(resolved, raw_filename)
     data = raw_parser.parse_raw(raw_path)
@@ -585,9 +624,13 @@ def get_waveform(
     total_points = data.points
     if total_points <= max_points:
         indices = range(total_points)
+    elif max_points == 1:
+        indices = [0]
     else:
-        step = total_points / max_points
-        indices = [int(i * step) for i in range(max_points)]
+        indices = [
+            round(index * (total_points - 1) / (max_points - 1))
+            for index in range(max_points)
+        ]
 
     series = {
         name: _series_to_json([data.values[name][i] for i in indices]) for name in wanted
@@ -760,6 +803,8 @@ def analyze_waveform(
 
     response: WaveformAnalysisResult = {
         "raw_file": str(raw_path),
+        "raw_sha256": wrapper._sha256_file(raw_path),
+        "raw_size_bytes": raw_path.stat().st_size,
         "variable": variable,
         "axis_variable": axis_name,
         "step_index": 0 if step_index is None else step_index,
@@ -778,8 +823,21 @@ def export_waveform_csv(run_dir: str, raw_filename: str | None = None) -> dict[s
     resolved = _resolve_run_dir(run_dir)
     raw_path = _find_raw(resolved, raw_filename)
     data = raw_parser.parse_raw(raw_path)
-    csv_path = raw_path.with_suffix(".csv")
-    raw_parser.export_csv(data, csv_path)
+    csv_candidate = raw_path.with_suffix(".csv")
+    if csv_candidate.is_symlink():
+        raise ValueError("CSV export path must not be a symlink")
+    csv_path = _within_directory(
+        csv_candidate,
+        resolved,
+        "CSV export must remain inside the run directory",
+    )
+    temporary = csv_path.with_name(f".{csv_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        raw_parser.export_csv(data, temporary)
+        os.replace(temporary, csv_path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
     return {"csv_path": str(csv_path), "rows": data.points, "variables": data.variables}
 
 
@@ -801,6 +859,10 @@ def run_parameter_sweep(
     """
     if not values:
         raise ValueError("values must be a non-empty list")
+    if len(values) > MAX_LEGACY_SWEEP_POINTS:
+        raise ValueError(
+            f"values is limited to {MAX_LEGACY_SWEEP_POINTS} sweep points"
+        )
     if not placeholder or placeholder not in netlist_template:
         raise ValueError("placeholder must occur in netlist_template")
     _netlist_filename(filename)

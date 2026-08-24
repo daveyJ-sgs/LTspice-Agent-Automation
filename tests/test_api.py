@@ -12,6 +12,11 @@ from ltspice_wrapper import LTSPICE
 
 
 class ApiTests(unittest.TestCase):
+    def test_rejects_non_loopback_binding(self) -> None:
+        for host in ("0.0.0.0", "::1", "localhost"):
+            with self.subTest(host=host), self.assertRaisesRegex(ValueError, "127.0.0.1"):
+                create_server(host=host, port=0)
+
     @unittest.skipUnless(LTSPICE.is_file(), "LTspice integration test requires an installed simulator")
     def test_health_and_simulate(self) -> None:
         server = create_server(port=0)

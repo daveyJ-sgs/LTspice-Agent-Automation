@@ -7,7 +7,7 @@ import json
 import math
 import os
 import uuid
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import TypedDict
 from urllib.parse import quote
 
@@ -56,70 +56,38 @@ def _inside(path: Path, root: Path, message: str) -> Path:
 
 
 def _artifact_path(reference: object, experiment_dir: Path, experiment_id: str) -> tuple[Path, str]:
-    if not isinstance(reference, str) or not reference:
-        raise ValueError("waveform raw_file must be a non-empty string")
-    parts = PurePosixPath(reference.replace("\\", "/")).parts
-    if experiment_id in parts:
-        parts = parts[parts.index(experiment_id) + 1 :]
-    elif reference.startswith(("/", "\\")) or (len(parts) > 0 and ":" in parts[0]):
-        raise ValueError("waveform raw_file does not identify this experiment")
-    if not parts or any(part in {"", ".", ".."} for part in parts):
-        raise ValueError("waveform raw_file path is invalid")
-    relative = Path(*parts)
-    path = _inside(
-        experiment_dir / relative,
-        experiment_dir,
-        "waveform artifact must remain inside the experiment directory",
+    return experiment_index.waveform_artifact_path(
+        reference, experiment_dir, experiment_id
     )
-    if not path.is_file():
-        raise FileNotFoundError(f"Waveform artifact not found: {relative.as_posix()}")
-    return path, relative.as_posix()
 
 
 def _load_artifacts(
     runs_dir: Path, experiment_id: str
 ) -> tuple[Path, dict[str, object], dict[str, object], dict[str, object]]:
-    runs_dir = runs_dir.resolve()
-    experiment_index._id_timestamp(experiment_id)
-    experiment_dir = _inside(
-        runs_dir / experiment_id,
-        runs_dir,
-        "experiment must remain inside the runs directory",
-    )
-    if experiment_dir.name != experiment_id or not experiment_dir.is_dir():
-        raise FileNotFoundError(f"Experiment not found: {experiment_id}")
-    manifest_path = _inside(
-        experiment_dir / "experiment_manifest.json",
-        experiment_dir,
-        "manifest must remain inside the experiment directory",
-    )
-    results_path = _inside(
-        experiment_dir / "results.json",
-        experiment_dir,
-        "results must remain inside the experiment directory",
-    )
-    manifest, manifest_hash = experiment_index._load_json(manifest_path)
-    record, parameter_records, ordinals = experiment_index._manifest_record(
-        manifest,
-        experiment_id,
-        manifest_path,
-        runs_dir,
-        manifest_hash,
-    )
-    if record["status"] != "completed":
-        raise ValueError(f"Experiment {experiment_id} is not completed")
-    results, _ = experiment_index._load_json(results_path)
-    experiment_index._result_children(results, record, parameter_records, ordinals)
-    return experiment_dir, manifest, results, record
+    return experiment_index.load_completed_experiment(runs_dir, experiment_id)
 
 
-def _sample_indices(length: int) -> list[int]:
+def _sample_indices(values: list[float]) -> list[int]:
+    """Retain endpoints and each display bucket's extrema."""
+    length = len(values)
     if length <= DISPLAY_POINT_LIMIT:
         return list(range(length))
-    return [
-        round(index * (length - 1) / (DISPLAY_POINT_LIMIT - 1))
-        for index in range(DISPLAY_POINT_LIMIT)
-    ]
+    if DISPLAY_POINT_LIMIT == 1:
+        return [0]
+    if DISPLAY_POINT_LIMIT == 2:
+        return [0, length - 1]
+    if DISPLAY_POINT_LIMIT == 3:
+        interior = max(range(1, length - 1), key=lambda index: abs(values[index]))
+        return [0, interior, length - 1]
+    bucket_count = (DISPLAY_POINT_LIMIT - 2) // 2
+    selected = {0, length - 1}
+    for bucket in range(bucket_count):
+        start = 1 + bucket * (length - 2) // bucket_count
+        stop = 1 + (bucket + 1) * (length - 2) // bucket_count
+        indexes = range(start, stop)
+        selected.add(min(indexes, key=values.__getitem__))
+        selected.add(max(indexes, key=values.__getitem__))
+    return sorted(selected)
 
 
 def _real(value: float | complex, field: str) -> float:
@@ -188,7 +156,7 @@ def _trace(
         display_floor_db = None
     if not x or len(x) != len(y):
         raise ValueError("waveform trace is empty or inconsistent")
-    indices = _sample_indices(len(x))
+    indices = _sample_indices(y)
     return {
         "label": label,
         "x": [x[index] for index in indices],

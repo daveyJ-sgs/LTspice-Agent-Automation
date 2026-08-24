@@ -10,6 +10,7 @@ import sqlite3
 import threading
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import closing
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -64,7 +65,7 @@ class JobManager:
         self.lock = threading.Lock()
         self.jobs: dict[str, dict[str, object]] = {}
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.db_path) as connection:
+        with closing(sqlite3.connect(self.db_path)) as connection, connection:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS jobs (
@@ -86,7 +87,7 @@ class JobManager:
         now = datetime.now().isoformat(timespec="seconds")
         record["updated_at"] = now
         result = record.get("result")
-        with sqlite3.connect(self.db_path) as connection:
+        with closing(sqlite3.connect(self.db_path)) as connection, connection:
             connection.execute(
                 """
                 INSERT INTO jobs(job_id, status, created_at, updated_at, result_json, error)
@@ -135,7 +136,7 @@ class JobManager:
             record = self.jobs.get(job_id)
             if record is not None:
                 return {key: value for key, value in record.items() if key != "future"}
-        with sqlite3.connect(self.db_path) as connection:
+        with closing(sqlite3.connect(self.db_path)) as connection:
             row = connection.execute(
                 "SELECT job_id, status, created_at, updated_at, result_json, error FROM jobs WHERE job_id=?",
                 (job_id,),
@@ -155,7 +156,7 @@ class JobManager:
         return snapshot
 
     def list_jobs(self) -> list[dict[str, object]]:
-        with sqlite3.connect(self.db_path) as connection:
+        with closing(sqlite3.connect(self.db_path)) as connection:
             rows = connection.execute(
                 "SELECT job_id, status, created_at, updated_at, result_json, error FROM jobs ORDER BY created_at DESC"
             ).fetchall()
@@ -208,6 +209,13 @@ class SimulationHandler(BaseHTTPRequestHandler):
         _json_response(self, HTTPStatus.NOT_FOUND, {"error": "unknown endpoint"})
 
     def _read_payload(self) -> dict[str, object] | None:
+        if self.headers.get_content_type() != "application/json":
+            _json_response(
+                self,
+                HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                {"error": "Content-Type must be application/json"},
+            )
+            return None
         try:
             content_length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -222,9 +230,16 @@ class SimulationHandler(BaseHTTPRequestHandler):
             netlist = payload["netlist"]
             if not isinstance(netlist, str) or not netlist.strip():
                 raise ValueError("netlist must be a non-empty string")
-            timeout = int(payload.get("timeout", 120))
-            if timeout < 1 or timeout > 3600:
+            timeout = payload.get("timeout", 120)
+            if (
+                not isinstance(timeout, int)
+                or isinstance(timeout, bool)
+                or not 1 <= timeout <= 3600
+            ):
                 raise ValueError("timeout must be between 1 and 3600 seconds")
+            ascii_raw = payload.get("ascii", False)
+            if not isinstance(ascii_raw, bool):
+                raise ValueError("ascii must be a boolean")
             return payload
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             _json_response(self, HTTPStatus.BAD_REQUEST, {"error": str(exc)})
@@ -251,7 +266,11 @@ class SimulationHandler(BaseHTTPRequestHandler):
             _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, job)
 
 
-def create_server(host: str = "127.0.0.1", port: int = 8765, workers: int = 1) -> ThreadingHTTPServer:
+def create_server(
+    host: str = "127.0.0.1", port: int = 8765, workers: int = 1
+) -> ThreadingHTTPServer:
+    if host != "127.0.0.1":
+        raise ValueError("the REST bridge only supports 127.0.0.1 binding")
     server = ThreadingHTTPServer((host, port), SimulationHandler)
     server.job_manager = JobManager(workers)  # type: ignore[attr-defined]
     return server

@@ -117,7 +117,7 @@ class ExperimentIndexTests(unittest.TestCase):
         if schema_version == 2:
             manifest.update(
                 engine_version=1,
-                definition_hash="definition-hash",
+                definition_hash=experiment_index._definition_hash(definition),
                 created_at=created_at or "2026-08-24T12:00:00-07:00",
                 updated_at=created_at or "2026-08-24T12:00:00-07:00",
                 finished_points=len(point_values),
@@ -268,6 +268,25 @@ class ExperimentIndexTests(unittest.TestCase):
         record = queried["experiments"][0]
         self.assertEqual(record["finished_points"], 1)
         self.assertEqual(record["point_count"], 2)
+
+    def test_schema_v2_definition_hash_is_verified(self) -> None:
+        experiment_id = "mcp-experiment-20260824-125000-000000-aabbccdd"
+        directory = self.write_experiment(
+            experiment_id,
+            schema_version=2,
+            points=[self.point(0, {"R": "1k", "C": "10n"})],
+            parameter_values={"R": ["1k"], "C": ["10n"]},
+        )
+        manifest_path = directory / "experiment_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["definition"]["netlist_template"] = "tampered\n.end\n"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        built = experiment_index.build_experiment_index(self.runs)
+
+        self.assertEqual(built["indexed_experiments"], 0)
+        self.assertEqual(built["issues"][0]["code"], "invalid_manifest")
+        self.assertIn("definition_hash", built["issues"][0]["message"])
 
     def test_malformed_artifacts_are_isolated_and_reported(self) -> None:
         valid_id = "mcp-experiment-20260824-150000-000000-feedface"

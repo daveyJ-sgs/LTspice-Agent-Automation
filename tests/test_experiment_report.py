@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import tempfile
 import unittest
@@ -8,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import experiment_report
+import experiment_index
 from raw_parser import RawData
 
 
@@ -26,6 +28,18 @@ class ExperimentReportTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
+
+    def test_display_sampling_preserves_endpoints_and_narrow_extrema(self) -> None:
+        values = [0.0] * 10_000
+        values[1] = 5.0
+        values[123] = -7.0
+        values[5000] = 9.0
+        values[9998] = -11.0
+
+        indices = experiment_report._sample_indices(values)
+
+        self.assertLessEqual(len(indices), experiment_report.DISPLAY_POINT_LIMIT)
+        self.assertTrue({0, 1, 123, 5000, 9998, 9999}.issubset(indices))
 
     def _analysis(self, step_index: int, value: float) -> dict[str, object]:
         return {
@@ -88,6 +102,7 @@ class ExperimentReportTests(unittest.TestCase):
             "all_passed": True,
             "created_at": "2026-08-24T18:00:00-07:00",
             "updated_at": "2026-08-24T18:00:01-07:00",
+            "definition_hash": experiment_index._definition_hash(definition),
         }
         points = []
         for index, resistance in enumerate(("1k", "2k")):
@@ -285,6 +300,24 @@ class ExperimentReportTests(unittest.TestCase):
         results_path.write_text(json.dumps(results), encoding="utf-8")
 
         with self.assertRaisesRegex(ValueError, "step does not match"):
+            experiment_report.build_experiment_report(self.runs, self.experiment_id)
+        self.assertFalse((self.experiment_dir / "report.html").exists())
+
+    def test_rejects_raw_artifact_that_changed_after_analysis(self) -> None:
+        results_path = self.experiment_dir / "results.json"
+        results = json.loads(results_path.read_text(encoding="utf-8"))
+        digest = hashlib.sha256(self.raw_path.read_bytes()).hexdigest()
+        for point in results["points"]:
+            analysis = point["analyses"][0]["analysis"]
+            analysis["raw_sha256"] = digest
+            analysis["raw_size_bytes"] = self.raw_path.stat().st_size
+        results_path.write_text(json.dumps(results), encoding="utf-8")
+        self.raw_path.write_bytes(b"tampered")
+
+        indexed = experiment_index.build_experiment_index(self.runs)
+        self.assertEqual(indexed["result_experiments"], 0)
+        self.assertIn("hash does not match", indexed["issues"][0]["message"])
+        with self.assertRaisesRegex(ValueError, "hash does not match"):
             experiment_report.build_experiment_report(self.runs, self.experiment_id)
         self.assertFalse((self.experiment_dir / "report.html").exists())
 
