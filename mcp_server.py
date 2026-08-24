@@ -54,14 +54,34 @@ def _series_to_json(values: list[float | complex]) -> list[float] | dict[str, li
     return list(values)
 
 
+def _within_runs(path: Path) -> Path:
+    resolved = path.expanduser().resolve()
+    try:
+        resolved.relative_to(RUNS_DIR.resolve())
+    except ValueError as exc:
+        raise ValueError(f"Path must be inside the runs directory: {resolved}") from exc
+    return resolved
+
+
+def _netlist_filename(filename: str) -> str:
+    if not filename or "/" in filename or "\\" in filename:
+        raise ValueError("filename must be a plain file name without directories")
+    if not filename.lower().endswith((".cir", ".net")):
+        filename += ".cir"
+    return filename
+
+
+def _validate_timeout(timeout_seconds: int) -> None:
+    if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+        raise ValueError("timeout_seconds must be a positive integer")
+
+
 def _resolve_run_dir(run_dir: str) -> Path:
-    """Accept an absolute path or a run_dir name relative to runs/."""
+    """Accept an in-tree absolute path or a run_dir name relative to runs/."""
     path = Path(run_dir).expanduser()
     if not path.is_absolute():
-        candidate = (RUNS_DIR / path).resolve()
-        if candidate.is_dir():
-            return candidate
-        path = path.resolve()
+        path = RUNS_DIR / path
+    path = _within_runs(path)
     if not path.is_dir():
         raise FileNotFoundError(f"Run directory not found: {run_dir}")
     return path
@@ -69,6 +89,8 @@ def _resolve_run_dir(run_dir: str) -> Path:
 
 def _find_raw(run_dir: Path, raw_filename: str | None) -> Path:
     if raw_filename:
+        if Path(raw_filename).name != raw_filename or "/" in raw_filename or "\\" in raw_filename:
+            raise ValueError("raw_filename must be a plain file name")
         candidate = run_dir / raw_filename
         if not candidate.is_file():
             raise FileNotFoundError(f"Raw file not found: {candidate}")
@@ -102,8 +124,7 @@ def _summarize_run(output_dir: Path) -> dict[str, object]:
 def _run_netlist_text(
     netlist: str, filename: str, ascii_raw: bool, timeout_seconds: int, dest_dir: Path
 ) -> Path:
-    if not filename.endswith((".cir", ".net")):
-        filename += ".cir"
+    filename = _netlist_filename(filename)
     with tempfile.TemporaryDirectory(prefix="mcp-input-") as tmp:
         source_path = Path(tmp) / filename
         source_path.write_text(netlist)
@@ -132,6 +153,7 @@ def run_netlist(
     if the simulation fails or times out. The returned run_dir can be passed
     to get_measurements, get_waveform, or export_waveform_csv.
     """
+    _validate_timeout(timeout_seconds)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     output_dir = _run_netlist_text(
         netlist, filename, ascii_raw, timeout_seconds, RUNS_DIR / f"mcp-{stamp}"
@@ -146,10 +168,14 @@ def run_netlist_file(
     ascii_raw: bool = False,
     timeout_seconds: int = 120,
 ) -> dict[str, object]:
-    """Run LTspice in batch mode on an existing .cir/.net file on disk."""
-    resolved_output = Path(output_dir).expanduser() if output_dir else None
+    """Run an existing .cir/.net file; any explicit output_dir must be under runs/."""
+    _validate_timeout(timeout_seconds)
+    netlist_path = Path(path).expanduser()
+    if netlist_path.suffix.lower() not in (".cir", ".net"):
+        raise ValueError("path must identify a .cir or .net file")
+    resolved_output = _within_runs(Path(output_dir)) if output_dir else None
     result_dir = wrapper.run_netlist(
-        Path(path),
+        netlist_path,
         output_dir=resolved_output,
         timeout_seconds=timeout_seconds,
         ascii_raw=ascii_raw,
@@ -184,6 +210,8 @@ def get_waveform(
     downsamples each vector; set it high (or to the reported total_points)
     for full resolution.
     """
+    if not isinstance(max_points, int) or isinstance(max_points, bool) or max_points <= 0:
+        raise ValueError("max_points must be a positive integer")
     resolved = _resolve_run_dir(run_dir)
     raw_path = _find_raw(resolved, raw_filename)
     data = raw_parser.parse_raw(raw_path)
@@ -243,6 +271,10 @@ def run_parameter_sweep(
     """
     if not values:
         raise ValueError("values must be a non-empty list")
+    if not placeholder or placeholder not in netlist_template:
+        raise ValueError("placeholder must occur in netlist_template")
+    _netlist_filename(filename)
+    _validate_timeout(timeout_seconds)
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     sweep_dir = RUNS_DIR / f"mcp-sweep-{stamp}"

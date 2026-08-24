@@ -8,9 +8,11 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from api_server import create_server
+from ltspice_wrapper import LTSPICE
 
 
 class ApiTests(unittest.TestCase):
+    @unittest.skipUnless(LTSPICE.is_file(), "LTspice integration test requires an installed simulator")
     def test_health_and_simulate(self) -> None:
         server = create_server(port=0)
         thread = threading.Thread(target=server.serve_forever, daemon=True)

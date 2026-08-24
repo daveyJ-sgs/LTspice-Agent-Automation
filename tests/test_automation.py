@@ -4,10 +4,11 @@ import struct
 import tempfile
 import unittest
 import json
+import platform
 from pathlib import Path
 
 from checks import assert_between, assert_close, floor, peak
-from ltspice_wrapper import parse_measurements, parse_step_values, parse_stepped_measurements, run_netlist
+from ltspice_wrapper import LTSPICE, parse_measurements, parse_step_values, parse_stepped_measurements, run_netlist
 from raw_parser import parse_raw
 from report_runs import collect_records
 from examples.design_search_rc import choose_best
@@ -137,6 +138,7 @@ Binary:
         self.assertTrue(records)
         self.assertTrue(any(record["status"] == "completed" for record in records))
 
+    @unittest.skipUnless(LTSPICE.is_file(), "LTspice integration test requires an installed simulator")
     def test_failed_run_writes_failed_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "invalid.cir"
@@ -150,6 +152,10 @@ Binary:
             # macOS build, 1 on LTspice 26.0.2 for Windows. The contract worth
             # asserting is "non-zero", not one platform's particular value.
             self.assertNotEqual(manifest["returncode"], 0)
+            self.assertEqual(manifest["runtime"]["operating_system"]["system"], platform.system())
+            self.assertIn("python", manifest["runtime"])
+            self.assertEqual(manifest["simulator"]["executable"], str(LTSPICE))
+            self.assertEqual(len(manifest["simulator"]["executable_sha256"]), 64)
 
 
 if __name__ == "__main__":

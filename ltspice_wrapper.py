@@ -5,14 +5,18 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import os
+import platform
+import plistlib
 import re
 import shutil
 import subprocess
 import sys
 import time
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -46,6 +50,64 @@ LTSPICE = _default_ltspice()
 PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_NETLIST = PROJECT_DIR / "examples" / "rc_lowpass.cir"
 RUNS_DIR = PROJECT_DIR / "runs"
+
+
+def _package_version(name: str) -> str | None:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+@lru_cache(maxsize=None)
+def _simulator_metadata(executable: str) -> dict[str, object]:
+    path = Path(executable)
+    executable_sha256 = None
+    executable_size = None
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        executable_sha256 = digest.hexdigest()
+        executable_size = path.stat().st_size
+    except OSError:
+        pass
+
+    version = os.environ.get("LTSPICE_VERSION")
+    if version is None and sys.platform == "darwin":
+        info_plist = path.parent.parent / "Info.plist"
+        if info_plist.is_file():
+            try:
+                with info_plist.open("rb") as handle:
+                    bundle = plistlib.load(handle)
+                version = bundle.get("CFBundleShortVersionString") or bundle.get("CFBundleVersion")
+            except (OSError, plistlib.InvalidFileException):
+                pass
+
+    return {
+        "executable": str(path),
+        "executable_sha256": executable_sha256,
+        "executable_size_bytes": executable_size,
+        "version": version,
+    }
+
+
+def _runtime_metadata() -> dict[str, object]:
+    return {
+        "operating_system": {
+            "system": platform.system(),
+            "release": platform.release(),
+            "version": platform.version(),
+            "machine": platform.machine(),
+        },
+        "python": {
+            "implementation": platform.python_implementation(),
+            "version": platform.python_version(),
+            "executable": sys.executable,
+        },
+        "packages": {"mcp": _package_version("mcp")},
+    }
 
 
 def _write_manifest(path: Path, manifest: dict[str, object]) -> None:
@@ -89,6 +151,8 @@ def run_netlist(
         "run_netlist": str(run_netlist_path),
         "netlist_sha256": hashlib.sha256(netlist_path.read_bytes()).hexdigest(),
         "ltspice": str(LTSPICE),
+        "simulator": _simulator_metadata(str(LTSPICE)),
+        "runtime": _runtime_metadata(),
         "command": command,
         "working_directory": str(output_dir),
         "timeout_seconds": timeout_seconds,
