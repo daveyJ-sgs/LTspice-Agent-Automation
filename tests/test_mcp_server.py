@@ -1859,6 +1859,7 @@ class MCPServerTests(unittest.TestCase):
         active = 0
         maximum_active = 0
         completion_order: list[int] = []
+        first_pair = threading.Barrier(2)
 
         def execute_point(
             index: int,
@@ -1871,6 +1872,8 @@ class MCPServerTests(unittest.TestCase):
                 active += 1
                 maximum_active = max(maximum_active, active)
             try:
+                if index < 2:
+                    first_pair.wait()
                 time.sleep(0.01 * (4 - index))
                 point_dir.mkdir(parents=True)
                 completion_order.append(index)
