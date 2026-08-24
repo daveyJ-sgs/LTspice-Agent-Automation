@@ -235,23 +235,152 @@ Windows acceptance criteria:
 
 ### Phase 3: Statistical yield and worst-case analysis
 
-Turn the current Monte Carlo example into a general tolerance engine supporting:
+Turn the standalone Monte Carlo example into a general, durable statistical
+layer over the Phase 2 experiment system. Statistical studies must reuse the
+existing simulation, waveform-analysis, checkpoint, cache, integrity,
+comparison, index, and report paths. They must not introduce a second job
+runner or weaken the existing experiment contracts.
 
-- Gaussian, uniform, bounded, discrete, and measured distributions
-- Correlated component and process variables
-- Temperature, supply, load, and device-model corners
-- Pseudorandom, Latin-hypercube, and low-discrepancy sampling
-- Reproducible seeds and complete sample provenance
-- Yield confidence intervals and adaptive sampling near failure boundaries
-- Sensitivity rankings and worst-credible-corner search
-- Distribution, yield, and tornado plots
+A statistical sampler produces an ordered, immutable point plan before
+simulation begins. This is distinct from a Cartesian sweep: the resistance,
+capacitance, temperature, and other values belonging to sample 17 remain one
+paired point rather than expanding into a cross-product. The saved point plan
+is the reproducibility boundary and can be inspected or transferred without
+running LTspice.
 
-Windows acceptance criteria:
+#### Phase 3A: Deterministic statistical point plans
 
-- Given an experiment definition and seed, generate the same sample set and
-  equivalent statistical conclusions on macOS and Windows.
-- Clearly distinguish simulator/platform numeric differences from changes in
-  the statistical experiment.
+- Add a portable explicit-point plan to the experiment engine while preserving
+  the existing Cartesian `run_experiment` behavior.
+- Define typed statistical variables, nominal values, units, distribution
+  parameters, sample count, and a required reproducibility seed.
+- Support uniform, bounded/truncated Gaussian, and weighted discrete
+  distributions as the first useful slice.
+- Use a versioned sampling algorithm and canonical decimal serialization so a
+  definition and seed produce the same ordered parameter values on macOS and
+  Windows.
+- Validate finite values, distribution bounds, weights, names, cardinality,
+  payload sizes, and placeholder coverage before creating a durable job.
+- Save the normalized definition, generator version, seed, sample ordinal, and
+  resolved parameter values in an immutable sample-plan artifact.
+- Expose a focused MCP operation that can generate and inspect the plan without
+  invoking LTspice.
+
+Verification gate:
+
+- Golden fixtures prove byte-identical sample plans across repeated runs and
+  platforms.
+- Unit tests cover invalid definitions, boundary values, stable ordering, and
+  the absence of accidental Cartesian expansion.
+- One small RC study compiles into ordinary Phase 2 execution points without a
+  parallel simulation path.
+
+#### Phase 3B: Durable yield studies
+
+- Add synchronous and durable statistical-study operations that execute a
+  saved point plan through the existing bounded worker, cancellation, resume,
+  cache, and per-point checkpoint machinery.
+- Evaluate yield from the existing measurement and waveform requirements;
+  simulation or analysis errors remain separate from electrical failures.
+- Produce structured sample results, pass/fail counts, observed yield, Wilson
+  binomial confidence intervals, percentiles, mean, standard deviation, and
+  explicit treatment of incomplete or invalid samples.
+- Preserve links from every statistic and failed sample to its experiment
+  point, RAW/log evidence, resolved values, and requirement results.
+- Make restart behavior idempotent: completed samples retain their original
+  values and no resumed job silently draws replacements.
+
+Verification gate:
+
+- Cancellation and restart reproduce the uninterrupted result from the same
+  saved plan.
+- Hand-calculated fixtures verify yield, confidence intervals, percentiles,
+  and error accounting.
+- A tolerance study of the Sallen-Key filter exercises both AC and transient
+  requirements and identifies the exact failing samples.
+
+#### Phase 3C: Correlation, measured populations, and operating corners
+
+- Add correlated statistical variables with validated symmetric positive
+  semidefinite correlation matrices and recorded transformation provenance.
+- Add empirical distributions from inline values and confined CSV inputs,
+  including column, unit, resampling, and source-hash provenance.
+- Support temperature, supply, load, and finite device-model corners as named
+  deterministic axes around a statistical sample plan.
+- Report each corner separately as well as an explicitly defined aggregate;
+  do not hide a weak corner inside a global average.
+- Add stratified Latin-hypercube and low-discrepancy sampling as versioned plan
+  generators. Native LTspice stepping remains an execution optimization only
+  when the resulting evidence can be mapped back to every planned point.
+
+Verification gate:
+
+- Fixture correlations and empirical frequencies match expected tolerances.
+- Corner-by-sample cardinality, ordering, resume, and provenance are stable on
+  macOS and Windows.
+- A deliberately weak Sallen-Key corner fails while stronger corners remain
+  independently visible in the structured results.
+
+#### Phase 3D: Sensitivity and worst-credible-case analysis
+
+- Rank input influence using documented global rank-correlation measures and
+  local one-at-a-time perturbations; state when the data are insufficient or
+  the relationship is not meaningfully monotonic.
+- Generate tornado data from controlled perturbations with units, baselines,
+  and requirement margins rather than chart-only values.
+- Enumerate declared finite corners exactly and rank observed samples by
+  requirement margin to identify the worst evidenced cases.
+- Add deterministic, batched adaptive sampling near observed failure
+  boundaries, with stopping rules, sample budgets, and confidence history.
+- Keep continuous design optimization and Pareto selection in Phase 4; Phase 3
+  may characterize statistical risk but must not silently redesign a circuit.
+
+Verification gate:
+
+- Synthetic monotonic and non-monotonic fixtures exercise honest sensitivity
+  reporting.
+- Known worst finite corners are recovered exactly, including ties.
+- Adaptive studies resume at a batch boundary and reproduce their full sample
+  and confidence history from the same definition and seed.
+
+#### Phase 3E: Statistical reports, indexing, and hardening
+
+- Extend the offline HTML report and dashboard with yield summaries,
+  confidence history, distributions, failed-sample tables, corner matrices,
+  sensitivity rankings, and tornado plots.
+- Keep charts display-only: every conclusion must remain available in bounded
+  JSON/CSV and link to full-resolution simulation evidence.
+- Index statistical definitions and summaries for queries by circuit, status,
+  yield, confidence bound, corner, variable, and requirement.
+- Add content-addressed comparison of two compatible statistical studies,
+  distinguishing changed sample plans from changed circuit outcomes.
+- Enforce bounded sample counts, corner expansion, imported data, report
+  payloads, runtime, and disk use; malformed studies must be isolated during
+  index and dashboard rebuilds.
+- Retire the standalone Monte Carlo example in favor of a documented example
+  built on the production statistical API.
+
+Phase 3 completion criteria:
+
+- Given the same normalized definition and seed, macOS and Windows generate
+  the same canonical point plan and equivalent statistical conclusions within
+  documented numeric tolerances.
+- Reports clearly distinguish sample-generation changes, simulator/platform
+  numeric differences, electrical failures, and infrastructure errors.
+- A resumed durable study is evidence-equivalent to an uninterrupted study.
+- The Sallen-Key reference study reports yield, confidence, corners,
+  sensitivities, and worst evidenced cases with traceable RAW/log artifacts.
+- Unit, adversarial, resource-bound, and real LTspice integration tests pass on
+  both supported platforms before Phase 4 begins.
+
+Recommended implementation sequence:
+
+1. Build and freeze the deterministic point-plan schema and golden fixtures.
+2. Reuse the durable Phase 2 executor for independent paired sample points.
+3. Add yield summaries and the first end-to-end Sallen-Key tolerance study.
+4. Add correlation, empirical populations, and deterministic corner axes.
+5. Add sensitivity, bounded adaptive sampling, reports, indexing, and final
+   cross-platform hardening.
 
 ### Phase 4: Constrained multi-objective optimization
 
@@ -420,13 +549,11 @@ expensive evaluation.
 
 ## Immediate next milestone
 
-The first implementation milestone is Phase 0 followed by the smallest useful
-slice of Phase 1:
+Begin Phase 3A with the smallest complete statistical-planning slice:
 
-1. Add direct MCP tests without changing existing tool behavior.
-2. Define a structured requirement/result schema.
-3. Implement full-resolution minimum, maximum, RMS, peak-to-peak, rise time,
-   overshoot, and settling-time metrics.
-4. Expose those metrics through one focused MCP analysis tool.
-5. Verify identical fixture behavior on macOS and Windows before expanding the
-   property set.
+1. Define the versioned statistical definition and explicit-point-plan schemas.
+2. Implement seeded uniform sampling with canonical decimal serialization.
+3. Expose plan generation and inspection without invoking LTspice.
+4. Compile one paired RC tolerance plan into the existing experiment executor.
+5. Verify golden plans and paired-point behavior on macOS and Windows before
+   adding more distributions.
