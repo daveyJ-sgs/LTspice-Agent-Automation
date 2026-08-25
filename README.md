@@ -409,20 +409,31 @@ plan under `runs/statistical-plans/` without invoking LTspice:
 ```json
 {
   "variables": [
-    {"name": "R", "distribution": "uniform", "minimum": 9000,
-     "maximum": 11000, "nominal": 10000, "unit": "ohm"},
+    {"name": "R", "distribution": "gaussian", "minimum": 9000,
+     "maximum": 11000, "nominal": 10000, "sigma": 500, "unit": "ohm"},
     {"name": "C", "distribution": "uniform", "minimum": 0.0000009,
-     "maximum": 0.0000011, "nominal": 0.000001, "unit": "F"}
+     "maximum": 0.0000011, "nominal": 0.000001, "unit": "F"},
+    {"name": "GAIN", "distribution": "discrete",
+     "values": ["0.9", "1", "1.1"], "weights": [1, 3, 1], "nominal": "1"}
   ],
   "sample_count": 24,
   "seed": 20260824
 }
 ```
 
-The versioned SHA-256 counter generator maps each `(seed, sample, variable)`
-directly to a canonical decimal value. Reordering unrelated variables or
-resuming later cannot consume a different random stream. Plans are limited to
-1,000 samples, 32 variables, and 10,000 generated values.
+The versioned SHA-256 counter generator gives each `(seed, sample, variable)`
+an independent deterministic draw. Reordering unrelated variables or resuming
+later cannot consume a different random stream. Uniform definitions retain the
+Phase 3A-1 generator and artifact bytes. Mixed plans use the versioned Phase
+3A-2 distribution generator.
+
+Bounded Gaussian variables require `nominal`, positive `sigma`, `minimum`, and
+`maximum`; the bounds must span at least 0.1 sigma. A fixed Decimal
+Marsaglia-polar transform rejects out-of-bound draws with a hard 4,096-attempt
+limit. Discrete variables require ordered unique string `values` and matching
+positive finite `weights`. Weights are normalized canonically, and an exact
+cumulative boundary selects the next bin. Plans are limited to 1,000 samples,
+32 variables, and 10,000 generated values.
 
 Use `get_statistical_plan` to verify and inspect an existing plan. Pass its
 `plan_id` plus an ordinary netlist template to `run_statistical_experiment`:
@@ -437,9 +448,7 @@ Use `get_statistical_plan` to verify and inspect an existing plan. Pass its
 Statistical values stay paired by sample ordinal: 24 R/C samples execute as 24
 independent Phase 2 points, not a 24-by-24 Cartesian grid. The resulting
 manifest records the source plan hash and remains compatible with the existing
-results, CSV, index, comparison, and offline-report validators. Phase 3A
-currently supports uniform variables; bounded Gaussian and weighted discrete
-variables are the next distribution slice.
+results, CSV, index, comparison, and offline-report validators.
 
 ### Run a durable experiment job
 

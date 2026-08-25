@@ -820,7 +820,9 @@ def _normalize_requirement(
     }
 
 
-def _normalize_comparison_point(point: object) -> dict[str, object]:
+def _normalize_comparison_point(
+    point: object, *, explicit_point_plan: bool = False
+) -> dict[str, object]:
     if not isinstance(point, dict):
         raise ValueError("experiment points must contain objects")
     index = point.get("index")
@@ -875,7 +877,9 @@ def _normalize_comparison_point(point: object) -> dict[str, object]:
     return {
         "index": index,
         "parameters": dict(parameters),
-        "parameter_key": _canonical_json(parameters),
+        "parameter_key": _canonical_json(
+            [index, parameters] if explicit_point_plan else parameters
+        ),
         "measurements": normalized_measurements,
         "requirements": requirements,
         "all_passed": all_passed,
@@ -888,10 +892,20 @@ def _load_comparison_experiment(
 ) -> tuple[list[dict[str, object]], str]:
     import experiment_index
 
-    _, _, document, record = experiment_index.load_completed_experiment(
+    _, manifest, document, record = experiment_index.load_completed_experiment(
         runs_dir, experiment_id
     )
-    points = [_normalize_comparison_point(point) for point in document["points"]]
+    definition = manifest.get("definition")
+    explicit_point_plan = (
+        isinstance(definition, dict)
+        and isinstance(definition.get("point_plan"), dict)
+    )
+    points = [
+        _normalize_comparison_point(
+            point, explicit_point_plan=explicit_point_plan
+        )
+        for point in document["points"]
+    ]
     indexes: set[int] = set()
     parameter_keys: set[str] = set()
     for point in points:

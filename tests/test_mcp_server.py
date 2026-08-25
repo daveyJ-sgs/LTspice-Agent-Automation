@@ -779,10 +779,19 @@ class MCPServerTests(unittest.TestCase):
             },
             {
                 "name": "C",
-                "distribution": "uniform",
-                "minimum": 9e-7,
-                "maximum": 1.1e-6,
+                "distribution": "gaussian",
+                "minimum": 8e-7,
+                "maximum": 1.2e-6,
+                "nominal": 1e-6,
+                "sigma": 5e-8,
                 "unit": "F",
+            },
+            {
+                "name": "GAIN",
+                "distribution": "discrete",
+                "values": ["0.9", "1", "1.1"],
+                "weights": [1, 3, 1],
+                "nominal": "1",
             },
         ]
         plan = mcp_server.generate_statistical_plan(variables, 3, 20260824)
@@ -809,11 +818,12 @@ class MCPServerTests(unittest.TestCase):
         ):
             result = mcp_server.run_statistical_experiment(
                 plan["plan_id"],
+                "* Mixed statistical study\nV1 in 0 AC {GAIN}\n"
                 "R1 in out {R}\nC1 out 0 {C}\n.end\n",
             )
 
         self.assertEqual(result["point_count"], 3)
-        self.assertEqual(result["parameter_order"], ["R", "C"])
+        self.assertEqual(result["parameter_order"], ["R", "C", "GAIN"])
         self.assertEqual(
             [point["parameters"] for point in result["points"]],
             [point["parameters"] for point in plan["points"]],
@@ -821,6 +831,8 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(
             rendered_netlists,
             [
+                "* Mixed statistical study\n"
+                f"V1 in 0 AC {point['parameters']['GAIN']}\n"
                 f"R1 in out {point['parameters']['R']}\n"
                 f"C1 out 0 {point['parameters']['C']}\n.end\n"
                 for point in plan["points"]
@@ -854,6 +866,58 @@ class MCPServerTests(unittest.TestCase):
         properties = by_name["generate_statistical_plan"].input_schema["properties"]
         self.assertEqual(properties["sample_count"]["type"], "integer")
         self.assertEqual(properties["seed"]["type"], "integer")
+
+    def test_discrete_duplicate_samples_remain_distinct_by_ordinal(self) -> None:
+        plan = mcp_server.generate_statistical_plan(
+            [
+                {
+                    "name": "R",
+                    "distribution": "discrete",
+                    "values": ["10k"],
+                    "weights": [1],
+                }
+            ],
+            3,
+            19,
+        )
+
+        def execute(
+            netlist: str,
+            filename: str,
+            ascii_raw: bool,
+            timeout: int,
+            dest: Path,
+        ) -> Path:
+            dest.mkdir(parents=True)
+            return dest
+
+        with (
+            patch.object(mcp_server, "_run_netlist_text", side_effect=execute),
+            patch.object(
+                mcp_server,
+                "_summarize_run",
+                return_value={"status": "completed", "measurements": {}},
+            ),
+        ):
+            result = mcp_server.run_statistical_experiment(
+                plan["plan_id"], "* Discrete duplicate proof\nR1 in 0 {R}\n.end\n"
+            )
+
+        self.assertEqual(
+            [point["parameters"] for point in result["points"]],
+            [{"R": "10k"}, {"R": "10k"}, {"R": "10k"}],
+        )
+        indexed = mcp_server.experiment_index.build_experiment_index(self.runs)
+        self.assertEqual(indexed["indexed_experiments"], 1)
+        self.assertEqual(indexed["issues"], [])
+        comparison = mcp_server.compare_experiments(
+            result["experiment_id"], result["experiment_id"]
+        )
+        self.assertEqual(comparison["matched_points"], 3)
+        report = mcp_server.experiment_report.build_experiment_report(
+            self.runs, result["experiment_id"]
+        )
+        self.assertTrue(Path(report["report_html"]).is_file())
 
     def test_run_experiment_native_maps_one_validated_batch(self) -> None:
         rendered_netlists: list[str] = []

@@ -14,19 +14,31 @@ from typing import NotRequired, TypedDict
 
 
 STATISTICAL_PLAN_SCHEMA_VERSION = 1
-STATISTICAL_GENERATOR_VERSION = "sha256-counter-uniform-v1"
+UNIFORM_GENERATOR_VERSION = "sha256-counter-uniform-v1"
+DISTRIBUTION_GENERATOR_VERSION = "sha256-counter-distributions-v2"
+STATISTICAL_GENERATOR_VERSION = UNIFORM_GENERATOR_VERSION
+SUPPORTED_GENERATOR_VERSIONS = {
+    UNIFORM_GENERATOR_VERSION,
+    DISTRIBUTION_GENERATOR_VERSION,
+}
 MAX_STATISTICAL_SAMPLES = 1_000
 MAX_STATISTICAL_VARIABLES = 32
 MAX_STATISTICAL_CELLS = 10_000
+MAX_DISCRETE_VALUES = 256
+MAX_GAUSSIAN_ATTEMPTS = 4_096
+MIN_GAUSSIAN_SPAN_SIGMA = Decimal("0.1")
 MAX_SEED = (1 << 63) - 1
 
 
 class StatisticalVariable(TypedDict):
     name: str
     distribution: str
-    minimum: float
-    maximum: float
-    nominal: NotRequired[float]
+    minimum: NotRequired[float]
+    maximum: NotRequired[float]
+    nominal: NotRequired[float | str]
+    sigma: NotRequired[float]
+    values: NotRequired[list[str]]
+    weights: NotRequired[list[float]]
     unit: NotRequired[str]
 
 
@@ -97,6 +109,18 @@ def _canonical_decimal(value: Decimal) -> str:
     return encoded
 
 
+def _bounded_canonical_decimal(
+    value: Decimal, minimum: Decimal, maximum: Decimal
+) -> str:
+    encoded = _canonical_decimal(value)
+    rounded = Decimal(encoded)
+    if rounded < minimum:
+        return _canonical_decimal(minimum)
+    if rounded > maximum:
+        return _canonical_decimal(maximum)
+    return encoded
+
+
 def _normalized_definition(
     variables: list[StatisticalVariable], sample_count: int, seed: int
 ) -> dict[str, object]:
@@ -127,7 +151,7 @@ def _normalized_definition(
     ):
         raise ValueError(f"seed must be an integer between 0 and {MAX_SEED}")
 
-    normalized_variables: list[dict[str, str]] = []
+    normalized_variables: list[dict[str, object]] = []
     seen: set[str] = set()
     for variable in variables:
         if not isinstance(variable, dict):
@@ -142,31 +166,130 @@ def _normalized_definition(
         if name in seen:
             raise ValueError(f"duplicate statistical variable name: {name}")
         seen.add(name)
-        if variable.get("distribution") != "uniform":
-            raise ValueError(f"variable {name} distribution must be 'uniform'")
-        minimum = _decimal(variable.get("minimum"), f"variable {name} minimum")
-        maximum = _decimal(variable.get("maximum"), f"variable {name} maximum")
-        if minimum >= maximum:
-            raise ValueError(f"variable {name} minimum must be less than maximum")
-        nominal = _decimal(
-            variable.get("nominal", (minimum + maximum) / 2),
-            f"variable {name} nominal",
-        )
-        if nominal < minimum or nominal > maximum:
-            raise ValueError(f"variable {name} nominal must be within its bounds")
         unit = variable.get("unit", "")
         if not isinstance(unit, str) or len(unit) > 64:
-            raise ValueError(f"variable {name} unit must be a string of at most 64 characters")
-        normalized_variables.append(
-            {
+            raise ValueError(
+                f"variable {name} unit must be a string of at most 64 characters"
+            )
+        distribution = variable.get("distribution")
+        allowed_fields = {
+            "uniform": {
+                "name",
+                "distribution",
+                "minimum",
+                "maximum",
+                "nominal",
+                "unit",
+            },
+            "gaussian": {
+                "name",
+                "distribution",
+                "minimum",
+                "maximum",
+                "nominal",
+                "sigma",
+                "unit",
+            },
+            "discrete": {
+                "name",
+                "distribution",
+                "values",
+                "weights",
+                "nominal",
+                "unit",
+            },
+        }
+        if distribution in allowed_fields:
+            unexpected = sorted(set(variable) - allowed_fields[distribution])
+            if unexpected:
+                raise ValueError(
+                    f"variable {name} fields are not valid for {distribution}: "
+                    f"{', '.join(unexpected)}"
+                )
+        if distribution in {"uniform", "gaussian"}:
+            minimum = _decimal(variable.get("minimum"), f"variable {name} minimum")
+            maximum = _decimal(variable.get("maximum"), f"variable {name} maximum")
+            if minimum >= maximum:
+                raise ValueError(f"variable {name} minimum must be less than maximum")
+            nominal_default: object = (minimum + maximum) / 2
+            if distribution == "gaussian" and "nominal" not in variable:
+                raise ValueError(f"variable {name} gaussian nominal is required")
+            nominal = _decimal(
+                variable.get("nominal", nominal_default),
+                f"variable {name} nominal",
+            )
+            if nominal < minimum or nominal > maximum:
+                raise ValueError(f"variable {name} nominal must be within its bounds")
+            normalized: dict[str, object] = {
                 "name": name,
-                "distribution": "uniform",
+                "distribution": distribution,
                 "minimum": _canonical_decimal(minimum),
                 "maximum": _canonical_decimal(maximum),
                 "nominal": _canonical_decimal(nominal),
                 "unit": unit,
             }
-        )
+            if distribution == "gaussian":
+                sigma = _decimal(variable.get("sigma"), f"variable {name} sigma")
+                if sigma <= 0:
+                    raise ValueError(f"variable {name} sigma must be positive")
+                if (maximum - minimum) / sigma < MIN_GAUSSIAN_SPAN_SIGMA:
+                    raise ValueError(
+                        f"variable {name} bounds must span at least "
+                        f"{MIN_GAUSSIAN_SPAN_SIGMA} sigma"
+                    )
+                normalized["sigma"] = _canonical_decimal(sigma)
+            normalized_variables.append(normalized)
+        elif distribution == "discrete":
+            values = variable.get("values")
+            weights = variable.get("weights")
+            if (
+                not isinstance(values, list)
+                or not values
+                or len(values) > MAX_DISCRETE_VALUES
+                or any(
+                    not isinstance(value, str)
+                    or not value
+                    or len(value) > 128
+                    for value in values
+                )
+                or len(values) != len(set(values))
+            ):
+                raise ValueError(
+                    f"variable {name} values must be 1 to {MAX_DISCRETE_VALUES} "
+                    "unique non-empty strings"
+                )
+            if not isinstance(weights, list) or len(weights) != len(values):
+                raise ValueError(f"variable {name} weights must match its values")
+            parsed_weights = [
+                _decimal(weight, f"variable {name} weight") for weight in weights
+            ]
+            if any(weight <= 0 for weight in parsed_weights):
+                raise ValueError(f"variable {name} weights must be positive")
+            weight_total = sum(parsed_weights, Decimal(0))
+            with localcontext() as context:
+                context.prec = 80
+                normalized_weights = [
+                    _canonical_decimal(weight / weight_total)
+                    for weight in parsed_weights
+                ]
+            nominal_value = variable.get("nominal", values[0])
+            if not isinstance(nominal_value, str) or nominal_value not in values:
+                raise ValueError(f"variable {name} nominal must be one of its values")
+            normalized_variables.append(
+                {
+                    "name": name,
+                    "distribution": "discrete",
+                    "values": list(values),
+                    "weights": normalized_weights,
+                    "nominal": nominal_value,
+                    "unit": unit,
+                }
+            )
+        else:
+            raise ValueError(
+                f"variable {name} distribution must be 'uniform', "
+                "'gaussian', or 'discrete'"
+            )
     return {
         "variables": normalized_variables,
         "sample_count": sample_count,
@@ -177,7 +300,7 @@ def _normalized_definition(
 def _uniform_fraction(seed: int, sample_index: int, name: str) -> Decimal:
     material = b"\0".join(
         (
-            STATISTICAL_GENERATOR_VERSION.encode("ascii"),
+            UNIFORM_GENERATOR_VERSION.encode("ascii"),
             str(seed).encode("ascii"),
             str(sample_index).encode("ascii"),
             name.encode("utf-8"),
@@ -187,6 +310,81 @@ def _uniform_fraction(seed: int, sample_index: int, name: str) -> Decimal:
     return Decimal(integer) / Decimal(1 << 64)
 
 
+def _distribution_fraction(
+    distribution: str,
+    seed: int,
+    sample_index: int,
+    name: str,
+    attempt: int = 0,
+    coordinate: int = 0,
+) -> Decimal:
+    material = b"\0".join(
+        (
+            DISTRIBUTION_GENERATOR_VERSION.encode("ascii"),
+            distribution.encode("ascii"),
+            str(seed).encode("ascii"),
+            str(sample_index).encode("ascii"),
+            name.encode("utf-8"),
+            str(attempt).encode("ascii"),
+            str(coordinate).encode("ascii"),
+        )
+    )
+    integer = int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
+    return Decimal(integer) / Decimal(1 << 64)
+
+
+def _bounded_gaussian(
+    variable: dict[str, object], seed: int, sample_index: int
+) -> Decimal:
+    name = str(variable["name"])
+    minimum = Decimal(str(variable["minimum"]))
+    maximum = Decimal(str(variable["maximum"]))
+    nominal = Decimal(str(variable["nominal"]))
+    sigma = Decimal(str(variable["sigma"]))
+    with localcontext() as context:
+        context.prec = 80
+        for attempt in range(MAX_GAUSSIAN_ATTEMPTS):
+            x = 2 * _distribution_fraction(
+                "gaussian", seed, sample_index, name, attempt, 0
+            ) - 1
+            y = 2 * _distribution_fraction(
+                "gaussian", seed, sample_index, name, attempt, 1
+            ) - 1
+            radius_squared = x * x + y * y
+            if radius_squared <= 0 or radius_squared >= 1:
+                continue
+            standard_normal = x * (
+                (-2 * radius_squared.ln() / radius_squared).sqrt()
+            )
+            value = nominal + sigma * standard_normal
+            if minimum <= value <= maximum:
+                return value
+    raise ValueError(
+        f"variable {name} could not draw a bounded gaussian value within "
+        f"{MAX_GAUSSIAN_ATTEMPTS} attempts"
+    )
+
+
+def _weighted_discrete(
+    variable: dict[str, object], seed: int, sample_index: int
+) -> str:
+    name = str(variable["name"])
+    values = variable["values"]
+    weights = variable["weights"]
+    assert isinstance(values, list) and isinstance(weights, list)
+    parsed_weights = [Decimal(str(weight)) for weight in weights]
+    total = sum(parsed_weights, Decimal(0))
+    threshold = _distribution_fraction(
+        "discrete", seed, sample_index, name
+    ) * total
+    cumulative = Decimal(0)
+    for value, weight in zip(values, parsed_weights):
+        cumulative += weight
+        if threshold < cumulative:
+            return str(value)
+    return str(values[-1])
+
+
 def build_statistical_plan(
     variables: list[StatisticalVariable], sample_count: int, seed: int
 ) -> StatisticalPlan:
@@ -194,6 +392,14 @@ def build_statistical_plan(
     definition = _normalized_definition(variables, sample_count, seed)
     normalized_variables = definition["variables"]
     assert isinstance(normalized_variables, list)
+    generator_version = (
+        UNIFORM_GENERATOR_VERSION
+        if all(
+            variable.get("distribution") == "uniform"
+            for variable in normalized_variables
+        )
+        else DISTRIBUTION_GENERATOR_VERSION
+    )
     parameter_order = [str(variable["name"]) for variable in normalized_variables]
     parameter_units = {
         str(variable["name"]): str(variable["unit"])
@@ -206,19 +412,35 @@ def build_statistical_plan(
             parameters: dict[str, str] = {}
             for variable in normalized_variables:
                 name = str(variable["name"])
-                minimum = Decimal(str(variable["minimum"]))
-                maximum = Decimal(str(variable["maximum"]))
-                value = minimum + (maximum - minimum) * _uniform_fraction(
-                    seed, sample_index, name
-                )
-                parameters[name] = _canonical_decimal(value)
+                distribution = variable["distribution"]
+                if distribution == "uniform":
+                    minimum = Decimal(str(variable["minimum"]))
+                    maximum = Decimal(str(variable["maximum"]))
+                    value = minimum + (maximum - minimum) * _uniform_fraction(
+                        seed, sample_index, name
+                    )
+                    parameters[name] = _bounded_canonical_decimal(
+                        value, minimum, maximum
+                    )
+                elif distribution == "gaussian":
+                    minimum = Decimal(str(variable["minimum"]))
+                    maximum = Decimal(str(variable["maximum"]))
+                    parameters[name] = _bounded_canonical_decimal(
+                        _bounded_gaussian(variable, seed, sample_index),
+                        minimum,
+                        maximum,
+                    )
+                else:
+                    parameters[name] = _weighted_discrete(
+                        variable, seed, sample_index
+                    )
             points.append({"index": sample_index, "parameters": parameters})
     definition_hash = hashlib.sha256(
         _canonical_json(definition).encode("utf-8")
     ).hexdigest()
     return {
         "schema_version": STATISTICAL_PLAN_SCHEMA_VERSION,
-        "generator_version": STATISTICAL_GENERATOR_VERSION,
+        "generator_version": generator_version,
         "definition_hash": definition_hash,
         "definition": definition,
         "parameter_order": parameter_order,
@@ -341,7 +563,7 @@ def load_statistical_plan(runs_dir: Path, plan_id: str) -> StatisticalPlan:
         raise ValueError("invalid statistical plan artifact")
     if value.get("schema_version") != STATISTICAL_PLAN_SCHEMA_VERSION:
         raise ValueError("unsupported statistical plan schema_version")
-    if value.get("generator_version") != STATISTICAL_GENERATOR_VERSION:
+    if value.get("generator_version") not in SUPPORTED_GENERATOR_VERSIONS:
         raise ValueError("unsupported statistical generator_version")
     definition = value.get("definition")
     if not isinstance(definition, dict):

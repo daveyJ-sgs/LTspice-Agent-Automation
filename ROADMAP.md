@@ -248,7 +248,7 @@ paired point rather than expanding into a cross-product. The saved point plan
 is the reproducibility boundary and can be inspected or transferred without
 running LTspice.
 
-#### Phase 3A: Deterministic statistical point plans — in progress
+#### Phase 3A: Deterministic statistical point plans — complete
 
 ##### Phase 3A-1: Uniform point-plan foundation — complete
 
@@ -269,16 +269,22 @@ running LTspice.
 - Real three-point RC validation proving paired R/C samples execute as three
   Phase 2 points rather than a nine-point cross-product
 
-##### Phase 3A-2: Bounded Gaussian and weighted discrete distributions
+##### Phase 3A-2: Bounded Gaussian and weighted discrete distributions — complete
 
-- Add bounded/truncated Gaussian variables with explicit nominal, sigma, and
-  bound semantics that never rely on platform-specific library sampling.
-- Add weighted discrete variables with canonical values, positive finite
-  weights, deterministic boundary behavior, and complete provenance.
-- Preserve draw independence by variable name, sample ordinal, seed, and
-  generator version as new distribution algorithms are added.
-- Extend golden fixtures and validation coverage across distribution edges,
-  degenerate weights, rejection bounds, and mixed-distribution paired plans.
+- Bounded Gaussian variables with explicit nominal, sigma, bound, minimum-span,
+  and rejection-budget semantics
+- Fixed high-precision Decimal Marsaglia-polar transformation without
+  platform-library random sampling
+- Weighted discrete variables with canonical string values, normalized
+  positive finite weights, and deterministic cumulative-boundary behavior
+- Per-variable draw independence by name, distribution, sample ordinal, seed,
+  attempt, coordinate, and generator version
+- Backward-compatible Phase 3A-1 uniform artifacts plus a versioned mixed-plan
+  generator
+- Golden, malformed-input, boundary, workload, population, and reordered-input
+  coverage for uniform, Gaussian, discrete, and mixed plans
+- Real five-point mixed RC validation through LTspice, the canonical index, and
+  the offline report path
 
 Phase 3A verification gate:
 
@@ -563,12 +569,13 @@ expensive evaluation.
 
 ## Immediate next milestone
 
-Continue Phase 3A with the distribution-completion slice:
+Begin Phase 3B with the smallest complete durable-yield slice:
 
-1. Specify deterministic bounded-Gaussian transformation and truncation rules.
-2. Add bounded Gaussian variables with byte-stable golden fixtures.
-3. Add weighted discrete variables and exact boundary tests.
-4. Exercise a mixed uniform/Gaussian/discrete paired plan through the existing
-   experiment executor.
-5. Verify all Phase 3A plan fixtures on macOS and Windows before beginning
-   durable yield studies in Phase 3B.
+1. Define a statistical-study artifact that binds an immutable point plan to
+   an experiment definition and its requirements.
+2. Execute the saved plan through the durable Phase 2 worker without redrawing
+   samples during cancellation or resume.
+3. Separate simulation/analysis errors from electrical requirement failures.
+4. Produce observed yield and a Wilson binomial confidence interval with
+   hand-calculated fixtures.
+5. Validate one resumable Sallen-Key tolerance study on macOS and Windows.

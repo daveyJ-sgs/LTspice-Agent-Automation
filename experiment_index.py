@@ -593,6 +593,7 @@ def _result_children(
     requirements: list[dict[str, object]] = []
     seen_indexes: set[int] = set()
     seen_parameter_maps: set[tuple[tuple[str, str], ...]] = set()
+    allow_duplicate_parameter_maps = isinstance(point_plan, dict)
     completed_points = 0
     error_points = 0
     passed_points = 0
@@ -638,9 +639,12 @@ def _result_children(
         if {
             name: parameter_map[name] for name in base_order
         } != expected_base_parameters[index]:
-            raise ValueError("point parameters do not match Cartesian index order")
+            raise ValueError("point parameters do not match the planned index order")
         parameter_identity = tuple(sorted(parameter_map.items()))
-        if parameter_identity in seen_parameter_maps:
+        if (
+            parameter_identity in seen_parameter_maps
+            and not allow_duplicate_parameter_maps
+        ):
             raise ValueError("duplicate point parameter map")
         seen_parameter_maps.add(parameter_identity)
         for name, value in parameter_map.items():

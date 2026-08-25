@@ -965,10 +965,9 @@ def generate_statistical_plan(
 ) -> StatisticalPlanResult:
     """Generate and persist a deterministic statistical point plan without LTspice.
 
-    Phase 3A supports bounded uniform variables. Each variable needs a name,
-    distribution="uniform", numeric minimum and maximum, and optional nominal
-    and unit fields. The versioned seed produces the same canonical paired
-    points on macOS and Windows.
+    Phase 3A supports uniform, bounded Gaussian, and weighted discrete
+    variables. The versioned seed produces the same canonical paired points on
+    macOS and Windows.
     """
     return statistical_engine.generate_statistical_plan(
         RUNS_DIR, variables, sample_count, seed
