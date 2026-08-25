@@ -2688,6 +2688,13 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(query_schema["limit"]["default"], 50)
         self.assertEqual(query_schema["offset"]["default"], 0)
         self.assertIn("parameters", query_schema)
+        self.assertIn("circuit_sha256", query_schema)
+        self.assertIn("statistical", query_schema)
+        self.assertIn("minimum_yield", query_schema)
+        self.assertIn("minimum_confidence_low", query_schema)
+        self.assertIn("corner", query_schema)
+        self.assertIn("variable", query_schema)
+        self.assertIn("requirement_metric", query_schema)
         self.assertEqual(
             query_schema["execution_mode"]["anyOf"][0]["enum"],
             ["independent", "native"],

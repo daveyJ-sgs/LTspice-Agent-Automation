@@ -259,7 +259,11 @@ class ExperimentVisualizationTests(unittest.TestCase):
         self.assertEqual(result["issue_count"], 1)
         self.assertIn(self.baseline_id, document)
         self.assertIn(self.candidate_id, document)
-        self.assertIn("Search IDs, status, mode, or parameters", document)
+        self.assertIn(
+            "Search IDs, status, method, yield, variables, requirements, or parameters",
+            document,
+        )
+        self.assertIn("<th>Study</th><th>Yield</th>", document)
         self.assertIn('id="status"', document)
         self.assertIn(f'{self.baseline_id}/report.html', document)
         self.assertTrue((self.runs / "experiments.sqlite3").is_file())

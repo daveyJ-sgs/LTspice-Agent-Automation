@@ -820,12 +820,19 @@ database is integrity-checked, closed, and atomically replaces the previous
 index; a fatal build or replacement error leaves the prior database intact.
 
 `query_experiments` supports deterministic pagination and optional exact
-filters for status, execution mode, pass/fail state, and parameter values.
+filters for status, execution mode, pass/fail state, parameter values, circuit
+SHA-256, statistical-study status, aggregate yield or confidence floor, sampled
+variable, requirement metric, and named-corner values.
 Multiple parameter filters must occur together on the same materialized point;
 values remain case-sensitive LTspice text, so `1k` and `1000` are distinct.
-Query responses include declared parameter metadata plus the available
-measurement names and requirement metrics. Full point data remains in the
-linked structured artifacts.
+When yield or confidence is combined with corner filters, all requested corner
+values and thresholds must match one corner result; an intentionally unpooled
+study never acquires an invented aggregate. Query responses include circuit and
+sampling metadata, aggregate and per-corner summaries, sampled variable names,
+declared parameters, measurement names, and requirement metrics. Full point
+data remains in the linked structured artifacts. The searchable dashboard uses
+the same rebuilt index and shows the sampling method plus aggregate or
+per-corner yield.
 
 ### Build a portable experiment report
 

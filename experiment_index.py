@@ -15,8 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import TypedDict
 
-INDEX_SCHEMA_VERSION = 1
-INDEX_BUILDER_VERSION = 1
+INDEX_SCHEMA_VERSION = 2
+INDEX_BUILDER_VERSION = 2
 INDEX_FILENAME = "experiments.sqlite3"
 MAX_QUERY_LIMIT = 1000
 MAX_EXPERIMENT_POINTS = 1000
@@ -67,11 +67,20 @@ class ExperimentIndexRecord(TypedDict):
     failed_points: int
     all_passed: bool | None
     reuse_cache: bool
+    circuit_sha256: str
+    statistical: bool
+    sampling_method: str | None
+    observed_yield: float | None
+    confidence_low: float | None
+    confidence_high: float | None
     manifest_path: str
     results_path: str | None
     parameters: list[dict[str, object]]
     measurement_names: list[str]
     requirement_metrics: list[str]
+    statistical_variables: list[str]
+    statistical_corners: dict[str, list[str]]
+    corner_summaries: list[dict[str, object]]
 
 
 class ExperimentQueryResult(TypedDict):
@@ -412,6 +421,18 @@ def _manifest_record(
     reuse_cache = definition.get("reuse_cache", False)
     if not isinstance(reuse_cache, bool):
         raise ValueError("definition reuse_cache must be a boolean")
+    netlist_template = definition.get("netlist_template")
+    if not isinstance(netlist_template, str):
+        raise ValueError("definition netlist_template must be a string")
+    source = point_plan.get("source") if isinstance(point_plan, dict) else None
+    statistical = isinstance(source, dict) and source.get("kind") == "statistical"
+    sampling_method = source.get("sampling_method") if statistical else None
+    if sampling_method is not None and sampling_method not in {
+        "independent",
+        "latin_hypercube",
+        "halton",
+    }:
+        raise ValueError("statistical sampling_method is invalid")
     finished_default = point_count if schema_version == 1 and status == "completed" else 0
     counts = {
         "finished_points": _plain_int(
@@ -453,6 +474,12 @@ def _manifest_record(
         "all_passed": _optional_bool(manifest.get("all_passed"), "manifest all_passed"),
         "error": manifest.get("error") if isinstance(manifest.get("error"), str) else None,
         "reuse_cache": reuse_cache,
+        "circuit_sha256": hashlib.sha256(netlist_template.encode("utf-8")).hexdigest(),
+        "statistical": int(statistical),
+        "sampling_method": sampling_method,
+        "observed_yield": None,
+        "confidence_low": None,
+        "confidence_high": None,
         "index_state": "manifest_only",
         "manifest_path": _relative_path(manifest_path, root),
         "results_path": None,
@@ -893,6 +920,12 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             all_passed INTEGER,
             error TEXT,
             reuse_cache INTEGER NOT NULL,
+            circuit_sha256 TEXT NOT NULL,
+            statistical INTEGER NOT NULL,
+            sampling_method TEXT,
+            observed_yield REAL,
+            confidence_low REAL,
+            confidence_high REAL,
             index_state TEXT NOT NULL,
             manifest_path TEXT NOT NULL,
             results_path TEXT,
@@ -960,6 +993,43 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             FOREIGN KEY (experiment_id, point_index)
                 REFERENCES points(experiment_id, point_index) ON DELETE CASCADE
         );
+        CREATE TABLE statistical_variables (
+            experiment_id TEXT NOT NULL REFERENCES experiments(experiment_id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            PRIMARY KEY (experiment_id, name)
+        );
+        CREATE INDEX statistical_variable_lookup
+            ON statistical_variables(name, experiment_id);
+        CREATE TABLE statistical_corners (
+            experiment_id TEXT NOT NULL REFERENCES experiments(experiment_id) ON DELETE CASCADE,
+            axis TEXT NOT NULL,
+            value TEXT NOT NULL,
+            PRIMARY KEY (experiment_id, axis, value)
+        );
+        CREATE INDEX statistical_corner_lookup
+            ON statistical_corners(axis, value, experiment_id);
+        CREATE TABLE statistical_corner_results (
+            experiment_id TEXT NOT NULL REFERENCES experiments(experiment_id) ON DELETE CASCADE,
+            corners_json TEXT NOT NULL,
+            observed_yield REAL,
+            confidence_low REAL,
+            confidence_high REAL,
+            evaluated_points INTEGER NOT NULL,
+            invalid_points INTEGER NOT NULL,
+            PRIMARY KEY (experiment_id, corners_json)
+        );
+        CREATE TABLE statistical_corner_result_values (
+            experiment_id TEXT NOT NULL,
+            corners_json TEXT NOT NULL,
+            axis TEXT NOT NULL,
+            value TEXT NOT NULL,
+            PRIMARY KEY (experiment_id, corners_json, axis),
+            FOREIGN KEY (experiment_id, corners_json)
+                REFERENCES statistical_corner_results(experiment_id, corners_json)
+                ON DELETE CASCADE
+        );
+        CREATE INDEX statistical_corner_result_lookup
+            ON statistical_corner_result_values(axis, value, experiment_id);
         CREATE TABLE index_issues (
             artifact_path TEXT NOT NULL,
             code TEXT NOT NULL,
@@ -1042,6 +1112,146 @@ def _insert_children(
     )
 
 
+def _statistical_metadata(
+    manifest: dict[str, object],
+    results: dict[str, object] | None,
+    parameters: list[dict[str, object]],
+) -> tuple[
+    dict[str, object],
+    list[str],
+    list[tuple[str, str]],
+    list[dict[str, object]],
+]:
+    definition = manifest.get("definition")
+    point_plan = definition.get("point_plan") if isinstance(definition, dict) else None
+    source = point_plan.get("source") if isinstance(point_plan, dict) else None
+    if not isinstance(source, dict) or source.get("kind") != "statistical":
+        return {}, [], [], []
+    corner_axes = source.get("corner_axes", [])
+    if not isinstance(corner_axes, list):
+        raise ValueError("statistical corner_axes must be a list")
+    corner_parameters: set[str] = set()
+    corners: set[tuple[str, str]] = set()
+    for axis in corner_axes:
+        if not isinstance(axis, dict):
+            raise ValueError("statistical corner axis must be an object")
+        name = axis.get("name")
+        parameter = axis.get("parameter")
+        values = axis.get("values")
+        if (
+            not isinstance(name, str)
+            or not name
+            or not isinstance(parameter, str)
+            or not parameter
+            or not isinstance(values, list)
+            or not values
+        ):
+            raise ValueError("statistical corner axis metadata is invalid")
+        corner_parameters.add(parameter)
+        for value in values:
+            if (
+                not isinstance(value, dict)
+                or not isinstance(value.get("name"), str)
+                or not value["name"]
+            ):
+                raise ValueError("statistical corner value metadata is invalid")
+            corners.add((name, str(value["name"])))
+    variables = sorted(
+        str(parameter["name"])
+        for parameter in parameters
+        if parameter["name"] not in corner_parameters
+    )
+    import statistical_results
+
+    provenance = statistical_results._sampling_provenance(source)
+    metadata: dict[str, object] = {
+        "sampling_method": provenance["sampling_method"],
+    }
+    if results is None:
+        return metadata, variables, sorted(corners), []
+    summary = statistical_results.build_statistics(
+        results,
+        point_metadata=source.get("point_metadata"),
+        corner_aggregate=source.get("corner_aggregate", False),
+        sampling_provenance=provenance,
+    )
+    interval = summary["yield_confidence_interval"]
+    assert isinstance(interval, dict)
+    corner_summaries: list[dict[str, object]] = []
+    for corner in summary.get("corner_results", []):
+        corner_interval = corner["yield_confidence_interval"]
+        corner_map = corner["corners"]
+        assert isinstance(corner_interval, dict) and isinstance(corner_map, dict)
+        corner_summaries.append(
+            {
+                "corners_json": json.dumps(
+                    corner_map, sort_keys=True, separators=(",", ":")
+                ),
+                "corners": dict(corner_map),
+                "observed_yield": corner["observed_yield"],
+                "confidence_low": corner_interval["low"],
+                "confidence_high": corner_interval["high"],
+                "evaluated_points": corner["evaluated_points"],
+                "invalid_points": corner["invalid_points"],
+            }
+        )
+    return (
+        {
+            **metadata,
+            "observed_yield": summary["observed_yield"],
+            "confidence_low": interval["low"],
+            "confidence_high": interval["high"],
+        },
+        variables,
+        sorted(corners),
+        corner_summaries,
+    )
+
+
+def _insert_statistical_metadata(
+    connection: sqlite3.Connection,
+    experiment_id: str,
+    variables: list[str],
+    corners: list[tuple[str, str]],
+    corner_summaries: list[dict[str, object]],
+) -> None:
+    connection.executemany(
+        "INSERT INTO statistical_variables(experiment_id, name) VALUES (?, ?)",
+        [(experiment_id, name) for name in variables],
+    )
+    connection.executemany(
+        "INSERT INTO statistical_corners(experiment_id, axis, value) VALUES (?, ?, ?)",
+        [(experiment_id, axis, value) for axis, value in corners],
+    )
+    connection.executemany(
+        """INSERT INTO statistical_corner_results
+           (experiment_id, corners_json, observed_yield, confidence_low,
+            confidence_high, evaluated_points, invalid_points)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        [
+            (
+                experiment_id,
+                item["corners_json"],
+                item["observed_yield"],
+                item["confidence_low"],
+                item["confidence_high"],
+                item["evaluated_points"],
+                item["invalid_points"],
+            )
+            for item in corner_summaries
+        ],
+    )
+    connection.executemany(
+        """INSERT INTO statistical_corner_result_values
+           (experiment_id, corners_json, axis, value) VALUES (?, ?, ?, ?)""",
+        [
+            (experiment_id, item["corners_json"], axis, value)
+            for item in corner_summaries
+            for axis, value in item["corners"].items()
+        ],
+    )
+
+
 def build_experiment_index(
     root: Path,
     database_path: Path | None = None,
@@ -1077,6 +1287,13 @@ def build_experiment_index(
                         root,
                         manifest_hash,
                     )
+                    (
+                        statistical_metadata,
+                        statistical_variables,
+                        statistical_corners,
+                        statistical_corner_summaries,
+                    ) = _statistical_metadata(manifest, None, parameters)
+                    record.update(statistical_metadata)
                 except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
                     issues.append(
                         {
@@ -1119,6 +1336,13 @@ def build_experiment_index(
                                 **child_rows[-1],
                                 all_passed=results["all_passed"],
                             )
+                            (
+                                statistical_metadata,
+                                _,
+                                _,
+                                statistical_corner_summaries,
+                            ) = _statistical_metadata(manifest, results, parameters)
+                            record.update(statistical_metadata)
                         except (
                             OSError,
                             UnicodeError,
@@ -1147,6 +1371,13 @@ def build_experiment_index(
                         )
 
                 _insert_experiment(connection, record, parameters)
+                _insert_statistical_metadata(
+                    connection,
+                    experiment_id,
+                    statistical_variables,
+                    statistical_corners,
+                    statistical_corner_summaries,
+                )
                 indexed += 1
                 if child_rows is not None:
                     _insert_children(connection, *child_rows[:-1])
@@ -1193,7 +1424,14 @@ def _validate_query(
     execution_mode: str | None,
     all_passed: bool | None,
     parameters: dict[str, str] | None,
-) -> dict[str, str]:
+    circuit_sha256: str | None,
+    statistical: bool | None,
+    minimum_yield: float | None,
+    minimum_confidence_low: float | None,
+    corner: dict[str, str] | None,
+    variable: str | None,
+    requirement_metric: str | None,
+) -> tuple[dict[str, str], dict[str, str]]:
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= MAX_QUERY_LIMIT:
         raise ValueError(f"limit must be between 1 and {MAX_QUERY_LIMIT}")
     if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
@@ -1204,16 +1442,41 @@ def _validate_query(
         raise ValueError("execution_mode is not supported")
     if all_passed is not None and not isinstance(all_passed, bool):
         raise ValueError("all_passed must be a boolean or null")
-    if parameters is None:
-        return {}
-    if (
-        not isinstance(parameters, dict)
-        or not parameters
-        or any(not isinstance(name, str) or not name for name in parameters)
-        or any(not isinstance(value, str) for value in parameters.values())
+    if circuit_sha256 is not None and re.fullmatch(r"[0-9a-f]{64}", circuit_sha256) is None:
+        raise ValueError("circuit_sha256 must be a lowercase SHA-256 identifier")
+    if statistical is not None and not isinstance(statistical, bool):
+        raise ValueError("statistical must be a boolean or null")
+    for name, value in (
+        ("minimum_yield", minimum_yield),
+        ("minimum_confidence_low", minimum_confidence_low),
     ):
-        raise ValueError("parameters must be a non-empty string-to-string object")
-    return parameters
+        if value is not None and (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(float(value))
+            or not 0 <= float(value) <= 1
+        ):
+            raise ValueError(f"{name} must be a finite number between zero and one")
+    for name, value in (
+        ("variable", variable),
+        ("requirement_metric", requirement_metric),
+    ):
+        if value is not None and (not isinstance(value, str) or not value):
+            raise ValueError(f"{name} must be a non-empty string or null")
+
+    def mapping(value: dict[str, str] | None, name: str) -> dict[str, str]:
+        if value is None:
+            return {}
+        if (
+            not isinstance(value, dict)
+            or not value
+            or any(not isinstance(key, str) or not key for key in value)
+            or any(not isinstance(item, str) for item in value.values())
+        ):
+            raise ValueError(f"{name} must be a non-empty string-to-string object")
+        return value
+
+    return mapping(parameters, "parameters"), mapping(corner, "corner")
 
 
 def query_experiments(
@@ -1225,13 +1488,32 @@ def query_experiments(
     execution_mode: str | None = None,
     all_passed: bool | None = None,
     parameters: dict[str, str] | None = None,
+    circuit_sha256: str | None = None,
+    statistical: bool | None = None,
+    minimum_yield: float | None = None,
+    minimum_confidence_low: float | None = None,
+    corner: dict[str, str] | None = None,
+    variable: str | None = None,
+    requirement_metric: str | None = None,
     database_path: Path | None = None,
 ) -> ExperimentQueryResult:
     """Query indexed experiment summaries with exact same-point parameter filters."""
     root = root.resolve()
     path = _database_path(root, database_path)
-    parameter_filter = _validate_query(
-        limit, offset, status, execution_mode, all_passed, parameters
+    parameter_filter, corner_filter = _validate_query(
+        limit,
+        offset,
+        status,
+        execution_mode,
+        all_passed,
+        parameters,
+        circuit_sha256,
+        statistical,
+        minimum_yield,
+        minimum_confidence_low,
+        corner,
+        variable,
+        requirement_metric,
     )
     if not path.is_file():
         raise FileNotFoundError("experiment index not found; build it first")
@@ -1246,6 +1528,63 @@ def query_experiments(
     if all_passed is not None:
         clauses.append("e.all_passed = ?")
         arguments.append(int(all_passed))
+    if circuit_sha256 is not None:
+        clauses.append("e.circuit_sha256 = ?")
+        arguments.append(circuit_sha256)
+    if statistical is not None:
+        clauses.append("e.statistical = ?")
+        arguments.append(int(statistical))
+    if minimum_yield is not None and not corner_filter:
+        clauses.append("e.observed_yield >= ?")
+        arguments.append(float(minimum_yield))
+    if minimum_confidence_low is not None and not corner_filter:
+        clauses.append("e.confidence_low >= ?")
+        arguments.append(float(minimum_confidence_low))
+    if variable is not None:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM statistical_variables sv "
+            "WHERE sv.experiment_id = e.experiment_id AND sv.name = ?)"
+        )
+        arguments.append(variable)
+    if requirement_metric is not None:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM requirements rq "
+            "WHERE rq.experiment_id = e.experiment_id AND rq.metric = ?)"
+        )
+        arguments.append(requirement_metric)
+    if corner_filter and (
+        minimum_yield is not None or minimum_confidence_low is not None
+    ):
+        corner_clauses = ["scr.experiment_id = e.experiment_id"]
+        corner_arguments: list[object] = []
+        if minimum_yield is not None:
+            corner_clauses.append("scr.observed_yield >= ?")
+            corner_arguments.append(float(minimum_yield))
+        if minimum_confidence_low is not None:
+            corner_clauses.append("scr.confidence_low >= ?")
+            corner_arguments.append(float(minimum_confidence_low))
+        for axis, value in corner_filter.items():
+            corner_clauses.append(
+                "EXISTS (SELECT 1 FROM statistical_corner_result_values scrv "
+                "WHERE scrv.experiment_id = scr.experiment_id "
+                "AND scrv.corners_json = scr.corners_json "
+                "AND scrv.axis = ? AND scrv.value = ?)"
+            )
+            corner_arguments.extend((axis, value))
+        clauses.append(
+            "EXISTS (SELECT 1 FROM statistical_corner_results scr WHERE "
+            + " AND ".join(corner_clauses)
+            + ")"
+        )
+        arguments.extend(corner_arguments)
+    else:
+        for axis, value in corner_filter.items():
+            clauses.append(
+                "EXISTS (SELECT 1 FROM statistical_corners sc "
+                "WHERE sc.experiment_id = e.experiment_id "
+                "AND sc.axis = ? AND sc.value = ?)"
+            )
+            arguments.extend((axis, value))
     if parameter_filter:
         pairs = list(parameter_filter.items())
         alternatives = " OR ".join("(pp.name = ? AND pp.value_text = ?)" for _ in pairs)
@@ -1265,7 +1604,9 @@ def query_experiments(
         "SELECT e.experiment_id, e.status, e.execution_mode, e.index_state, "
         "e.recorded_at, e.point_count, e.finished_points, e.completed_points, "
         "e.error_points, e.passed_points, e.failed_points, e.all_passed, "
-        "e.reuse_cache, e.manifest_path, e.results_path FROM experiments e"
+        "e.reuse_cache, e.circuit_sha256, e.statistical, e.sampling_method, "
+        "e.observed_yield, e.confidence_low, e.confidence_high, "
+        "e.manifest_path, e.results_path FROM experiments e"
     )
     with _INDEX_LOCK:
         connection = sqlite3.connect(path)
@@ -1312,6 +1653,44 @@ def query_experiments(
                         (experiment_id,),
                     )
                 ]
+                statistical_variables = [
+                    str(item[0])
+                    for item in connection.execute(
+                        "SELECT name FROM statistical_variables "
+                        "WHERE experiment_id = ? ORDER BY name",
+                        (experiment_id,),
+                    )
+                ]
+                statistical_corners: dict[str, list[str]] = {}
+                for axis, value in connection.execute(
+                    "SELECT axis, value FROM statistical_corners "
+                    "WHERE experiment_id = ? ORDER BY axis, value",
+                    (experiment_id,),
+                ):
+                    statistical_corners.setdefault(str(axis), []).append(str(value))
+                corner_summaries = [
+                    {
+                        "corners": json.loads(str(item[0])),
+                        "observed_yield": None
+                        if item[1] is None
+                        else float(item[1]),
+                        "confidence_low": None
+                        if item[2] is None
+                        else float(item[2]),
+                        "confidence_high": None
+                        if item[3] is None
+                        else float(item[3]),
+                        "evaluated_points": int(item[4]),
+                        "invalid_points": int(item[5]),
+                    }
+                    for item in connection.execute(
+                        """SELECT corners_json, observed_yield, confidence_low,
+                                  confidence_high, evaluated_points, invalid_points
+                           FROM statistical_corner_results
+                           WHERE experiment_id = ? ORDER BY corners_json""",
+                        (experiment_id,),
+                    )
+                ]
                 experiments.append(
                     {
                         "experiment_id": experiment_id,
@@ -1327,8 +1706,14 @@ def query_experiments(
                         "failed_points": int(row[10]),
                         "all_passed": None if row[11] is None else bool(row[11]),
                         "reuse_cache": bool(row[12]),
-                        "manifest_path": str(row[13]),
-                        "results_path": None if row[14] is None else str(row[14]),
+                        "circuit_sha256": str(row[13]),
+                        "statistical": bool(row[14]),
+                        "sampling_method": None if row[15] is None else str(row[15]),
+                        "observed_yield": None if row[16] is None else float(row[16]),
+                        "confidence_low": None if row[17] is None else float(row[17]),
+                        "confidence_high": None if row[18] is None else float(row[18]),
+                        "manifest_path": str(row[19]),
+                        "results_path": None if row[20] is None else str(row[20]),
                         "parameters": [
                             {
                                 "ordinal": int(item[0]),
@@ -1344,6 +1729,9 @@ def query_experiments(
                         ],
                         "measurement_names": measurement_names,
                         "requirement_metrics": requirement_metrics,
+                        "statistical_variables": statistical_variables,
+                        "statistical_corners": statistical_corners,
+                        "corner_summaries": corner_summaries,
                     }
                 )
         finally:

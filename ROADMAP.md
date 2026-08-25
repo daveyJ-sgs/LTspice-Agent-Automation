@@ -574,10 +574,20 @@ Verification gate:
   statistical report is
   `mcp-experiment-20260824-204055-619847-e1afd7fd/report.html`
 
-##### Phase 3E-B: Statistical index and dashboard queries
+##### Phase 3E-B: Statistical index and dashboard queries — complete
 
-- Index statistical definitions and summaries for queries by circuit, status,
-  yield, confidence bound, corner, variable, and requirement.
+- Schema-v2 rebuildable SQLite records circuit hashes, statistical/sampling
+  identity, aggregate yield and Wilson bounds, sampled variables, named corner
+  definitions and per-corner summaries, and requirement metrics
+- Exact query filters cover circuit, status, aggregate or same-corner yield and
+  confidence floors, variable, requirement, and corner values without treating
+  the derived index as authoritative evidence
+- Multiple corner predicates plus yield/confidence thresholds bind to one
+  actual corner result; unpooled studies retain null aggregate fields
+- The offline dashboard exposes method and aggregate or per-corner yield and
+  searches variables and requirements alongside existing experiment metadata
+- Synthetic validation covers matching, misses, malformed inputs, and corner
+  binding; rebuilding 48 real experiments and 1,640 points produced zero issues
 
 ##### Phase 3E-C: Compatible statistical comparison
 

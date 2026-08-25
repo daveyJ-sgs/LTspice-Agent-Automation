@@ -269,6 +269,124 @@ class ExperimentIndexTests(unittest.TestCase):
         self.assertEqual(record["finished_points"], 1)
         self.assertEqual(record["point_count"], 2)
 
+    def test_indexes_and_queries_statistical_definitions_and_summaries(self) -> None:
+        experiment_id = "mcp-experiment-20260824-141000-000000-acde1234"
+        points = [
+            self.point(0, {"R": "1k", "C": "10n"}, passed=True),
+            self.point(1, {"R": "1k", "C": "20n"}, passed=False),
+            self.point(2, {"R": "2k", "C": "10n"}, passed=True),
+            self.point(3, {"R": "2k", "C": "20n"}, passed=False),
+        ]
+        directory = self.write_experiment(experiment_id, points=points)
+        manifest_path = directory / "experiment_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        source = {
+            "kind": "statistical",
+            "sampling_method": "halton",
+            "generator_version": "sha256-test-v1",
+            "plan_id": "statistical-plan-aaaaaaaaaaaaaaaa",
+            "plan_sha256": "a" * 64,
+            "definition_hash": "b" * 64,
+            "runs_relative_path": (
+                "statistical-plans/statistical-plan-aaaaaaaaaaaaaaaa/"
+                "statistical_plan.json"
+            ),
+            "corner_aggregate": True,
+            "corner_axes": [
+                {
+                    "name": "process",
+                    "parameter": "C",
+                    "unit": "F",
+                    "values": [
+                        {"name": "fast", "value": "10n"},
+                        {"name": "slow", "value": "20n"},
+                    ],
+                }
+            ],
+            "point_metadata": [
+                {
+                    "index": index,
+                    "sample_index": index // 2,
+                    "corners": {"process": "fast" if index % 2 == 0 else "slow"},
+                }
+                for index in range(4)
+            ],
+        }
+        manifest["definition"] = {
+            "netlist_template": "R1 in out {R}\nC1 out 0 {C}\n.end\n",
+            "parameters": [],
+            "derived_parameters": [],
+            "parameter_order": ["R", "C"],
+            "derived_parameter_order": [],
+            "parameter_units": {"R": "ohm", "C": "F"},
+            "point_plan": {
+                "schema_version": 1,
+                "points": [point["parameters"] for point in points],
+                "source": source,
+            },
+            "execution_mode": "independent",
+            "reuse_cache": False,
+        }
+        manifest["definition_hash"] = experiment_index._definition_hash(
+            manifest["definition"]
+        )
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        built = experiment_index.build_experiment_index(self.runs)
+        all_statistical = experiment_index.query_experiments(
+            self.runs, statistical=True
+        )
+
+        self.assertEqual(built["issues"], [])
+        self.assertEqual(all_statistical["total"], 1)
+        record = all_statistical["experiments"][0]
+        self.assertEqual(record["sampling_method"], "halton")
+        self.assertEqual(record["observed_yield"], 0.5)
+        self.assertLess(record["confidence_low"], 0.2)
+        self.assertGreater(record["confidence_high"], 0.8)
+        self.assertEqual(record["statistical_variables"], ["R"])
+        self.assertEqual(
+            record["statistical_corners"], {"process": ["fast", "slow"]}
+        )
+        self.assertEqual(
+            [item["observed_yield"] for item in record["corner_summaries"]],
+            [1.0, 0.0],
+        )
+        filters = [
+            {"circuit_sha256": record["circuit_sha256"]},
+            {"minimum_yield": 0.5},
+            {"minimum_confidence_low": 0.1},
+            {"corner": {"process": "slow"}},
+            {"corner": {"process": "fast"}, "minimum_yield": 0.9},
+            {
+                "corner": {"process": "fast"},
+                "minimum_confidence_low": 0.3,
+            },
+            {"variable": "R"},
+            {"requirement_metric": "cutoff_frequency"},
+        ]
+        for arguments in filters:
+            with self.subTest(arguments=arguments):
+                self.assertEqual(
+                    experiment_index.query_experiments(self.runs, **arguments)["total"],
+                    1,
+                )
+        misses = [
+            {"minimum_yield": 0.51},
+            {"minimum_confidence_low": 0.2},
+            {"corner": {"process": "typical"}},
+            {"corner": {"process": "slow"}, "minimum_yield": 0.1},
+            {"variable": "C"},
+            {"requirement_metric": "rise_time"},
+            {"statistical": False},
+        ]
+        for arguments in misses:
+            with self.subTest(arguments=arguments):
+                self.assertEqual(
+                    experiment_index.query_experiments(self.runs, **arguments)["total"],
+                    0,
+                )
+
     def test_schema_v2_definition_hash_is_verified(self) -> None:
         experiment_id = "mcp-experiment-20260824-125000-000000-aabbccdd"
         directory = self.write_experiment(
@@ -427,6 +545,14 @@ class ExperimentIndexTests(unittest.TestCase):
             {"all_passed": 1},
             {"parameters": {}},
             {"parameters": {"R": 1000}},
+            {"circuit_sha256": "ABC"},
+            {"statistical": 1},
+            {"minimum_yield": -0.1},
+            {"minimum_confidence_low": float("nan")},
+            {"corner": {}},
+            {"corner": {"load": 1}},
+            {"variable": ""},
+            {"requirement_metric": 1},
         ]
         for arguments in invalid_arguments:
             with self.subTest(arguments=arguments), self.assertRaises(ValueError):

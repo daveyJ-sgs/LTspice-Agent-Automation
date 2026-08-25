@@ -1316,8 +1316,15 @@ def query_experiments(
     execution_mode: ExperimentExecutionMode | None = None,
     all_passed: bool | None = None,
     parameters: dict[str, str] | None = None,
+    circuit_sha256: str | None = None,
+    statistical: bool | None = None,
+    minimum_yield: float | None = None,
+    minimum_confidence_low: float | None = None,
+    corner: dict[str, str] | None = None,
+    variable: str | None = None,
+    requirement_metric: str | None = None,
 ) -> ExperimentQueryResult:
-    """Query experiment summaries using exact, same-point parameter filters."""
+    """Query ordinary or statistical experiment summaries with exact filters."""
     return experiment_index.query_experiments(
         RUNS_DIR,
         limit=limit,
@@ -1326,6 +1333,13 @@ def query_experiments(
         execution_mode=execution_mode,
         all_passed=all_passed,
         parameters=parameters,
+        circuit_sha256=circuit_sha256,
+        statistical=statistical,
+        minimum_yield=minimum_yield,
+        minimum_confidence_low=minimum_confidence_low,
+        corner=corner,
+        variable=variable,
+        requirement_metric=requirement_metric,
     )
 
 
