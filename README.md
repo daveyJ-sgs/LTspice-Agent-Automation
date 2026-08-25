@@ -561,12 +561,17 @@ and therefore preserve the same sample-major evidence mapping.
 
 Omitting `sampling_method`, or setting it to `independent`, preserves all prior
 generator versions and artifact bytes. The versioned stratified generator is
-`sha256-stratified-halton-v6`. Phase 3C-4 deliberately rejects Gaussian and
-correlated-Gaussian variables under the two space-filling methods: correct
-bounded and correlated Gaussian stratification needs a deterministic truncated
-normal transform and is reserved for Phase 3C-5 rather than approximated or
-silently clipped. Native LTspice stepping is not used; each planned point keeps
-its own log, RAW file, measurements, and requirement evidence.
+`sha256-stratified-halton-v6`. Phase 3C-5A adds bounded and correlated Gaussian
+support under `sha256-stratified-gaussian-v7`. Uncorrelated values map each
+space-filling coordinate through a deterministic Decimal truncated-normal CDF.
+Correlated groups stratify independent latent-normal coordinates before the
+existing Decimal Cholesky transform. If a correlated vector exceeds any bound,
+the whole vector is deterministically rejected and redrawn; individual values
+are never clipped and the declared matrix is never altered. The Latin-hypercube
+guarantee therefore applies exactly to uncorrelated truncated-Gaussian
+probability strata and to the initial latent coordinates of correlated groups.
+Native LTspice stepping is not used; each planned point keeps its own log, RAW
+file, measurements, and requirement evidence.
 
 Use `get_statistical_plan` to verify and inspect an existing plan. Pass its
 `plan_id` plus an ordinary netlist template to `run_statistical_experiment`:

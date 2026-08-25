@@ -23,6 +23,7 @@ CORRELATION_GENERATOR_VERSION = "sha256-counter-correlations-v3"
 EMPIRICAL_GENERATOR_VERSION = "sha256-counter-empirical-v4"
 CORNER_GENERATOR_VERSION = "sha256-counter-corners-v5"
 STRATIFIED_GENERATOR_VERSION = "sha256-stratified-halton-v6"
+STRATIFIED_GAUSSIAN_GENERATOR_VERSION = "sha256-stratified-gaussian-v7"
 STATISTICAL_GENERATOR_VERSION = UNIFORM_GENERATOR_VERSION
 SUPPORTED_GENERATOR_VERSIONS = {
     UNIFORM_GENERATOR_VERSION,
@@ -31,6 +32,7 @@ SUPPORTED_GENERATOR_VERSIONS = {
     EMPIRICAL_GENERATOR_VERSION,
     CORNER_GENERATOR_VERSION,
     STRATIFIED_GENERATOR_VERSION,
+    STRATIFIED_GAUSSIAN_GENERATOR_VERSION,
 }
 MAX_STATISTICAL_SAMPLES = 1_000
 MAX_STATISTICAL_VARIABLES = 32
@@ -50,6 +52,53 @@ SAMPLING_METHODS = {"independent", "latin_hypercube", "halton"}
 HALTON_PRIMES = (
     2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53,
     59, 61, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127, 131,
+)
+SQRT_TWO_PI = Decimal(
+    "2.506628274631000502415765284811045253006986740609938316629923576"
+)
+NORMAL_CDF_CUTOFF = Decimal(12)
+NORMAL_SERIES_EPSILON = Decimal("1e-85")
+ACKLAM_P_LOW = Decimal("0.02425")
+ACKLAM_A = tuple(
+    Decimal(value)
+    for value in (
+        "-39.69683028665376",
+        "220.9460984245205",
+        "-275.9285104469687",
+        "138.3577518672690",
+        "-30.66479806614716",
+        "2.506628277459239",
+    )
+)
+ACKLAM_B = tuple(
+    Decimal(value)
+    for value in (
+        "-54.47609879822406",
+        "161.5858368580409",
+        "-155.6989798598866",
+        "66.80131188771972",
+        "-13.28068155288572",
+    )
+)
+ACKLAM_C = tuple(
+    Decimal(value)
+    for value in (
+        "-0.007784894002430293",
+        "-0.3223964580411365",
+        "-2.400758277161838",
+        "-2.549732539343734",
+        "4.374664141464968",
+        "2.938163982698783",
+    )
+)
+ACKLAM_D = tuple(
+    Decimal(value)
+    for value in (
+        "0.007784695709041462",
+        "0.3224671290700398",
+        "2.445134137142996",
+        "3.754408661907416",
+    )
 )
 
 
@@ -851,44 +900,46 @@ def _normalized_definition(
         definition["corner_axes"] = normalized_corner_axes
         definition["corner_aggregate"] = corner_aggregate
     if sampling_method != "independent":
-        gaussian = next(
-            (
-                str(variable["name"])
-                for variable in normalized_variables
-                if variable["distribution"] == "gaussian"
-            ),
-            None,
-        )
-        if gaussian is not None:
-            raise ValueError(
-                f"sampling_method {sampling_method} does not support gaussian "
-                f"variable {gaussian}"
-            )
         definition["sampling_method"] = sampling_method
     return definition
 
 
-def _sampler_digest(*parts: object) -> bytes:
+def _sampler_digest(
+    *parts: object, generator_version: str = STRATIFIED_GENERATOR_VERSION
+) -> bytes:
     return hashlib.sha256(
         b"\0".join(
-            [STRATIFIED_GENERATOR_VERSION.encode("ascii")]
+            [generator_version.encode("ascii")]
             + [str(part).encode("utf-8") for part in parts]
         )
     ).digest()
 
 
-def _sampler_unit_fraction(*parts: object) -> Decimal:
-    integer = int.from_bytes(_sampler_digest(*parts)[:8], "big")
+def _sampler_unit_fraction(
+    *parts: object, generator_version: str = STRATIFIED_GENERATOR_VERSION
+) -> Decimal:
+    integer = int.from_bytes(
+        _sampler_digest(*parts, generator_version=generator_version)[:8], "big"
+    )
     return Decimal(integer) / Decimal(1 << 64)
 
 
 def _latin_hypercube_fractions(
-    seed: int, name: str, sample_count: int
+    seed: int,
+    name: str,
+    sample_count: int,
+    generator_version: str = STRATIFIED_GENERATOR_VERSION,
 ) -> list[Decimal]:
     strata = sorted(
         range(sample_count),
         key=lambda index: (
-            _sampler_digest("latin_hypercube", seed, name, index),
+            _sampler_digest(
+                "latin_hypercube",
+                seed,
+                name,
+                index,
+                generator_version=generator_version,
+            ),
             index,
         ),
     )
@@ -897,7 +948,12 @@ def _latin_hypercube_fractions(
         (
             Decimal(strata[sample_index])
             + _sampler_unit_fraction(
-                "latin_hypercube", seed, name, sample_index, "jitter"
+                "latin_hypercube",
+                seed,
+                name,
+                sample_index,
+                "jitter",
+                generator_version=generator_version,
             )
         )
         / count
@@ -906,29 +962,68 @@ def _latin_hypercube_fractions(
 
 
 def _halton_fractions(
-    seed: int, name: str, sample_count: int, dimension: int
+    seed: int,
+    name: str,
+    sample_count: int,
+    dimension: int,
+    generator_version: str = STRATIFIED_GENERATOR_VERSION,
 ) -> list[Decimal]:
+    base, permutation, shift = _halton_configuration(
+        seed, name, dimension, generator_version
+    )
+    return [
+        _scrambled_radical_inverse(sample_index + 1, base, permutation, shift)
+        for sample_index in range(sample_count)
+    ]
+
+
+def _halton_configuration(
+    seed: int, name: str, dimension: int, generator_version: str
+) -> tuple[int, list[int], Decimal]:
     base = HALTON_PRIMES[dimension]
     nonzero_digits = sorted(
         range(1, base),
         key=lambda digit: (
-            _sampler_digest("halton", seed, name, "digit", digit),
+            _sampler_digest(
+                "halton",
+                seed,
+                name,
+                "digit",
+                digit,
+                generator_version=generator_version,
+            ),
             digit,
         ),
     )
-    permutation = [0, *nonzero_digits]
-    shift = _sampler_unit_fraction("halton", seed, name, "shift")
-    fractions: list[Decimal] = []
-    for sample_index in range(sample_count):
-        index = sample_index + 1
-        denominator = Decimal(base)
-        radical_inverse = Decimal(0)
-        while index:
-            index, digit = divmod(index, base)
-            radical_inverse += Decimal(permutation[digit]) / denominator
-            denominator *= base
-        fractions.append((radical_inverse + shift) % Decimal(1))
-    return fractions
+    shift = _sampler_unit_fraction(
+        "halton", seed, name, "shift", generator_version=generator_version
+    )
+    return base, [0, *nonzero_digits], shift
+
+
+def _scrambled_radical_inverse(
+    index: int, base: int, permutation: list[int], shift: Decimal
+) -> Decimal:
+    denominator = Decimal(base)
+    radical_inverse = Decimal(0)
+    while index:
+        index, digit = divmod(index, base)
+        radical_inverse += Decimal(permutation[digit]) / denominator
+        denominator *= base
+    return (radical_inverse + shift) % Decimal(1)
+
+
+def _halton_retry_fraction(
+    seed: int,
+    name: str,
+    point_index: int,
+    dimension: int,
+    generator_version: str,
+) -> Decimal:
+    base, permutation, shift = _halton_configuration(
+        seed, name, dimension, generator_version
+    )
+    return _scrambled_radical_inverse(point_index, base, permutation, shift)
 
 
 def _uniform_fraction(seed: int, sample_index: int, name: str) -> Decimal:
@@ -965,6 +1060,90 @@ def _distribution_fraction(
     )
     integer = int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
     return Decimal(integer) / Decimal(1 << 64)
+
+
+def _decimal_polynomial(coefficients: tuple[Decimal, ...], value: Decimal) -> Decimal:
+    result = coefficients[0]
+    for coefficient in coefficients[1:]:
+        result = result * value + coefficient
+    return result
+
+
+def _standard_normal_cdf(value: Decimal) -> Decimal:
+    """Evaluate the standard-normal CDF with deterministic Decimal arithmetic."""
+    with localcontext() as context:
+        context.prec = 100
+        if value <= -NORMAL_CDF_CUTOFF:
+            return Decimal(0)
+        if value >= NORMAL_CDF_CUTOFF:
+            return Decimal(1)
+        magnitude = abs(value)
+        term = magnitude
+        integral = term
+        index = 0
+        while True:
+            term *= (
+                -(magnitude * magnitude)
+                * Decimal(2 * index + 1)
+                / (Decimal(2) * Decimal(index + 1) * Decimal(2 * index + 3))
+            )
+            integral += term
+            index += 1
+            if abs(term) < NORMAL_SERIES_EPSILON:
+                break
+        positive = Decimal("0.5") + integral / SQRT_TWO_PI
+        return +(positive if value >= 0 else Decimal(1) - positive)
+
+
+def _inverse_standard_normal(probability: Decimal) -> Decimal:
+    """Invert the standard-normal CDF using Acklam plus Decimal refinement."""
+    if probability <= 0 or probability >= 1:
+        raise ValueError("normal probability must be strictly between 0 and 1")
+    with localcontext() as context:
+        context.prec = 100
+        if probability < ACKLAM_P_LOW:
+            q = (-Decimal(2) * probability.ln()).sqrt()
+            estimate = _decimal_polynomial(ACKLAM_C, q) / (
+                _decimal_polynomial(ACKLAM_D, q) * q + 1
+            )
+        elif probability > Decimal(1) - ACKLAM_P_LOW:
+            q = (-Decimal(2) * (Decimal(1) - probability).ln()).sqrt()
+            estimate = -_decimal_polynomial(ACKLAM_C, q) / (
+                _decimal_polynomial(ACKLAM_D, q) * q + 1
+            )
+        else:
+            q = probability - Decimal("0.5")
+            squared = q * q
+            estimate = _decimal_polynomial(ACKLAM_A, squared) * q / (
+                _decimal_polynomial(ACKLAM_B, squared) * squared + 1
+            )
+        for _ in range(3):
+            error = _standard_normal_cdf(estimate) - probability
+            density = (-estimate * estimate / 2).exp() / SQRT_TWO_PI
+            estimate -= error / density
+        return +estimate
+
+
+def _open_unit_fraction(fraction: Decimal) -> Decimal:
+    half_step = Decimal(1) / Decimal(1 << 65)
+    return min(max(fraction, half_step), Decimal(1) - half_step)
+
+
+def _bounded_gaussian_quantile(
+    variable: dict[str, object], fraction: Decimal
+) -> Decimal:
+    minimum = Decimal(str(variable["minimum"]))
+    maximum = Decimal(str(variable["maximum"]))
+    nominal = Decimal(str(variable["nominal"]))
+    sigma = Decimal(str(variable["sigma"]))
+    with localcontext() as context:
+        context.prec = 100
+        lower_probability = _standard_normal_cdf((minimum - nominal) / sigma)
+        upper_probability = _standard_normal_cdf((maximum - nominal) / sigma)
+        probability = lower_probability + _open_unit_fraction(fraction) * (
+            upper_probability - lower_probability
+        )
+        return nominal + sigma * _inverse_standard_normal(probability)
 
 
 def _bounded_gaussian(
@@ -1134,6 +1313,82 @@ def _correlated_gaussians(
     )
 
 
+def _stratified_correlated_gaussians(
+    group: dict[str, object],
+    factor: list[list[Decimal]],
+    variables_by_name: dict[str, dict[str, object]],
+    seed: int,
+    sample_index: int,
+    sample_count: int,
+    sampling_method: str,
+    sampling_fractions: dict[str, list[Decimal]],
+    dimensions: dict[str, int],
+    generator_version: str,
+) -> dict[str, Decimal]:
+    names = group["variables"]
+    assert isinstance(names, list)
+    group_key = ",".join(str(name) for name in names)
+    with localcontext() as context:
+        context.prec = 100
+        for attempt in range(MAX_GAUSSIAN_ATTEMPTS):
+            independent: list[Decimal] = []
+            for name_value in names:
+                name = str(name_value)
+                if attempt == 0:
+                    fraction = sampling_fractions[name][sample_index]
+                elif sampling_method == "latin_hypercube":
+                    fraction = _sampler_unit_fraction(
+                        "latin_hypercube",
+                        "correlation_retry",
+                        seed,
+                        group_key,
+                        sample_index,
+                        attempt,
+                        name,
+                        generator_version=generator_version,
+                    )
+                else:
+                    fraction = _halton_retry_fraction(
+                        seed,
+                        name,
+                        sample_count
+                        + sample_index * MAX_GAUSSIAN_ATTEMPTS
+                        + attempt,
+                        dimensions[name],
+                        generator_version,
+                    )
+                independent.append(
+                    _inverse_standard_normal(_open_unit_fraction(fraction))
+                )
+            values: dict[str, Decimal] = {}
+            for row, name_value in enumerate(names):
+                name = str(name_value)
+                variable = variables_by_name[name]
+                standard_normal = sum(
+                    (
+                        factor[row][column] * independent[column]
+                        for column in range(row + 1)
+                    ),
+                    Decimal(0),
+                )
+                value = Decimal(str(variable["nominal"])) + Decimal(
+                    str(variable["sigma"])
+                ) * standard_normal
+                if not (
+                    Decimal(str(variable["minimum"]))
+                    <= value
+                    <= Decimal(str(variable["maximum"]))
+                ):
+                    break
+                values[name] = value
+            if len(values) == len(names):
+                return values
+    raise ValueError(
+        f"correlation group {group_key} could not draw bounded gaussian values "
+        f"within {MAX_GAUSSIAN_ATTEMPTS} attempts"
+    )
+
+
 def build_statistical_plan(
     variables: list[StatisticalVariable],
     sample_count: int,
@@ -1166,8 +1421,14 @@ def build_statistical_plan(
     normalized_sampling_method = str(
         definition.get("sampling_method", "independent")
     )
+    has_gaussian = any(
+        variable.get("distribution") == "gaussian"
+        for variable in normalized_variables
+    )
     generator_version = (
-        STRATIFIED_GENERATOR_VERSION
+        STRATIFIED_GAUSSIAN_GENERATOR_VERSION
+        if normalized_sampling_method != "independent" and has_gaussian
+        else STRATIFIED_GENERATOR_VERSION
         if normalized_sampling_method != "independent"
         else CORNER_GENERATOR_VERSION
         if normalized_corner_axes
@@ -1212,10 +1473,14 @@ def build_statistical_plan(
         for group in normalized_correlations
     }
     sampling_fractions: dict[str, list[Decimal]] = {}
+    dimensions: dict[str, int] = {}
     if normalized_sampling_method == "latin_hypercube":
         sampling_fractions = {
             str(variable["name"]): _latin_hypercube_fractions(
-                seed, str(variable["name"]), sample_count
+                seed,
+                str(variable["name"]),
+                sample_count,
+                generator_version,
             )
             for variable in normalized_variables
         }
@@ -1227,7 +1492,13 @@ def build_statistical_plan(
             )
         }
         sampling_fractions = {
-            name: _halton_fractions(seed, name, sample_count, dimension)
+            name: _halton_fractions(
+                seed,
+                name,
+                sample_count,
+                dimension,
+                generator_version,
+            )
             for name, dimension in dimensions.items()
         }
     with localcontext() as context:
@@ -1236,15 +1507,29 @@ def build_statistical_plan(
             parameters: dict[str, str] = {}
             correlated_values: dict[str, Decimal] = {}
             for group in normalized_correlations:
+                group_key = ",".join(
+                    str(name) for name in group["variables"]
+                )
                 correlated_values.update(
                     _correlated_gaussians(
                         group,
-                        correlation_factors[
-                            ",".join(str(name) for name in group["variables"])
-                        ],
+                        correlation_factors[group_key],
                         variables_by_name,
                         seed,
                         sample_index,
+                    )
+                    if normalized_sampling_method == "independent"
+                    else _stratified_correlated_gaussians(
+                        group,
+                        correlation_factors[group_key],
+                        variables_by_name,
+                        seed,
+                        sample_index,
+                        sample_count,
+                        normalized_sampling_method,
+                        sampling_fractions,
+                        dimensions,
+                        generator_version,
                     )
                 )
             for variable in normalized_variables:
@@ -1276,7 +1561,9 @@ def build_statistical_plan(
                     minimum = Decimal(str(variable["minimum"]))
                     maximum = Decimal(str(variable["maximum"]))
                     parameters[name] = _bounded_canonical_decimal(
-                        _bounded_gaussian(variable, seed, sample_index),
+                        _bounded_gaussian(variable, seed, sample_index)
+                        if fraction is None
+                        else _bounded_gaussian_quantile(variable, fraction),
                         minimum,
                         maximum,
                     )

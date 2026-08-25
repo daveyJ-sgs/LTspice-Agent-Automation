@@ -406,10 +406,32 @@ Verification gate:
   LTspice stepping is deferred unless every stepped result can be mapped back
   to its planned point and complete artifacts
 
-##### Phase 3C-5: Integration and verification
+##### Phase 3C-5: Integration and verification — in progress
 
-- Extend MCP, JSON/CSV, reports, documentation, and macOS/Windows regression
-  coverage across correlation, empirical populations, corners, and samplers.
+###### Phase 3C-5A: Gaussian sampler integration — complete
+
+- Deterministic high-precision Decimal normal CDF and inverse-CDF transform for
+  bounded Gaussian Latin-hypercube and Halton coordinates
+- Exact truncated-probability strata for uncorrelated bounded Gaussians without
+  clipping, platform math libraries, or changes to v1-v6 artifacts
+- Correlated latent-normal stratification through the existing Decimal Cholesky
+  matrix with deterministic whole-vector bound rejection
+- Versioned `sha256-stratified-gaussian-v7` plans with golden, persistence,
+  probability-strata, tight-bound, 1,000-sample population, MCP, and
+  macOS/Windows regression coverage
+- A real 16-point v7 Sallen-Key study exercised correlated Gaussian R/C pairs,
+  weighted gain/load populations, and complete LTspice evidence with no invalid
+  samples (10/16 passing, 62.5% observed yield)
+
+###### Phase 3C-5B: Complete output integration
+
+- Carry sampling method and provenance through manifests, statistical JSON/CSV,
+  MCP summaries, durable resume, and the human HTML report.
+
+###### Phase 3C-5C: Final Phase 3 verification
+
+- Exercise combined empirical, correlated, cornered, and space-filling studies;
+  complete adversarial review, documentation, and real LTspice validation.
 
 Verification gate:
 

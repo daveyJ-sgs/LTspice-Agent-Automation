@@ -1146,6 +1146,31 @@ class MCPServerTests(unittest.TestCase):
             halton.structured_content["generator_version"],
             "sha256-stratified-halton-v6",
         )
+        gaussian_halton = asyncio.run(
+            mcp_server.mcp.call_tool(
+                "generate_statistical_plan",
+                {
+                    "variables": [
+                        {
+                            "name": "R",
+                            "distribution": "gaussian",
+                            "minimum": 9000,
+                            "maximum": 11000,
+                            "nominal": 10000,
+                            "sigma": 250,
+                        }
+                    ],
+                    "sample_count": 4,
+                    "seed": 1,
+                    "sampling_method": "halton",
+                },
+            )
+        )
+        self.assertFalse(gaussian_halton.is_error)
+        self.assertEqual(
+            gaussian_halton.structured_content["generator_version"],
+            "sha256-stratified-gaussian-v7",
+        )
 
     def test_durable_statistical_study_executes_frozen_plan_without_resampling(
         self,

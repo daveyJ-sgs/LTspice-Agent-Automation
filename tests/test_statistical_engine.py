@@ -218,27 +218,128 @@ class StatisticalEngineTests(unittest.TestCase):
         self.assertEqual(plan["points"][0]["corners"], {"load": "light"})
         self.assertEqual(plan["points"][1]["corners"], {"load": "heavy"})
 
-    def test_stratified_sampling_rejects_invalid_methods_and_gaussians(self) -> None:
+    def test_stratified_sampling_rejects_invalid_methods(self) -> None:
         with self.assertRaisesRegex(ValueError, "sampling_method must be"):
             statistical_engine.build_statistical_plan(
                 self.variables(), 4, 1, sampling_method="sobol"
             )
-        with self.assertRaisesRegex(ValueError, "does not support gaussian"):
-            statistical_engine.build_statistical_plan(
-                [
-                    {
-                        "name": "R",
-                        "distribution": "gaussian",
-                        "minimum": 9000,
-                        "maximum": 11000,
-                        "nominal": 10000,
-                        "sigma": 100,
-                    }
-                ],
-                4,
-                1,
-                sampling_method="halton",
+
+    def test_latin_hypercube_truncated_gaussian_matches_probability_strata(
+        self,
+    ) -> None:
+        variable = {
+            "name": "X",
+            "distribution": "gaussian",
+            "minimum": -2,
+            "maximum": 2,
+            "nominal": 0,
+            "sigma": 1,
+        }
+        plan = statistical_engine.build_statistical_plan(
+            [variable], 16, 20260824, sampling_method="latin_hypercube"
+        )
+
+        self.assertEqual(
+            plan["generator_version"], "sha256-stratified-gaussian-v7"
+        )
+        self.assertEqual(
+            hashlib.sha256(statistical_engine._artifact_bytes(plan)).hexdigest(),
+            "2881915adfcd8d91c473e1f13c7d4eea63c2715ff511a08712e5fa058936b099",
+        )
+        lower = statistical_engine._standard_normal_cdf(Decimal(-2))
+        upper = statistical_engine._standard_normal_cdf(Decimal(2))
+        strata = {
+            int(
+                (
+                    statistical_engine._standard_normal_cdf(
+                        Decimal(point["parameters"]["X"])
+                    )
+                    - lower
+                )
+                / (upper - lower)
+                * 16
             )
+            for point in plan["points"]
+        }
+        self.assertEqual(strata, set(range(16)))
+        self.assertTrue(
+            all(
+                -2 <= float(point["parameters"]["X"]) <= 2
+                for point in plan["points"]
+            )
+        )
+        saved = statistical_engine.save_statistical_plan(self.runs, plan)
+        self.assertEqual(saved["sampling_method"], "latin_hypercube")
+        self.assertEqual(
+            statistical_engine.load_statistical_plan(self.runs, saved["plan_id"]),
+            plan,
+        )
+
+    def test_stratified_correlated_gaussians_preserve_bounds_and_population(
+        self,
+    ) -> None:
+        variables = [
+            {
+                "name": name,
+                "distribution": "gaussian",
+                "minimum": -5,
+                "maximum": 5,
+                "nominal": 0,
+                "sigma": 1,
+            }
+            for name in ("A", "B")
+        ]
+        correlations = [
+            {"variables": ["A", "B"], "matrix": [[1, 0.8], [0.8, 1]]}
+        ]
+        for method in ("latin_hypercube", "halton"):
+            plan = statistical_engine.build_statistical_plan(
+                variables,
+                1000,
+                44,
+                correlations=correlations,
+                sampling_method=method,
+            )
+            first = [float(point["parameters"]["A"]) for point in plan["points"]]
+            second = [float(point["parameters"]["B"]) for point in plan["points"]]
+            self.assertAlmostEqual(statistics.mean(first), 0, delta=0.02)
+            self.assertAlmostEqual(statistics.pstdev(first), 1, delta=0.02)
+            self.assertAlmostEqual(
+                statistics.correlation(first, second), 0.8, delta=0.02
+            )
+            self.assertTrue(all(-5 <= value <= 5 for value in first + second))
+
+    def test_stratified_correlated_gaussians_jointly_reject_tight_bounds(
+        self,
+    ) -> None:
+        variables = [
+            {
+                "name": name,
+                "distribution": "gaussian",
+                "minimum": -0.1,
+                "maximum": 0.1,
+                "nominal": 0,
+                "sigma": 1,
+            }
+            for name in ("A", "B")
+        ]
+        plan = statistical_engine.build_statistical_plan(
+            variables,
+            8,
+            4,
+            correlations=[
+                {"variables": ["A", "B"], "matrix": [[1, 0.8], [0.8, 1]]}
+            ],
+            sampling_method="halton",
+        )
+
+        self.assertTrue(
+            all(
+                -0.1 <= float(value) <= 0.1
+                for point in plan["points"]
+                for value in point["parameters"].values()
+            )
+        )
 
     def test_mixed_plan_matches_gaussian_and_discrete_golden_values(self) -> None:
         plan = statistical_engine.build_statistical_plan(

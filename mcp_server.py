@@ -979,9 +979,9 @@ def generate_statistical_plan(
     axes, Latin-hypercube sampling, and scrambled Halton sampling. Empirical
     values may be inline or read from a UTF-8 CSV confined to this project. The
     versioned seed produces the same canonical paired points on macOS and
-    Windows. Stratified methods support uniform, discrete, and empirical
-    variables. Set corner_aggregate only to request a pooled yield in addition
-    to the mandatory per-corner results.
+    Windows. Stratified methods support uniform, bounded Gaussian, correlated
+    Gaussian, discrete, and empirical variables. Set corner_aggregate only to
+    request a pooled yield in addition to the mandatory per-corner results.
     """
     return statistical_engine.generate_statistical_plan(
         RUNS_DIR,
