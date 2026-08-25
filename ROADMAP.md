@@ -462,7 +462,7 @@ Verification gate:
 - A deliberately weak Sallen-Key corner fails while stronger corners remain
   independently visible in the structured results.
 
-#### Phase 3D: Sensitivity and worst-credible-case analysis — in progress
+#### Phase 3D: Sensitivity and worst-credible-case analysis — complete
 
 ##### Phase 3D-A: Worst evidenced cases — complete
 
@@ -523,12 +523,29 @@ Verification gate:
 - Real evidence is `mcp-experiment-20260825-075328-231073-99031848`, with its
   interactive `report.html` and traceable RAW/log artifacts
 
-##### Phase 3D-D: Adaptive boundary sampling
+##### Phase 3D-D: Adaptive boundary sampling — complete
 
-- Add deterministic, batched adaptive sampling near observed failure
-  boundaries, with stopping rules, sample budgets, and confidence history.
-- Keep continuous design optimization and Pareto selection in Phase 4; Phase 3
-  may characterize statistical risk but must not silently redesign a circuit.
+- Content-addressed one-dimensional studies require two completed source points
+  that differ only in the selected numeric variable and have opposite outcomes
+  for one stable requirement identity
+- Deterministic evenly spaced interior batches run through the existing durable
+  executor, inheriting bounded concurrency, cache policy, restart, and complete
+  per-point LTspice evidence
+- Atomic parent manifests preserve the active child before launch and record
+  every observation, signed margin, evidence path, bracket, width, shrink
+  ratio, and cumulative sample count at batch boundaries
+- Input tolerance, sample budget, and numeric resolution are explicit terminal
+  rules; child failure, malformed evidence, and multiple pass/fail transitions
+  fail closed instead of inventing a boundary
+- Adaptive samples remain separate from Wilson yield confidence because their
+  selection is intentionally biased toward the boundary
+- MCP tools define, advance, and inspect the resumable workflow; continuous
+  design optimization and Pareto selection remain deferred to Phase 4
+- A real nine-sample Sallen-Key load study refined the 7.6 dB gain-floor
+  transition from 1-10 kOhm to 1140.625-1281.25 ohm in three batches, stopping
+  honestly at its sample budget with complete RAW/log evidence
+- Real evidence is `adaptive-study-b29f5876eda244b0`; its final child report is
+  `mcp-experiment-20260825-081030-076374-3524e910/report.html`
 
 Verification gate:
 
@@ -536,7 +553,7 @@ Verification gate:
   reporting.
 - Known worst finite corners are recovered exactly, including ties.
 - Adaptive studies resume at a batch boundary and reproduce their full sample
-  and confidence history from the same definition and seed.
+  and boundary-resolution history from the same definition.
 
 #### Phase 3E: Statistical reports, indexing, and hardening
 

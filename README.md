@@ -326,6 +326,8 @@ Model Context Protocol, in-process (no REST server needed): `run_netlist`,
 `analyze_statistical_worst_cases`,
 `analyze_statistical_sensitivity`,
 `define_local_sensitivity_study`, `analyze_local_sensitivity`,
+`define_adaptive_boundary_study`, `advance_adaptive_boundary_study`,
+`get_adaptive_boundary_study`,
 `build_experiment_report`, `build_comparison_report`,
 `build_experiment_dashboard`, `list_runs`, `build_dashboard`, and
 `list_examples`.
@@ -706,6 +708,28 @@ Tornado impact is the larger absolute margin change from the baseline. This is
 a controlled local response around one evidenced point, not a population-wide
 importance claim. Compare it with global rank sensitivity rather than using
 one as a substitute for the other.
+
+### Refine an observed pass/fail boundary
+
+Call `define_adaptive_boundary_study` with two completed source points, one
+requirement `check_id`, and the single numeric parameter to refine. The points
+must differ only in that parameter and must have opposite electrical outcomes
+for the selected requirement. This keeps the task to evidenced,
+one-dimensional boundary characterization rather than circuit optimization.
+
+Each `advance_adaptive_boundary_study` call either incorporates a completed
+child batch or starts the next deterministic batch of evenly spaced interior
+values. Poll the returned `active_experiment_id` with `get_experiment`, then
+advance again when it is terminal. `get_adaptive_boundary_study` inspects the
+parent without changing it. The content-addressed parent manifest records every
+child experiment, input, signed margin, evidence path, bracket, width, shrink
+ratio, and cumulative sample count, so a restart resumes at a batch boundary.
+
+The study stops at its input tolerance, sample budget, or numeric resolution.
+It fails closed if child evidence is incomplete or reveals more than one
+pass/fail transition. Adaptively selected points do not update Wilson yield
+confidence: they resolve a local boundary and are not an unbiased population
+sample.
 
 ### Run a durable experiment job
 

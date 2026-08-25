@@ -30,6 +30,7 @@ from typing import Literal
 
 from mcp.server.mcpserver import MCPServer
 
+import adaptive_boundary
 import experiment_engine
 import experiment_index
 import experiment_report
@@ -76,6 +77,7 @@ StatisticalSamplingMethod = Literal["independent", "latin_hypercube", "halton"]
 StatisticalSummaryResult = statistical_results.StatisticalSummaryResult
 SensitivityAnalysisResult = sensitivity_analysis.SensitivityAnalysisResult
 LocalSensitivityAnalysisResult = local_sensitivity.LocalSensitivityAnalysisResult
+AdaptiveBoundaryStudyResult = adaptive_boundary.AdaptiveBoundaryStudyResult
 WorstCaseAnalysisResult = worst_case_analysis.WorstCaseAnalysisResult
 
 ExperimentIndexStatus = Literal[
@@ -1238,6 +1240,53 @@ def analyze_local_sensitivity(
 ) -> LocalSensitivityAnalysisResult:
     """Write structured local effects and tornado data for a terminal study."""
     return local_sensitivity.analyze_local_sensitivity(RUNS_DIR, experiment_id)
+
+
+@mcp.tool()
+def define_adaptive_boundary_study(
+    source_experiment_id: str,
+    first_point_index: int,
+    second_point_index: int,
+    check_id: str,
+    variable: str,
+    batch_size: int = 3,
+    max_samples: int = 12,
+    input_tolerance: float = 1e-6,
+    max_concurrency: int = 2,
+    reuse_cache: bool = True,
+) -> AdaptiveBoundaryStudyResult:
+    """Define a durable one-dimensional pass/fail boundary refinement."""
+    return adaptive_boundary.define_adaptive_boundary_study(
+        RUNS_DIR,
+        source_experiment_id,
+        first_point_index,
+        second_point_index,
+        check_id,
+        variable,
+        batch_size,
+        max_samples,
+        input_tolerance,
+        max_concurrency,
+        reuse_cache,
+    )
+
+
+@mcp.tool()
+def advance_adaptive_boundary_study(
+    adaptive_id: str,
+) -> AdaptiveBoundaryStudyResult:
+    """Incorporate one completed batch or launch the next boundary batch."""
+    return adaptive_boundary.advance_adaptive_boundary_study(
+        RUNS_DIR, adaptive_id, _get_experiment_manager()
+    )
+
+
+@mcp.tool()
+def get_adaptive_boundary_study(
+    adaptive_id: str,
+) -> AdaptiveBoundaryStudyResult:
+    """Inspect a durable adaptive-boundary study without advancing it."""
+    return adaptive_boundary.get_adaptive_boundary_study(RUNS_DIR, adaptive_id)
 
 
 @mcp.tool()

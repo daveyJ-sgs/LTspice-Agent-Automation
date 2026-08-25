@@ -1029,6 +1029,9 @@ class MCPServerTests(unittest.TestCase):
         self.assertIn("analyze_statistical_sensitivity", by_name)
         self.assertIn("define_local_sensitivity_study", by_name)
         self.assertIn("analyze_local_sensitivity", by_name)
+        self.assertIn("define_adaptive_boundary_study", by_name)
+        self.assertIn("advance_adaptive_boundary_study", by_name)
+        self.assertIn("get_adaptive_boundary_study", by_name)
         self.assertIn(
             "corner_results",
             by_name["summarize_statistical_experiment"].output_schema["properties"],
@@ -2883,6 +2886,94 @@ class MCPServerTests(unittest.TestCase):
         self.assertFalse(analyzed.is_error)
         self.assertEqual(analyzed.structured_content, expected)
         analyze.assert_called_once_with(self.runs, snapshot["experiment_id"])
+
+    def test_adaptive_boundary_tools_work_through_mcp_protocol(self) -> None:
+        expected = {
+            "adaptive_id": "adaptive-study-0123456789abcdef",
+            "adaptive_dir": str(self.runs / "adaptive-studies" / "study"),
+            "manifest": str(self.runs / "adaptive_manifest.json"),
+            "status": "defined",
+            "variable": "RLOAD",
+            "unit": "ohm",
+            "sample_count": 0,
+            "max_samples": 9,
+            "batch_count": 0,
+            "current_width": 9000.0,
+            "input_tolerance": 100.0,
+            "stop_reason": None,
+            "active_experiment_id": None,
+            "error": None,
+        }
+        manager = Mock()
+        with (
+            patch.object(
+                mcp_server.adaptive_boundary,
+                "define_adaptive_boundary_study",
+                return_value=expected,
+            ) as define,
+            patch.object(
+                mcp_server.adaptive_boundary,
+                "advance_adaptive_boundary_study",
+                return_value=expected,
+            ) as advance,
+            patch.object(
+                mcp_server.adaptive_boundary,
+                "get_adaptive_boundary_study",
+                return_value=expected,
+            ) as get,
+            patch.object(mcp_server, "_get_experiment_manager", return_value=manager),
+        ):
+            defined = asyncio.run(
+                mcp_server.mcp.call_tool(
+                    "define_adaptive_boundary_study",
+                    {
+                        "source_experiment_id": "mcp-experiment-source",
+                        "first_point_index": 0,
+                        "second_point_index": 1,
+                        "check_id": "a" * 64,
+                        "variable": "RLOAD",
+                        "batch_size": 3,
+                        "max_samples": 9,
+                        "input_tolerance": 100.0,
+                        "max_concurrency": 1,
+                        "reuse_cache": False,
+                    },
+                )
+            )
+            advanced = asyncio.run(
+                mcp_server.mcp.call_tool(
+                    "advance_adaptive_boundary_study",
+                    {"adaptive_id": expected["adaptive_id"]},
+                )
+            )
+            inspected = asyncio.run(
+                mcp_server.mcp.call_tool(
+                    "get_adaptive_boundary_study",
+                    {"adaptive_id": expected["adaptive_id"]},
+                )
+            )
+
+        self.assertFalse(defined.is_error)
+        self.assertFalse(advanced.is_error)
+        self.assertFalse(inspected.is_error)
+        self.assertEqual(defined.structured_content, expected)
+        self.assertEqual(advanced.structured_content, expected)
+        self.assertEqual(inspected.structured_content, expected)
+        define.assert_called_once_with(
+            self.runs,
+            "mcp-experiment-source",
+            0,
+            1,
+            "a" * 64,
+            "RLOAD",
+            3,
+            9,
+            100.0,
+            1,
+            False,
+        )
+        advance.assert_called_once_with(self.runs, expected["adaptive_id"], manager)
+        get.assert_called_once_with(self.runs, expected["adaptive_id"])
 
     def test_c3_visualization_tools_work_through_mcp_protocol(self) -> None:
         comparison = {
