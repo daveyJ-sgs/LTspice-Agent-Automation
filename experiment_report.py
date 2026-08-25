@@ -499,6 +499,31 @@ def _statistical_panel(summary: dict[str, object] | None) -> str:
 </section>"""
 
 
+def _sampling_provenance_panel(summary: dict[str, object] | None) -> str:
+    if summary is None:
+        return ""
+    provenance = summary.get("sampling_provenance")
+    if not isinstance(provenance, dict):
+        return ""
+    method_labels = {
+        "independent": "Independent random",
+        "latin_hypercube": "Latin hypercube",
+        "halton": "Scrambled Halton",
+    }
+    method = str(provenance["sampling_method"])
+    plan_href = quote("../" + str(provenance["runs_relative_path"]), safe="/")
+    return f"""
+<section class="panel"><h2>Sampling provenance</h2>
+<div class="cards">
+  <div class="card"><span class="muted">Method</span><strong>{_text(method_labels[method])}</strong></div>
+  <div class="card"><span class="muted">Generator</span><code>{_text(provenance['generator_version'])}</code></div>
+  <div class="card"><span class="muted">Immutable plan</span><strong><a href="{plan_href}">{_text(provenance['plan_id'])}</a></strong></div>
+</div>
+<p class="muted">Plan SHA-256<br><code>{_text(provenance['plan_sha256'])}</code></p>
+<p class="muted">Definition SHA-256<br><code>{_text(provenance['definition_hash'])}</code></p>
+</section>"""
+
+
 def _document(
     experiment_id: str,
     results: dict[str, object],
@@ -537,7 +562,7 @@ def _document(
 main{{max-width:1280px;margin:auto;padding:32px 24px 64px}} h1{{font-size:clamp(24px,4vw,38px);margin:.2rem 0;overflow-wrap:anywhere}} h2{{margin:0 0 10px;font-size:20px}}
 a{{color:var(--blue)}} .eyebrow{{color:var(--blue);font-weight:700;text-transform:uppercase;letter-spacing:.09em}} .muted{{color:var(--muted)}}
 .cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:24px 0}} .card,.panel{{background:var(--panel);border:1px solid var(--border);border-radius:10px}}
-.card{{padding:16px}} .card strong{{display:block;font-size:25px}} .panel{{padding:20px;margin:18px 0;overflow:hidden}}
+.card{{padding:16px}} .card strong{{display:block;font-size:25px}} .card code{{display:block;margin-top:6px}} .panel{{padding:20px;margin:18px 0;overflow:hidden}} code{{overflow-wrap:anywhere}}
 .badge{{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:700;text-transform:uppercase}} .badge.pass{{color:#aff5b4;background:#1b4721}} .badge.fail{{color:#ffdcd7;background:#5a1e1e}}
 .table-wrap{{overflow:auto}} table{{border-collapse:collapse;width:100%;min-width:720px}} th,td{{border-bottom:1px solid var(--border);padding:10px;text-align:left;vertical-align:top}} th{{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em}}
 .plot-wrap{{position:relative}} .plot{{display:block;width:100%;min-height:260px;background:#0b0f14;border:1px solid var(--border);border-radius:8px}}
@@ -559,6 +584,7 @@ a{{color:var(--blue)}} .eyebrow{{color:var(--blue);font-weight:700;text-transfor
   <div class="card"><span class="muted">Plots</span><strong>{len(plots)}</strong></div>
 </div>
 {plot_html}
+{_sampling_provenance_panel(statistical_summary)}
 {_statistical_panel(statistical_summary)}
 <section class="panel"><h2>Requirement results</h2><div class="table-wrap"><table><thead><tr><th>Point</th><th>Parameters</th><th>Analysis</th><th>Metric</th><th>Value</th><th>Requirement</th><th>Status</th></tr></thead><tbody>{requirement_rows}{no_requirements}</tbody></table></div></section>
 <section class="panel"><h2>Experiment points</h2><div class="table-wrap"><table><thead><tr><th>Point</th><th>Parameters</th><th>Measurements</th><th>Errors</th><th>Status</th></tr></thead><tbody>{point_rows}</tbody></table></div></section>

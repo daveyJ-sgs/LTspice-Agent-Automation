@@ -9,6 +9,24 @@ import statistical_results
 
 class StatisticalResultsTests(unittest.TestCase):
     @staticmethod
+    def provenance_source(*, include_method: bool = True) -> dict[str, object]:
+        plan_sha256 = "0123456789abcdef" + "0" * 48
+        source: dict[str, object] = {
+            "kind": "statistical",
+            "generator_version": "sha256-stratified-gaussian-v7",
+            "plan_id": "statistical-plan-0123456789abcdef",
+            "plan_sha256": plan_sha256,
+            "definition_hash": "a" * 64,
+            "runs_relative_path": (
+                "statistical-plans/statistical-plan-0123456789abcdef/"
+                "statistical_plan.json"
+            ),
+        }
+        if include_method:
+            source["sampling_method"] = "halton"
+        return source
+
+    @staticmethod
     def point(
         index: int,
         *,
@@ -109,6 +127,50 @@ class StatisticalResultsTests(unittest.TestCase):
         self.assertIn("classification,electrical_failure,,1", csv_document)
         self.assertIn("measurement,gain", csv_document)
         self.assertIn("requirement_margin,response:gain", csv_document)
+
+    def test_sampling_provenance_is_validated_and_exported(self) -> None:
+        provenance = statistical_results._sampling_provenance(
+            self.provenance_source()
+        )
+        summary = statistical_results.build_statistics(
+            {
+                "experiment_id": "mcp-experiment-20260824-120000-000000-a1b2c3d4",
+                "point_count": 1,
+                "points": [self.point(0, passed=True, value=1.0)],
+            },
+            sampling_provenance=provenance,
+        )
+
+        self.assertEqual(summary["schema_version"], 2)
+        self.assertEqual(summary["sampling_provenance"], provenance)
+        csv_document = statistical_results._csv_document(summary)
+        self.assertIn("provenance,sampling_method,halton", csv_document)
+        self.assertIn(
+            "provenance,generator_version,sha256-stratified-gaussian-v7",
+            csv_document,
+        )
+        self.assertIn(
+            "provenance,plan_id,statistical-plan-0123456789abcdef",
+            csv_document,
+        )
+
+    def test_legacy_sampling_provenance_defaults_to_independent(self) -> None:
+        provenance = statistical_results._sampling_provenance(
+            self.provenance_source(include_method=False)
+        )
+
+        self.assertEqual(provenance["sampling_method"], "independent")
+
+    def test_sampling_provenance_rejects_mismatched_plan_evidence(self) -> None:
+        source = self.provenance_source()
+        source["plan_sha256"] = "f" * 64
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            statistical_results._sampling_provenance(source)
+
+        source = self.provenance_source()
+        source["runs_relative_path"] = "../outside.json"
+        with self.assertRaisesRegex(ValueError, "artifact path"):
+            statistical_results._sampling_provenance(source)
 
     def test_zero_evaluated_points_has_no_yield_or_interval(self) -> None:
         summary = statistical_results.build_statistics(

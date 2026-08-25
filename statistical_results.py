@@ -7,6 +7,7 @@ import io
 import json
 import math
 import os
+import re
 import statistics
 import uuid
 from pathlib import Path
@@ -14,9 +15,18 @@ from typing import TypedDict
 
 import experiment_index
 
-STATISTICS_SCHEMA_VERSION = 1
+STATISTICS_SCHEMA_VERSION = 2
 CONFIDENCE_LEVEL = 0.95
 _Z_95 = 1.959963984540054
+
+
+class SamplingProvenance(TypedDict):
+    sampling_method: str
+    generator_version: str
+    plan_id: str
+    plan_sha256: str
+    definition_hash: str
+    runs_relative_path: str
 
 
 class StatisticalSummaryResult(TypedDict):
@@ -33,6 +43,61 @@ class StatisticalSummaryResult(TypedDict):
     confidence_high: float | None
     corner_aggregate: str | None
     corner_results: list[dict[str, object]]
+    sampling_provenance: SamplingProvenance
+
+
+def _sampling_provenance(source: dict[str, object]) -> SamplingProvenance:
+    sampling_method = source.get("sampling_method", "independent")
+    if sampling_method not in {"independent", "latin_hypercube", "halton"}:
+        raise ValueError("statistical sampling_method is invalid")
+    fields = {
+        name: source.get(name)
+        for name in (
+            "generator_version",
+            "plan_id",
+            "plan_sha256",
+            "definition_hash",
+            "runs_relative_path",
+        )
+    }
+    if any(not isinstance(value, str) for value in fields.values()):
+        raise ValueError("statistical sampling provenance is incomplete")
+    generator_version = fields["generator_version"]
+    plan_id = fields["plan_id"]
+    plan_sha256 = fields["plan_sha256"]
+    definition_hash = fields["definition_hash"]
+    runs_relative_path = fields["runs_relative_path"]
+    assert all(
+        isinstance(value, str)
+        for value in (
+            generator_version,
+            plan_id,
+            plan_sha256,
+            definition_hash,
+            runs_relative_path,
+        )
+    )
+    if re.fullmatch(r"[a-z0-9-]{1,128}", generator_version) is None:
+        raise ValueError("statistical generator_version is invalid")
+    if re.fullmatch(r"statistical-plan-[0-9a-f]{16}", plan_id) is None:
+        raise ValueError("statistical plan_id is invalid")
+    if re.fullmatch(r"[0-9a-f]{64}", plan_sha256) is None:
+        raise ValueError("statistical plan_sha256 is invalid")
+    if plan_id != f"statistical-plan-{plan_sha256[:16]}":
+        raise ValueError("statistical plan_id does not match plan_sha256")
+    if re.fullmatch(r"[0-9a-f]{64}", definition_hash) is None:
+        raise ValueError("statistical definition_hash is invalid")
+    expected_path = f"statistical-plans/{plan_id}/statistical_plan.json"
+    if runs_relative_path != expected_path:
+        raise ValueError("statistical plan artifact path is invalid")
+    return {
+        "sampling_method": sampling_method,
+        "generator_version": generator_version,
+        "plan_id": plan_id,
+        "plan_sha256": plan_sha256,
+        "definition_hash": definition_hash,
+        "runs_relative_path": runs_relative_path,
+    }
 
 
 def _percentile(values: list[float], fraction: float) -> float:
@@ -148,6 +213,7 @@ def build_statistics(
     *,
     point_metadata: list[dict[str, object]] | None = None,
     corner_aggregate: bool = False,
+    sampling_provenance: SamplingProvenance | None = None,
 ) -> dict[str, object]:
     """Build deterministic statistics from already validated result data."""
     points = results["points"]
@@ -341,6 +407,8 @@ def build_statistics(
         "failed_samples": failed_samples,
         "samples": samples,
     }
+    if sampling_provenance is not None:
+        result["sampling_provenance"] = dict(sampling_provenance)
     if metadata is not None:
         corner_results: list[dict[str, object]] = []
         for group in corner_groups.values():
@@ -400,6 +468,12 @@ def _csv_document(summary: dict[str, object]) -> str:
     ]
     writer = csv.DictWriter(output, fieldnames=fields, lineterminator="\n")
     writer.writeheader()
+    provenance = summary.get("sampling_provenance")
+    if isinstance(provenance, dict):
+        for name, value in provenance.items():
+            writer.writerow(
+                {"record_type": "provenance", "name": name, "value": value}
+            )
     interval = summary["yield_confidence_interval"]
     for name, value in (
         ("planned_points", summary["planned_points"]),
@@ -486,6 +560,7 @@ def summarize_statistical_experiment(
     source = point_plan.get("source") if isinstance(point_plan, dict) else None
     if not isinstance(source, dict) or source.get("kind") != "statistical":
         raise ValueError(f"Experiment {experiment_id} is not a statistical study")
+    provenance = _sampling_provenance(source)
     point_metadata = source.get("point_metadata")
     corner_axes = source.get("corner_axes")
     if corner_axes and not isinstance(point_metadata, list):
@@ -494,6 +569,7 @@ def summarize_statistical_experiment(
         results,
         point_metadata=point_metadata,
         corner_aggregate=source.get("corner_aggregate", False),
+        sampling_provenance=provenance,
     )
     json_path = experiment_dir / "statistics.json"
     csv_path = experiment_dir / "statistics.csv"
@@ -518,4 +594,5 @@ def summarize_statistical_experiment(
         "confidence_high": interval["high"],
         "corner_aggregate": summary.get("corner_aggregate"),
         "corner_results": summary.get("corner_results", []),
+        "sampling_provenance": provenance,
     }

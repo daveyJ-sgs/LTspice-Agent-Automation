@@ -599,7 +599,15 @@ never draws replacement samples or reloads the sampler.
 
 After the job completes or is cancelled,
 `summarize_statistical_experiment` writes bounded `statistics.json` and
-`statistics.csv` artifacts. Observed yield is electrical
+`statistics.csv` artifacts. Statistics schema v2 carries the same validated
+`sampling_provenance` through JSON, flat CSV provenance rows, and the MCP
+summary: method, generator version, plan ID, plan SHA-256, durable-definition
+SHA-256, and the runs-relative immutable plan path. Durable resume returns that
+frozen provenance instead of reconstructing it from current sampler code.
+Legacy studies without an explicit method are identified as independent
+sampling.
+
+Observed yield is electrical
 passes divided by electrically evaluated samples. Simulation errors, waveform
 analysis errors, and cancelled samples are reported separately and excluded
 from that denominator; `planned_pass_fraction` also shows passes divided by
@@ -610,9 +618,11 @@ sample evidence.
 
 For completed jobs, `build_experiment_report` detects statistical studies
 automatically and adds yield, confidence, error-accounting, and failed-sample
-sections while linking the JSON and CSV evidence. For transient studies on LTspice, request
-`ascii_raw=true`; AC studies should retain binary RAW so complex waveforms are
-preserved.
+sections while linking the JSON and CSV evidence. Its Sampling provenance panel
+names the method and generator, displays both frozen hashes, and links directly
+to the immutable statistical-plan artifact. For transient studies on LTspice,
+request `ascii_raw=true`; AC studies should retain binary RAW so complex
+waveforms are preserved.
 
 ### Run a durable experiment job
 

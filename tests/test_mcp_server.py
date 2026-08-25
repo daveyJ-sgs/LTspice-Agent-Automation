@@ -794,7 +794,9 @@ class MCPServerTests(unittest.TestCase):
                 "nominal": "1",
             },
         ]
-        plan = mcp_server.generate_statistical_plan(variables, 3, 20260824)
+        plan = mcp_server.generate_statistical_plan(
+            variables, 3, 20260824, sampling_method="halton"
+        )
         rendered_netlists: list[str] = []
 
         def execute(
@@ -852,6 +854,14 @@ class MCPServerTests(unittest.TestCase):
         self.assertTrue(Path(report["report_html"]).is_file())
         report_html = Path(report["report_html"]).read_text(encoding="utf-8")
         self.assertIn("Statistical yield", report_html)
+        self.assertIn("Sampling provenance", report_html)
+        self.assertIn("Scrambled Halton", report_html)
+        self.assertIn("sha256-stratified-gaussian-v7", report_html)
+        self.assertIn(plan["plan_id"], report_html)
+        self.assertIn(
+            f"../statistical-plans/{plan['plan_id']}/statistical_plan.json",
+            report_html,
+        )
         self.assertIn("statistics.json", report_html)
         self.assertIn("Wilson 95% interval", report_html)
         statistics = mcp_server.summarize_statistical_experiment(
@@ -859,8 +869,37 @@ class MCPServerTests(unittest.TestCase):
         )
         self.assertEqual(statistics["evaluated_points"], 3)
         self.assertEqual(statistics["observed_yield"], 1.0)
+        self.assertEqual(
+            statistics["sampling_provenance"],
+            {
+                "sampling_method": "halton",
+                "generator_version": "sha256-stratified-gaussian-v7",
+                "plan_id": plan["plan_id"],
+                "plan_sha256": plan["plan_sha256"],
+                "definition_hash": plan["definition_hash"],
+                "runs_relative_path": (
+                    f"statistical-plans/{plan['plan_id']}/statistical_plan.json"
+                ),
+            },
+        )
         self.assertTrue(Path(statistics["statistics_json"]).is_file())
         self.assertTrue(Path(statistics["statistics_csv"]).is_file())
+        persisted_statistics = json.loads(
+            Path(statistics["statistics_json"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(persisted_statistics["schema_version"], 2)
+        self.assertEqual(
+            persisted_statistics["sampling_provenance"],
+            statistics["sampling_provenance"],
+        )
+        statistics_csv = Path(statistics["statistics_csv"]).read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("provenance,sampling_method,halton", statistics_csv)
+        self.assertIn(
+            "provenance,generator_version,sha256-stratified-gaussian-v7",
+            statistics_csv,
+        )
         comparison = mcp_server.compare_experiments(
             result["experiment_id"], result["experiment_id"]
         )
@@ -988,6 +1027,10 @@ class MCPServerTests(unittest.TestCase):
         self.assertIn("summarize_statistical_experiment", by_name)
         self.assertIn(
             "corner_results",
+            by_name["summarize_statistical_experiment"].output_schema["properties"],
+        )
+        self.assertIn(
+            "sampling_provenance",
             by_name["summarize_statistical_experiment"].output_schema["properties"],
         )
         properties = by_name["generate_statistical_plan"].input_schema["properties"]
@@ -1256,12 +1299,14 @@ class MCPServerTests(unittest.TestCase):
             ],
             3,
             43,
+            sampling_method="latin_hypercube",
         )
-        source = {
-            "kind": "statistical",
-            "plan_id": plan["plan_id"],
-            "plan_sha256": plan["plan_sha256"],
-        }
+        frozen_plan = mcp_server.statistical_engine.load_statistical_plan(
+            self.runs, plan["plan_id"]
+        )
+        source = mcp_server._statistical_plan_source(
+            plan["plan_id"], frozen_plan, plan
+        )
         first_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
         defined = first_manager.define_explicit(
             "R1 in 0 {R}\n.end\n",
@@ -1328,10 +1373,40 @@ class MCPServerTests(unittest.TestCase):
             [point["parameters"] for point in results["points"]],
             [{"R": "10k"}, {"R": "10k"}, {"R": "10k"}],
         )
+        summary = mcp_server.summarize_statistical_experiment(
+            defined["experiment_id"]
+        )
+        self.assertEqual(
+            summary["sampling_provenance"]["sampling_method"],
+            "latin_hypercube",
+        )
+        self.assertEqual(
+            summary["sampling_provenance"]["plan_sha256"],
+            plan["plan_sha256"],
+        )
 
     def test_cancelled_statistical_study_reports_unfinished_points_separately(
         self,
     ) -> None:
+        plan = mcp_server.generate_statistical_plan(
+            [
+                {
+                    "name": "R",
+                    "distribution": "discrete",
+                    "values": ["1k", "2k", "3k"],
+                    "weights": [1, 1, 1],
+                }
+            ],
+            3,
+            17,
+            sampling_method="halton",
+        )
+        frozen_plan = mcp_server.statistical_engine.load_statistical_plan(
+            self.runs, plan["plan_id"]
+        )
+        source = mcp_server._statistical_plan_source(
+            plan["plan_id"], frozen_plan, plan
+        )
         manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
         started = threading.Event()
         release = threading.Event()
@@ -1361,9 +1436,9 @@ class MCPServerTests(unittest.TestCase):
                 defined = manager.define_explicit(
                     "R1 in 0 {R}\n.end\n",
                     ["R"],
-                    [{"R": "1k"}, {"R": "2k"}, {"R": "3k"}],
+                    [point["parameters"] for point in plan["points"]],
                     {"R": ""},
-                    {"kind": "statistical", "plan_id": "statistical-plan-test"},
+                    source,
                     max_concurrency=1,
                 )
                 manager.start(defined["experiment_id"])
@@ -1384,6 +1459,9 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(data["classifications"]["unfinished"], 2)
         self.assertEqual(summary["invalid_points"], 2)
         self.assertEqual(summary["observed_yield"], 1.0)
+        self.assertEqual(
+            summary["sampling_provenance"]["sampling_method"], "halton"
+        )
 
     def test_discrete_duplicate_samples_remain_distinct_by_ordinal(self) -> None:
         plan = mcp_server.generate_statistical_plan(

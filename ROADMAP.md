@@ -423,10 +423,18 @@ Verification gate:
   weighted gain/load populations, and complete LTspice evidence with no invalid
   samples (10/16 passing, 62.5% observed yield)
 
-###### Phase 3C-5B: Complete output integration
+###### Phase 3C-5B: Complete output integration — complete
 
-- Carry sampling method and provenance through manifests, statistical JSON/CSV,
-  MCP summaries, durable resume, and the human HTML report.
+- Canonical, fail-closed sampling provenance validates the method, generator,
+  plan ID, plan SHA-256, durable-definition SHA-256, and runs-relative plan path
+- Statistics schema v2 embeds provenance in JSON; flat CSV provenance rows and
+  MCP summaries expose the same contract without parsing the manifest
+- Durable resume proves the frozen plan and definition hashes survive unchanged;
+  legacy studies without an explicit method remain identifiable as independent
+- The human HTML report names the sampling method and generator, displays both
+  hashes, and links directly to the immutable statistical-plan artifact
+- Malformed provenance, persistence, cancellation, MCP-schema, JSON/CSV, HTML,
+  and full macOS/Windows regression coverage
 
 ###### Phase 3C-5C: Final Phase 3 verification
 
