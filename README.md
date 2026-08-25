@@ -320,9 +320,10 @@ Model Context Protocol, in-process (no REST server needed): `run_netlist`,
 `run_netlist_file`, `get_measurements`, `get_waveform`, `export_waveform_csv`,
 `analyze_waveform`, `run_parameter_sweep`, `run_experiment`,
 `generate_statistical_plan`, `get_statistical_plan`, `run_statistical_experiment`,
-`define_experiment`, `start_experiment`, `get_experiment`,
+`define_experiment`, `define_statistical_study`, `start_experiment`, `get_experiment`,
 `cancel_experiment`, `compare_experiments`, `build_experiment_index`,
-`query_experiments`, `build_experiment_report`, `build_comparison_report`,
+`query_experiments`, `summarize_statistical_experiment`,
+`build_experiment_report`, `build_comparison_report`,
 `build_experiment_dashboard`, `list_runs`, `build_dashboard`, and
 `list_examples`.
 
@@ -449,6 +450,32 @@ Statistical values stay paired by sample ordinal: 24 R/C samples execute as 24
 independent Phase 2 points, not a 24-by-24 Cartesian grid. The resulting
 manifest records the source plan hash and remains compatible with the existing
 results, CSV, index, comparison, and offline-report validators.
+
+### Run a durable statistical yield study
+
+Call `define_statistical_study` with a verified `plan_id`, netlist template,
+waveform requirements, and optional `max_concurrency`. It freezes the plan's
+ordered points inside the hashed durable experiment definition. Use the same
+`start_experiment`, `get_experiment`, and `cancel_experiment` lifecycle as an
+ordinary Phase 2 job. A restart resumes only missing point checkpoints and
+never draws replacement samples or reloads the sampler.
+
+After the job completes or is cancelled,
+`summarize_statistical_experiment` writes bounded `statistics.json` and
+`statistics.csv` artifacts. Observed yield is electrical
+passes divided by electrically evaluated samples. Simulation errors, waveform
+analysis errors, and cancelled samples are reported separately and excluded
+from that denominator; `planned_pass_fraction` also shows passes divided by
+the full planned population. The summary includes a Wilson 95% binomial
+interval, mean, sample standard deviation, 5th/50th/95th percentiles,
+requirement-margin statistics, contributing point ordinals, and exact failed
+sample evidence.
+
+For completed jobs, `build_experiment_report` detects statistical studies
+automatically and adds yield, confidence, error-accounting, and failed-sample
+sections while linking the JSON and CSV evidence. For transient studies on LTspice, request
+`ascii_raw=true`; AC studies should retain binary RAW so complex waveforms are
+preserved.
 
 ### Run a durable experiment job
 

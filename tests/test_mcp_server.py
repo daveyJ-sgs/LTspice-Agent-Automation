@@ -850,6 +850,17 @@ class MCPServerTests(unittest.TestCase):
             self.runs, result["experiment_id"]
         )
         self.assertTrue(Path(report["report_html"]).is_file())
+        report_html = Path(report["report_html"]).read_text(encoding="utf-8")
+        self.assertIn("Statistical yield", report_html)
+        self.assertIn("statistics.json", report_html)
+        self.assertIn("Wilson 95% interval", report_html)
+        statistics = mcp_server.summarize_statistical_experiment(
+            result["experiment_id"]
+        )
+        self.assertEqual(statistics["evaluated_points"], 3)
+        self.assertEqual(statistics["observed_yield"], 1.0)
+        self.assertTrue(Path(statistics["statistics_json"]).is_file())
+        self.assertTrue(Path(statistics["statistics_csv"]).is_file())
         comparison = mcp_server.compare_experiments(
             result["experiment_id"], result["experiment_id"]
         )
@@ -863,9 +874,224 @@ class MCPServerTests(unittest.TestCase):
         self.assertIn("generate_statistical_plan", by_name)
         self.assertIn("get_statistical_plan", by_name)
         self.assertIn("run_statistical_experiment", by_name)
+        self.assertIn("define_statistical_study", by_name)
+        self.assertIn("summarize_statistical_experiment", by_name)
         properties = by_name["generate_statistical_plan"].input_schema["properties"]
         self.assertEqual(properties["sample_count"]["type"], "integer")
         self.assertEqual(properties["seed"]["type"], "integer")
+
+    def test_durable_statistical_study_executes_frozen_plan_without_resampling(
+        self,
+    ) -> None:
+        plan_result = mcp_server.generate_statistical_plan(
+            [
+                {
+                    "name": "R",
+                    "distribution": "uniform",
+                    "minimum": 9_000.0,
+                    "maximum": 11_000.0,
+                }
+            ],
+            3,
+            31,
+        )
+        expected_points = [point["parameters"] for point in plan_result["points"]]
+        executed_points: list[dict[str, str]] = []
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+
+        def execute_point(
+            index: int,
+            combination: dict[str, str],
+            point_dir: Path,
+            *args: object,
+        ) -> dict[str, object]:
+            executed_points.append(combination)
+            point_dir.mkdir(parents=True)
+            return {
+                "index": index,
+                "parameters": combination,
+                "run_dir": str(point_dir),
+                "simulation_status": "completed",
+                "duration_seconds": 0.01,
+                "measurements": {},
+                "analyses": [],
+                "all_passed": True,
+                "error": None,
+            }
+
+        try:
+            with patch.object(mcp_server, "_get_experiment_manager", return_value=manager):
+                defined = mcp_server.define_statistical_study(
+                    plan_result["plan_id"],
+                    "R1 in 0 {R}\n.end\n",
+                    max_concurrency=1,
+                )
+            manifest = json.loads(Path(defined["manifest"]).read_text(encoding="utf-8"))
+            self.assertEqual(
+                manifest["definition"]["point_plan"]["points"], expected_points
+            )
+            with (
+                patch.object(
+                    mcp_server.statistical_engine,
+                    "load_statistical_plan",
+                    side_effect=AssertionError("durable execution must not reload a plan"),
+                ),
+                patch.object(
+                    mcp_server,
+                    "_execute_experiment_point",
+                    side_effect=execute_point,
+                ),
+            ):
+                manager.start(defined["experiment_id"])
+                finished = manager.wait(defined["experiment_id"])
+        finally:
+            manager.shutdown()
+
+        self.assertEqual(finished["status"], "completed")
+        self.assertEqual(executed_points, expected_points)
+
+    def test_durable_statistical_resume_keeps_checkpointed_duplicate_samples(
+        self,
+    ) -> None:
+        plan = mcp_server.generate_statistical_plan(
+            [
+                {
+                    "name": "R",
+                    "distribution": "discrete",
+                    "values": ["10k"],
+                    "weights": [1],
+                }
+            ],
+            3,
+            43,
+        )
+        source = {
+            "kind": "statistical",
+            "plan_id": plan["plan_id"],
+            "plan_sha256": plan["plan_sha256"],
+        }
+        first_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        defined = first_manager.define_explicit(
+            "R1 in 0 {R}\n.end\n",
+            ["R"],
+            [point["parameters"] for point in plan["points"]],
+            {"R": ""},
+            source,
+            max_concurrency=1,
+        )
+        first_manager.shutdown()
+        experiment_dir = Path(defined["experiment_dir"])
+        point_zero = experiment_dir / "point-0000"
+        point_zero.mkdir()
+        mcp_server._write_json(
+            point_zero / "point_result.json",
+            {
+                "index": 0,
+                "parameters": {"R": "10k"},
+                "run_dir": str(point_zero / "attempt-0000"),
+                "simulation_status": "completed",
+                "duration_seconds": 0.01,
+                "measurements": {},
+                "analyses": [],
+                "all_passed": True,
+                "error": None,
+            },
+        )
+        manifest_path = Path(defined["manifest"])
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["status"] = "running"
+        mcp_server._write_json(manifest_path, manifest)
+        calls: list[int] = []
+
+        def execute_point(
+            index: int,
+            combination: dict[str, str],
+            point_dir: Path,
+            *args: object,
+        ) -> dict[str, object]:
+            calls.append(index)
+            return {
+                "index": index,
+                "parameters": combination,
+                "run_dir": str(point_dir),
+                "simulation_status": "completed",
+                "duration_seconds": 0.01,
+                "measurements": {},
+                "analyses": [],
+                "all_passed": True,
+                "error": None,
+            }
+
+        with patch.object(mcp_server, "_execute_experiment_point", side_effect=execute_point):
+            resumed_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+            try:
+                finished = resumed_manager.wait(defined["experiment_id"])
+            finally:
+                resumed_manager.shutdown()
+
+        self.assertEqual(finished["status"], "completed")
+        self.assertEqual(calls, [1, 2])
+        results = json.loads(Path(finished["results_json"]).read_text(encoding="utf-8"))
+        self.assertEqual(
+            [point["parameters"] for point in results["points"]],
+            [{"R": "10k"}, {"R": "10k"}, {"R": "10k"}],
+        )
+
+    def test_cancelled_statistical_study_reports_unfinished_points_separately(
+        self,
+    ) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        started = threading.Event()
+        release = threading.Event()
+
+        def execute_point(
+            index: int,
+            combination: dict[str, str],
+            point_dir: Path,
+            *args: object,
+        ) -> dict[str, object]:
+            started.set()
+            release.wait(2)
+            return {
+                "index": index,
+                "parameters": combination,
+                "run_dir": str(point_dir),
+                "simulation_status": "completed",
+                "duration_seconds": 0.01,
+                "measurements": {},
+                "analyses": [],
+                "all_passed": True,
+                "error": None,
+            }
+
+        try:
+            with patch.object(mcp_server, "_execute_experiment_point", side_effect=execute_point):
+                defined = manager.define_explicit(
+                    "R1 in 0 {R}\n.end\n",
+                    ["R"],
+                    [{"R": "1k"}, {"R": "2k"}, {"R": "3k"}],
+                    {"R": ""},
+                    {"kind": "statistical", "plan_id": "statistical-plan-test"},
+                    max_concurrency=1,
+                )
+                manager.start(defined["experiment_id"])
+                self.assertTrue(started.wait(2))
+                manager.cancel(defined["experiment_id"])
+                release.set()
+                finished = manager.wait(defined["experiment_id"])
+            summary = mcp_server.summarize_statistical_experiment(
+                defined["experiment_id"]
+            )
+            data = json.loads(Path(summary["statistics_json"]).read_text(encoding="utf-8"))
+        finally:
+            release.set()
+            manager.shutdown()
+
+        self.assertEqual(finished["status"], "cancelled")
+        self.assertEqual(data["classifications"]["electrical_pass"], 1)
+        self.assertEqual(data["classifications"]["unfinished"], 2)
+        self.assertEqual(summary["invalid_points"], 2)
+        self.assertEqual(summary["observed_yield"], 1.0)
 
     def test_discrete_duplicate_samples_remain_distinct_by_ordinal(self) -> None:
         plan = mcp_server.generate_statistical_plan(

@@ -1622,6 +1622,69 @@ class ExperimentJobManager:
             "reuse_cache": reuse_cache,
             "execution_mode": execution_mode,
         }
+        return self._persist_definition(definition, len(combinations))
+
+    def define_explicit(
+        self,
+        netlist_template: str,
+        parameter_order: list[str],
+        points: list[dict[str, str]],
+        parameter_units: dict[str, str],
+        source_point_plan: dict[str, object],
+        waveform_analyses: list[ExperimentWaveformAnalysis] | None = None,
+        filename: str = "circuit.cir",
+        ascii_raw: bool = False,
+        timeout_seconds: int = 120,
+        max_concurrency: int = 2,
+        reuse_cache: bool = False,
+    ) -> ExperimentJobSnapshot:
+        """Persist a frozen explicit-point experiment for durable execution."""
+        normalized_filename = _netlist_filename(filename)
+        _validate_timeout(timeout_seconds)
+        _validate_reuse_cache(reuse_cache)
+        if not isinstance(max_concurrency, int) or isinstance(max_concurrency, bool):
+            raise ValueError("max_concurrency must be an integer")
+        if max_concurrency < 1 or max_concurrency > self.workers:
+            raise ValueError(
+                f"max_concurrency must be between 1 and {self.workers}"
+            )
+        if not isinstance(source_point_plan, dict):
+            raise ValueError("source_point_plan must be an object")
+        analyses = [] if waveform_analyses is None else waveform_analyses
+        parameter_order, derived_order, combinations, units = (
+            _prepare_explicit_experiment(
+                netlist_template,
+                parameter_order,
+                points,
+                parameter_units,
+                analyses,
+            )
+        )
+        definition: dict[str, object] = {
+            "netlist_template": netlist_template,
+            "parameters": [],
+            "parameter_order": parameter_order,
+            "derived_parameters": [],
+            "derived_parameter_order": derived_order,
+            "parameter_units": units,
+            "waveform_analyses": analyses,
+            "filename": normalized_filename,
+            "ascii_raw": ascii_raw,
+            "timeout_seconds": timeout_seconds,
+            "max_concurrency": max_concurrency,
+            "reuse_cache": reuse_cache,
+            "execution_mode": "independent",
+            "point_plan": {
+                "schema_version": 1,
+                "points": combinations,
+                "source": source_point_plan,
+            },
+        }
+        return self._persist_definition(definition, len(combinations))
+
+    def _persist_definition(
+        self, definition: dict[str, object], point_count: int
+    ) -> ExperimentJobSnapshot:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         experiment_id = f"mcp-experiment-{stamp}-{uuid.uuid4().hex[:8]}"
         experiment_dir = self.runs_dir / experiment_id
@@ -1636,9 +1699,9 @@ class ExperimentJobManager:
             "updated_at": created_at,
             "definition_hash": _definition_hash(definition),
             "definition": definition,
-            "point_count": len(combinations),
+            "point_count": point_count,
             "finished_points": 0,
-            "pending_points": len(combinations),
+            "pending_points": point_count,
             "running_points": 0,
             "completed_points": 0,
             "error_points": 0,
@@ -1923,12 +1986,26 @@ class ExperimentJobManager:
                 raise ValueError("experiment definition hash does not match")
             analyses = definition["waveform_analyses"]
             derived = definition["derived_parameters"]
-            parameter_order, derived_order, combinations, units = _prepare_experiment(
-                str(definition["netlist_template"]),
-                definition["parameters"],
-                analyses,
-                derived,
-            )
+            point_plan = definition.get("point_plan")
+            if point_plan is None:
+                parameter_order, derived_order, combinations, units = _prepare_experiment(
+                    str(definition["netlist_template"]),
+                    definition["parameters"],
+                    analyses,
+                    derived,
+                )
+            else:
+                if not isinstance(point_plan, dict):
+                    raise ValueError("experiment point plan is invalid")
+                parameter_order, derived_order, combinations, units = (
+                    _prepare_explicit_experiment(
+                        str(definition["netlist_template"]),
+                        definition["parameter_order"],
+                        point_plan.get("points"),
+                        definition["parameter_units"],
+                        analyses,
+                    )
+                )
             execution_mode = str(definition.get("execution_mode", "independent"))
             if execution_mode == "native":
                 self._run_native_job(

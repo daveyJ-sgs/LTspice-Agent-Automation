@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 import experiment_index
 import raw_parser
+import statistical_results
 
 DISPLAY_POINT_LIMIT = 400
 MAX_TRACE_COUNT = 100
@@ -386,12 +387,46 @@ def _table_rows(results: dict[str, object]) -> tuple[str, str]:
     return "".join(point_rows), "".join(requirement_rows)
 
 
+def _statistical_panel(summary: dict[str, object] | None) -> str:
+    if summary is None:
+        return ""
+    classifications = summary["classifications"]
+    interval = summary["yield_confidence_interval"]
+    observed = summary["observed_yield"]
+    yield_text = "—" if observed is None else f"{100 * observed:.2f}%"
+    interval_text = (
+        "—"
+        if interval["low"] is None
+        else f"{100 * interval['low']:.2f}%–{100 * interval['high']:.2f}%"
+    )
+    failed_rows = "".join(
+        f'<tr><td>{sample["index"]}</td>'
+        f'<td>{_text(", ".join(f"{name}={value}" for name, value in sorted(sample["parameters"].items())))}</td>'
+        f'<td><a href="point-{sample["index"]:04d}/">point-{sample["index"]:04d}</a></td></tr>'
+        for sample in summary["failed_samples"]
+    )
+    if not failed_rows:
+        failed_rows = '<tr><td colspan="3" class="muted">No electrical failures.</td></tr>'
+    return f"""
+<section class="panel"><h2>Statistical yield</h2>
+<div class="cards">
+  <div class="card"><span class="muted">Observed yield</span><strong>{yield_text}</strong></div>
+  <div class="card"><span class="muted">Wilson 95% interval</span><strong>{interval_text}</strong></div>
+  <div class="card"><span class="muted">Evaluated</span><strong>{summary['evaluated_points']}</strong></div>
+  <div class="card"><span class="muted">Invalid / cancelled</span><strong>{summary['invalid_points']}</strong></div>
+</div>
+<p class="muted">Electrical pass {classifications['electrical_pass']} · electrical failure {classifications['electrical_failure']} · simulation error {classifications['simulation_error']} · analysis error {classifications['analysis_error']} · cancelled {classifications['cancelled']} · unfinished {classifications['unfinished']}</p>
+<h2>Failed samples</h2><div class="table-wrap"><table><thead><tr><th>Point</th><th>Parameters</th><th>Evidence</th></tr></thead><tbody>{failed_rows}</tbody></table></div>
+</section>"""
+
+
 def _document(
     experiment_id: str,
     results: dict[str, object],
     record: dict[str, object],
     plots: list[dict[str, object]],
     artifacts: list[str],
+    statistical_summary: dict[str, object] | None = None,
 ) -> str:
     point_rows, requirement_rows = _table_rows(results)
     plot_html = "".join(_svg(plot, index) for index, plot in enumerate(plots))
@@ -445,6 +480,7 @@ a{{color:var(--blue)}} .eyebrow{{color:var(--blue);font-weight:700;text-transfor
   <div class="card"><span class="muted">Plots</span><strong>{len(plots)}</strong></div>
 </div>
 {plot_html}
+{_statistical_panel(statistical_summary)}
 <section class="panel"><h2>Requirement results</h2><div class="table-wrap"><table><thead><tr><th>Point</th><th>Parameters</th><th>Analysis</th><th>Metric</th><th>Value</th><th>Requirement</th><th>Status</th></tr></thead><tbody>{requirement_rows}{no_requirements}</tbody></table></div></section>
 <section class="panel"><h2>Experiment points</h2><div class="table-wrap"><table><thead><tr><th>Point</th><th>Parameters</th><th>Measurements</th><th>Errors</th><th>Status</th></tr></thead><tbody>{point_rows}</tbody></table></div></section>
 </main>
@@ -470,7 +506,7 @@ document.querySelectorAll("svg.plot").forEach(svg=>{{
 
 def build_experiment_report(runs_dir: Path, experiment_id: str) -> ExperimentReportResult:
     """Build a deterministic, self-contained report for one completed experiment."""
-    experiment_dir, _, results, record = _load_artifacts(runs_dir, experiment_id)
+    experiment_dir, manifest, results, record = _load_artifacts(runs_dir, experiment_id)
     plots = _plots(experiment_dir, experiment_id, results)
     artifacts = ["experiment_manifest.json", "results.json"]
     results_csv = _inside(
@@ -480,7 +516,24 @@ def build_experiment_report(runs_dir: Path, experiment_id: str) -> ExperimentRep
     )
     if results_csv.is_file():
         artifacts.append("results.csv")
-    document = _document(experiment_id, results, record, plots, artifacts)
+    definition = manifest.get("definition")
+    point_plan = definition.get("point_plan") if isinstance(definition, dict) else None
+    source = point_plan.get("source") if isinstance(point_plan, dict) else None
+    statistical_summary = None
+    if isinstance(source, dict) and source.get("kind") == "statistical":
+        statistical_results.summarize_statistical_experiment(runs_dir, experiment_id)
+        statistical_summary = json.loads(
+            (experiment_dir / "statistics.json").read_text(encoding="utf-8")
+        )
+        artifacts.extend(["statistics.json", "statistics.csv"])
+    document = _document(
+        experiment_id,
+        results,
+        record,
+        plots,
+        artifacts,
+        statistical_summary,
+    )
     report_path = _inside(
         experiment_dir / REPORT_FILENAME,
         experiment_dir,

@@ -295,20 +295,37 @@ Phase 3A verification gate:
 - Uniform, Gaussian, and discrete variables compile into ordinary Phase 2
   execution points without a parallel simulation path.
 
-#### Phase 3B: Durable yield studies
+#### Phase 3B: Durable yield studies — complete
 
-- Add synchronous and durable statistical-study operations that execute a
+##### Phase 3B-1: Frozen durable execution — complete
+
+- Synchronous and durable statistical-study operations execute a
   saved point plan through the existing bounded worker, cancellation, resume,
   cache, and per-point checkpoint machinery.
-- Evaluate yield from the existing measurement and waveform requirements;
+- The complete ordered point plan and its source hashes are embedded in the
+  schema-v2 definition hash, so resume never reloads or redraws samples.
+
+##### Phase 3B-2: Yield and error classification — complete
+
+- Yield is evaluated from the existing measurement and waveform requirements;
   simulation or analysis errors remain separate from electrical failures.
-- Produce structured sample results, pass/fail counts, observed yield, Wilson
+- Structured sample results include pass/fail counts, observed yield, Wilson
   binomial confidence intervals, percentiles, mean, standard deviation, and
   explicit treatment of incomplete or invalid samples.
-- Preserve links from every statistic and failed sample to its experiment
+
+##### Phase 3B-3: Statistical evidence artifacts — complete
+
+- `statistics.json` and flat `statistics.csv` preserve contributing sample
+  ordinals, requirement margins, descriptive statistics, and 95% Wilson bounds.
+- Links from every statistic and failed sample lead to its experiment
   point, RAW/log evidence, resolved values, and requirement results.
-- Make restart behavior idempotent: completed samples retain their original
-  values and no resumed job silently draws replacements.
+
+##### Phase 3B-4: MCP and human report surfaces — complete
+
+- `define_statistical_study` and `summarize_statistical_experiment` expose the
+  durable lifecycle and bounded results through MCP.
+- Offline reports add yield, confidence, invalid/error accounting, portable
+  JSON/CSV links, and exact failed-sample evidence.
 
 Verification gate:
 
@@ -316,7 +333,7 @@ Verification gate:
   saved plan.
 - Hand-calculated fixtures verify yield, confidence intervals, percentiles,
   and error accounting.
-- A tolerance study of the Sallen-Key filter exercises both AC and transient
+- A real 12-sample Sallen-Key tolerance plan exercised both AC and transient
   requirements and identifies the exact failing samples.
 
 #### Phase 3C: Correlation, measured populations, and operating corners

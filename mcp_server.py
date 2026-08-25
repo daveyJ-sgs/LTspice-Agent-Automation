@@ -39,6 +39,7 @@ import ltspice_wrapper as wrapper
 import raw_parser
 import report_runs
 import statistical_engine
+import statistical_results
 import waveform_metrics
 
 PROJECT_DIR = wrapper.PROJECT_DIR
@@ -66,6 +67,7 @@ ComparisonReportResult = experiment_visualization.ComparisonReportResult
 ExperimentDashboardResult = experiment_visualization.ExperimentDashboardResult
 StatisticalVariable = statistical_engine.StatisticalVariable
 StatisticalPlanResult = statistical_engine.StatisticalPlanResult
+StatisticalSummaryResult = statistical_results.StatisticalSummaryResult
 
 ExperimentIndexStatus = Literal[
     "defined",
@@ -980,6 +982,21 @@ def get_statistical_plan(plan_id: str) -> StatisticalPlanResult:
     return statistical_engine.inspect_statistical_plan(RUNS_DIR, plan_id)
 
 
+def _statistical_plan_source(
+    plan_id: str,
+    plan: dict[str, object],
+    plan_result: StatisticalPlanResult,
+) -> dict[str, object]:
+    return {
+        "kind": "statistical",
+        "plan_id": plan_id,
+        "plan_sha256": plan_result["plan_sha256"],
+        "runs_relative_path": f"statistical-plans/{plan_id}/statistical_plan.json",
+        "generator_version": plan["generator_version"],
+        "definition_hash": plan["definition_hash"],
+    }
+
+
 @mcp.tool()
 def run_statistical_experiment(
     plan_id: str,
@@ -1010,16 +1027,7 @@ def run_statistical_experiment(
         explicit_points=combinations,
         explicit_parameter_order=plan["parameter_order"],
         explicit_parameter_units=plan["parameter_units"],
-        source_point_plan={
-            "kind": "statistical",
-            "plan_id": plan_id,
-            "plan_sha256": plan_result["plan_sha256"],
-            "runs_relative_path": (
-                f"statistical-plans/{plan_id}/statistical_plan.json"
-            ),
-            "generator_version": plan["generator_version"],
-            "definition_hash": plan["definition_hash"],
-        },
+        source_point_plan=_statistical_plan_source(plan_id, plan, plan_result),
     )
 
 
@@ -1067,6 +1075,35 @@ def define_experiment(
 
 
 @mcp.tool()
+def define_statistical_study(
+    plan_id: str,
+    netlist_template: str,
+    waveform_analyses: list[ExperimentWaveformAnalysis] | None = None,
+    filename: str = "circuit.cir",
+    ascii_raw: bool = False,
+    timeout_seconds: int = 120,
+    max_concurrency: int = 2,
+    reuse_cache: bool = False,
+) -> ExperimentJobSnapshot:
+    """Persist a verified statistical plan as a durable resumable study."""
+    plan = statistical_engine.load_statistical_plan(RUNS_DIR, plan_id)
+    plan_result = statistical_engine.inspect_statistical_plan(RUNS_DIR, plan_id)
+    return _get_experiment_manager().define_explicit(
+        netlist_template,
+        plan["parameter_order"],
+        [point["parameters"] for point in plan["points"]],
+        plan["parameter_units"],
+        _statistical_plan_source(plan_id, plan, plan_result),
+        waveform_analyses,
+        filename,
+        ascii_raw,
+        timeout_seconds,
+        max_concurrency,
+        reuse_cache,
+    )
+
+
+@mcp.tool()
 def start_experiment(experiment_id: str) -> ExperimentJobSnapshot:
     """Queue a defined experiment; repeated calls are idempotent."""
     return _get_experiment_manager().start(experiment_id)
@@ -1082,6 +1119,16 @@ def get_experiment(experiment_id: str) -> ExperimentJobSnapshot:
 def cancel_experiment(experiment_id: str) -> ExperimentJobSnapshot:
     """Request cooperative cancellation without scheduling additional points."""
     return _get_experiment_manager().cancel(experiment_id)
+
+
+@mcp.tool()
+def summarize_statistical_experiment(
+    experiment_id: str,
+) -> StatisticalSummaryResult:
+    """Create bounded JSON/CSV yield evidence for a completed statistical study."""
+    return statistical_results.summarize_statistical_experiment(
+        RUNS_DIR, experiment_id
+    )
 
 
 @mcp.tool()

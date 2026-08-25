@@ -817,10 +817,9 @@ def _verify_waveform_artifacts(
                 raise ValueError("waveform RAW artifact size does not match its analysis")
 
 
-def load_completed_experiment(
-    root: Path, experiment_id: str
+def _load_validated_experiment(
+    root: Path, experiment_id: str, allowed_statuses: set[str]
 ) -> tuple[Path, dict[str, object], dict[str, object], dict[str, object]]:
-    """Load one completed experiment through the canonical artifact validator."""
     root = root.resolve()
     _id_timestamp(experiment_id)
     experiment_dir = (root / experiment_id).resolve()
@@ -835,8 +834,9 @@ def load_completed_experiment(
     record, parameters, ordinals = _manifest_record(
         manifest, experiment_id, manifest_path, root, manifest_hash
     )
-    if record["status"] != "completed":
-        raise ValueError(f"Experiment {experiment_id} is not completed")
+    if record["status"] not in allowed_statuses:
+        expected = " or ".join(sorted(allowed_statuses))
+        raise ValueError(f"Experiment {experiment_id} is not {expected}")
     results, results_hash = _load_json(results_path)
     definition = manifest.get("definition")
     point_plan = definition.get("point_plan") if isinstance(definition, dict) else None
@@ -848,6 +848,20 @@ def load_completed_experiment(
         results_sha256=results_hash,
     )
     return experiment_dir, manifest, results, record
+
+
+def load_completed_experiment(
+    root: Path, experiment_id: str
+) -> tuple[Path, dict[str, object], dict[str, object], dict[str, object]]:
+    """Load one completed experiment through the canonical artifact validator."""
+    return _load_validated_experiment(root, experiment_id, {"completed"})
+
+
+def load_terminal_experiment(
+    root: Path, experiment_id: str
+) -> tuple[Path, dict[str, object], dict[str, object], dict[str, object]]:
+    """Load a completed or cancelled experiment through the canonical validator."""
+    return _load_validated_experiment(root, experiment_id, {"cancelled", "completed"})
 
 
 def _create_schema(connection: sqlite3.Connection) -> None:
