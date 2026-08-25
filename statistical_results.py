@@ -31,6 +31,8 @@ class StatisticalSummaryResult(TypedDict):
     observed_yield: float | None
     confidence_low: float | None
     confidence_high: float | None
+    corner_aggregate: str | None
+    corner_results: list[dict[str, object]]
 
 
 def _percentile(values: list[float], fraction: float) -> float:
@@ -88,10 +90,74 @@ def _classification(point: dict[str, object]) -> str:
     return "electrical_pass" if point.get("all_passed") is True else "electrical_failure"
 
 
-def build_statistics(results: dict[str, object]) -> dict[str, object]:
+def _point_metadata(
+    point_metadata: list[dict[str, object]] | None,
+    point_count: int,
+) -> list[dict[str, object]] | None:
+    if point_metadata is None:
+        return None
+    if not isinstance(point_metadata, list) or len(point_metadata) != point_count:
+        raise ValueError("corner point_metadata must match the planned point count")
+    normalized: list[dict[str, object]] = []
+    corner_order: tuple[str, ...] | None = None
+    for index, entry in enumerate(point_metadata):
+        if not isinstance(entry, dict) or set(entry) != {
+            "index",
+            "sample_index",
+            "corners",
+        }:
+            raise ValueError("corner point_metadata entries are invalid")
+        sample_index = entry.get("sample_index")
+        corners = entry.get("corners")
+        if entry.get("index") != index:
+            raise ValueError("corner point_metadata indexes must be contiguous")
+        if (
+            not isinstance(sample_index, int)
+            or isinstance(sample_index, bool)
+            or sample_index < 0
+        ):
+            raise ValueError("corner point_metadata sample indexes are invalid")
+        if (
+            not isinstance(corners, dict)
+            or not corners
+            or any(
+                not isinstance(name, str)
+                or not isinstance(value, str)
+                or not value
+                for name, value in corners.items()
+            )
+        ):
+            raise ValueError("corner point_metadata corners are invalid")
+        names = tuple(corners)
+        if corner_order is None:
+            corner_order = names
+        elif names != corner_order:
+            raise ValueError("corner point_metadata axes must use one stable order")
+        normalized.append(
+            {
+                "index": index,
+                "sample_index": sample_index,
+                "corners": dict(corners),
+            }
+        )
+    return normalized
+
+
+def build_statistics(
+    results: dict[str, object],
+    *,
+    point_metadata: list[dict[str, object]] | None = None,
+    corner_aggregate: bool = False,
+) -> dict[str, object]:
     """Build deterministic statistics from already validated result data."""
     points = results["points"]
     assert isinstance(points, list)
+    planned_points = int(results["point_count"])
+    metadata = _point_metadata(point_metadata, planned_points)
+    if not isinstance(corner_aggregate, bool):
+        raise ValueError("corner_aggregate must be a boolean")
+    if metadata is None and corner_aggregate:
+        raise ValueError("corner_aggregate requires corner point metadata")
     classifications = {
         "electrical_pass": 0,
         "electrical_failure": 0,
@@ -104,9 +170,39 @@ def build_statistics(results: dict[str, object]) -> dict[str, object]:
     margins: dict[str, dict[str, object]] = {}
     failed_samples: list[dict[str, object]] = []
     samples: list[dict[str, object]] = []
+    corner_groups: dict[str, dict[str, object]] = {}
+    if metadata is not None:
+        for entry in metadata:
+            corners = entry["corners"]
+            identity = json.dumps(corners, separators=(",", ":"), ensure_ascii=False)
+            group = corner_groups.setdefault(
+                identity,
+                {
+                    "corners": corners,
+                    "planned_points": 0,
+                    "classifications": {
+                        "electrical_pass": 0,
+                        "electrical_failure": 0,
+                        "simulation_error": 0,
+                        "analysis_error": 0,
+                        "cancelled": 0,
+                        "unfinished": 0,
+                    },
+                },
+            )
+            group["planned_points"] += 1
+            group["classifications"]["unfinished"] += 1
     for point in sorted(points, key=lambda item: item["index"]):
         classification = _classification(point)
         classifications[classification] += 1
+        point_meta = None if metadata is None else metadata[int(point["index"])]
+        if point_meta is not None:
+            identity = json.dumps(
+                point_meta["corners"], separators=(",", ":"), ensure_ascii=False
+            )
+            corner_classifications = corner_groups[identity]["classifications"]
+            corner_classifications["unfinished"] -= 1
+            corner_classifications[classification] += 1
         failed_requirements: list[dict[str, object]] = []
         for analysis_entry in point.get("analyses", []):
             if not isinstance(analysis_entry, dict):
@@ -135,6 +231,9 @@ def build_statistics(results: dict[str, object]) -> dict[str, object]:
             "error": point.get("error"),
             "failed_requirements": failed_requirements,
         }
+        if point_meta is not None:
+            sample["sample_index"] = point_meta["sample_index"]
+            sample["corners"] = point_meta["corners"]
         samples.append(sample)
         if classification == "electrical_failure":
             failed_samples.append(sample)
@@ -188,7 +287,7 @@ def build_statistics(results: dict[str, object]) -> dict[str, object]:
                 group["values"].append(margin)
                 group["point_indexes"].append(point["index"])
 
-    classifications["unfinished"] = int(results["point_count"]) - len(points)
+    classifications["unfinished"] = planned_points - len(points)
     passed = classifications["electrical_pass"]
     failed = classifications["electrical_failure"]
     evaluated = passed + failed
@@ -199,18 +298,27 @@ def build_statistics(results: dict[str, object]) -> dict[str, object]:
         + classifications["unfinished"]
     )
     low, high = _wilson(passed, evaluated)
-    return {
+    pooled = metadata is None or corner_aggregate
+    result: dict[str, object] = {
         "schema_version": STATISTICS_SCHEMA_VERSION,
         "experiment_id": results["experiment_id"],
         "confidence_level": CONFIDENCE_LEVEL,
-        "planned_points": results["point_count"],
+        "planned_points": planned_points,
         "finished_points": len(points),
         "classifications": classifications,
         "evaluated_points": evaluated,
         "invalid_points": invalid,
-        "observed_yield": None if evaluated == 0 else passed / evaluated,
-        "planned_pass_fraction": passed / int(results["point_count"]),
-        "yield_confidence_interval": {"method": "wilson", "low": low, "high": high},
+        "observed_yield": (
+            None if not pooled or evaluated == 0 else passed / evaluated
+        ),
+        "planned_pass_fraction": (
+            None if not pooled else passed / planned_points
+        ),
+        "yield_confidence_interval": {
+            "method": "wilson",
+            "low": low if pooled else None,
+            "high": high if pooled else None,
+        },
         "measurements": {
             name: {
                 **_descriptive(group["values"]),
@@ -233,6 +341,45 @@ def build_statistics(results: dict[str, object]) -> dict[str, object]:
         "failed_samples": failed_samples,
         "samples": samples,
     }
+    if metadata is not None:
+        corner_results: list[dict[str, object]] = []
+        for group in corner_groups.values():
+            group_classifications = group["classifications"]
+            group_passed = group_classifications["electrical_pass"]
+            group_failed = group_classifications["electrical_failure"]
+            group_evaluated = group_passed + group_failed
+            group_invalid = sum(
+                group_classifications[name]
+                for name in (
+                    "simulation_error",
+                    "analysis_error",
+                    "cancelled",
+                    "unfinished",
+                )
+            )
+            group_low, group_high = _wilson(group_passed, group_evaluated)
+            corner_results.append(
+                {
+                    "corners": group["corners"],
+                    "planned_points": group["planned_points"],
+                    "evaluated_points": group_evaluated,
+                    "invalid_points": group_invalid,
+                    "classifications": group_classifications,
+                    "observed_yield": (
+                        None
+                        if group_evaluated == 0
+                        else group_passed / group_evaluated
+                    ),
+                    "yield_confidence_interval": {
+                        "method": "wilson",
+                        "low": group_low,
+                        "high": group_high,
+                    },
+                }
+            )
+        result["corner_aggregate"] = "pooled" if corner_aggregate else None
+        result["corner_results"] = corner_results
+    return result
 
 
 def _csv_document(summary: dict[str, object]) -> str:
@@ -285,6 +432,34 @@ def _csv_document(summary: dict[str, object]) -> str:
                 **margin["statistics"],
             }
         )
+    for corner in summary.get("corner_results", []):
+        label = ",".join(
+            f"{name}={value}" for name, value in corner["corners"].items()
+        )
+        interval = corner["yield_confidence_interval"]
+        for name, value in (
+            ("planned_points", corner["planned_points"]),
+            ("evaluated_points", corner["evaluated_points"]),
+            ("invalid_points", corner["invalid_points"]),
+            ("observed_yield", corner["observed_yield"]),
+            ("confidence_low", interval["low"]),
+            ("confidence_high", interval["high"]),
+        ):
+            writer.writerow(
+                {
+                    "record_type": "corner_yield",
+                    "name": f"{label}:{name}",
+                    "value": value,
+                }
+            )
+        for name, count in corner["classifications"].items():
+            writer.writerow(
+                {
+                    "record_type": "corner_classification",
+                    "name": f"{label}:{name}",
+                    "count": count,
+                }
+            )
     return output.getvalue()
 
 
@@ -311,7 +486,15 @@ def summarize_statistical_experiment(
     source = point_plan.get("source") if isinstance(point_plan, dict) else None
     if not isinstance(source, dict) or source.get("kind") != "statistical":
         raise ValueError(f"Experiment {experiment_id} is not a statistical study")
-    summary = build_statistics(results)
+    point_metadata = source.get("point_metadata")
+    corner_axes = source.get("corner_axes")
+    if corner_axes and not isinstance(point_metadata, list):
+        raise ValueError("corner statistical study is missing point_metadata")
+    summary = build_statistics(
+        results,
+        point_metadata=point_metadata,
+        corner_aggregate=source.get("corner_aggregate", False),
+    )
     json_path = experiment_dir / "statistics.json"
     csv_path = experiment_dir / "statistics.csv"
     _write_atomic(
@@ -333,4 +516,6 @@ def summarize_statistical_experiment(
         "observed_yield": summary["observed_yield"],
         "confidence_low": interval["low"],
         "confidence_high": interval["high"],
+        "corner_aggregate": summary.get("corner_aggregate"),
+        "corner_results": summary.get("corner_results", []),
     }

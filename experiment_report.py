@@ -399,14 +399,93 @@ def _statistical_panel(summary: dict[str, object] | None) -> str:
         if interval["low"] is None
         else f"{100 * interval['low']:.2f}%–{100 * interval['high']:.2f}%"
     )
-    failed_rows = "".join(
-        f'<tr><td>{sample["index"]}</td>'
-        f'<td>{_text(", ".join(f"{name}={value}" for name, value in sorted(sample["parameters"].items())))}</td>'
-        f'<td><a href="point-{sample["index"]:04d}/">point-{sample["index"]:04d}</a></td></tr>'
-        for sample in summary["failed_samples"]
-    )
+    corner_results = summary.get("corner_results", [])
+    corner_rows = ""
+    if corner_results:
+        for corner in corner_results:
+            corner_interval = corner["yield_confidence_interval"]
+            corner_yield = corner["observed_yield"]
+            corner_classifications = corner["classifications"]
+            corner_state = (
+                "pass"
+                if corner_classifications["electrical_failure"] == 0
+                and corner["invalid_points"] == 0
+                else "fail"
+            )
+            corner_rows += (
+                "<tr><td>"
+                + _text(
+                    ", ".join(
+                        f"{name}={value}"
+                        for name, value in corner["corners"].items()
+                    )
+                )
+                + "</td><td>"
+                + ("—" if corner_yield is None else f"{100 * corner_yield:.2f}%")
+                + "</td><td>"
+                + (
+                    "—"
+                    if corner_interval["low"] is None
+                    else f"{100 * corner_interval['low']:.2f}%–"
+                    f"{100 * corner_interval['high']:.2f}%"
+                )
+                + f"</td><td>{corner['evaluated_points']}</td>"
+                + f"<td>{corner['invalid_points']}</td>"
+                + f'<td><span class="badge {corner_state}">{corner_state}</span></td></tr>'
+            )
+    failed_row_items: list[str] = []
+    for sample in summary["failed_samples"]:
+        metadata_cells = ""
+        if corner_results:
+            corner_label = ", ".join(
+                f"{name}={value}" for name, value in sample["corners"].items()
+            )
+            metadata_cells = (
+                f'<td>{sample["sample_index"]}</td><td>{_text(corner_label)}</td>'
+            )
+        parameters = ", ".join(
+            f"{name}={value}" for name, value in sorted(sample["parameters"].items())
+        )
+        failed_row_items.append(
+            f'<tr><td>{sample["index"]}</td>{metadata_cells}'
+            f'<td>{_text(parameters)}</td>'
+            f'<td><a href="point-{sample["index"]:04d}/">'
+            f'point-{sample["index"]:04d}</a></td></tr>'
+        )
+    failed_rows = "".join(failed_row_items)
     if not failed_rows:
-        failed_rows = '<tr><td colspan="3" class="muted">No electrical failures.</td></tr>'
+        failed_rows = (
+            f'<tr><td colspan="{5 if corner_results else 3}" class="muted">'
+            "No electrical failures.</td></tr>"
+        )
+    if corner_results:
+        aggregate_label = (
+            "Pooled yield"
+            if summary.get("corner_aggregate") == "pooled"
+            else "Aggregate"
+        )
+        aggregate_text = (
+            yield_text
+            if summary.get("corner_aggregate") == "pooled"
+            else "Not requested"
+        )
+        aggregate_interval = (
+            interval_text
+            if summary.get("corner_aggregate") == "pooled"
+            else "Not requested"
+        )
+        return f"""
+<section class="panel"><h2>Operating-corner yield</h2>
+<div class="cards">
+  <div class="card"><span class="muted">{aggregate_label}</span><strong>{aggregate_text}</strong></div>
+  <div class="card"><span class="muted">Pooled Wilson 95%</span><strong>{aggregate_interval}</strong></div>
+  <div class="card"><span class="muted">Evaluated</span><strong>{summary['evaluated_points']}</strong></div>
+  <div class="card"><span class="muted">Invalid / cancelled</span><strong>{summary['invalid_points']}</strong></div>
+  <div class="card"><span class="muted">Named corners</span><strong>{len(corner_results)}</strong></div>
+</div>
+<div class="table-wrap"><table><thead><tr><th>Corner</th><th>Yield</th><th>Wilson 95% interval</th><th>Evaluated</th><th>Invalid</th><th>Status</th></tr></thead><tbody>{corner_rows}</tbody></table></div>
+<h2>Failed samples</h2><div class="table-wrap"><table><thead><tr><th>Point</th><th>Sample</th><th>Corner</th><th>Parameters</th><th>Evidence</th></tr></thead><tbody>{failed_rows}</tbody></table></div>
+</section>"""
     return f"""
 <section class="panel"><h2>Statistical yield</h2>
 <div class="cards">

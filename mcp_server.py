@@ -67,6 +67,7 @@ ComparisonReportResult = experiment_visualization.ComparisonReportResult
 ExperimentDashboardResult = experiment_visualization.ExperimentDashboardResult
 StatisticalVariable = statistical_engine.StatisticalVariable
 StatisticalCorrelation = statistical_engine.StatisticalCorrelation
+StatisticalCornerAxis = statistical_engine.StatisticalCornerAxis
 StatisticalPlanResult = statistical_engine.StatisticalPlanResult
 StatisticalSummaryResult = statistical_results.StatisticalSummaryResult
 
@@ -966,13 +967,17 @@ def generate_statistical_plan(
     sample_count: int,
     seed: int,
     correlations: list[StatisticalCorrelation] | None = None,
+    corner_axes: list[StatisticalCornerAxis] | None = None,
+    corner_aggregate: bool = False,
 ) -> StatisticalPlanResult:
     """Generate and persist a deterministic statistical point plan without LTspice.
 
     Supports uniform, bounded Gaussian, weighted discrete, empirical measured
-    populations, and explicit correlated-Gaussian groups. Empirical values may
-    be inline or read from a UTF-8 CSV confined to this project. The versioned
-    seed produces the same canonical paired points on macOS and Windows.
+    populations, explicit correlated-Gaussian groups, and bounded named corner
+    axes. Empirical values may be inline or read from a UTF-8 CSV confined to
+    this project. The versioned seed produces the same canonical paired points
+    on macOS and Windows. Set corner_aggregate only to request a pooled yield in
+    addition to the mandatory per-corner results.
     """
     return statistical_engine.generate_statistical_plan(
         RUNS_DIR,
@@ -980,6 +985,8 @@ def generate_statistical_plan(
         sample_count,
         seed,
         correlations,
+        corner_axes,
+        corner_aggregate,
         source_root=PROJECT_DIR,
     )
 
@@ -995,7 +1002,7 @@ def _statistical_plan_source(
     plan: dict[str, object],
     plan_result: StatisticalPlanResult,
 ) -> dict[str, object]:
-    return {
+    source: dict[str, object] = {
         "kind": "statistical",
         "plan_id": plan_id,
         "plan_sha256": plan_result["plan_sha256"],
@@ -1003,6 +1010,30 @@ def _statistical_plan_source(
         "generator_version": plan["generator_version"],
         "definition_hash": plan["definition_hash"],
     }
+    definition = plan["definition"]
+    assert isinstance(definition, dict)
+    corner_axes = definition.get("corner_axes", [])
+    if corner_axes:
+        points = plan["points"]
+        assert isinstance(points, list)
+        source.update(
+            {
+                "sample_count": plan["sample_count"],
+                "corner_axes": corner_axes,
+                "corner_aggregate": bool(
+                    definition.get("corner_aggregate", False)
+                ),
+                "point_metadata": [
+                    {
+                        "index": point["index"],
+                        "sample_index": point["sample_index"],
+                        "corners": point["corners"],
+                    }
+                    for point in points
+                ],
+            }
+        )
+    return source
 
 
 @mcp.tool()

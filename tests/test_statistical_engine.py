@@ -72,6 +72,17 @@ class StatisticalEngineTests(unittest.TestCase):
                 self.variables(), 3, 20260824, correlations=[]
             ),
         )
+        self.assertEqual(
+            plan,
+            statistical_engine.build_statistical_plan(
+                self.variables(),
+                3,
+                20260824,
+                correlations=[],
+                corner_axes=[],
+                corner_aggregate=False,
+            ),
+        )
 
     def test_mixed_plan_matches_gaussian_and_discrete_golden_values(self) -> None:
         plan = statistical_engine.build_statistical_plan(
@@ -278,6 +289,178 @@ class StatisticalEngineTests(unittest.TestCase):
                     original["points"][index]["parameters"][name],
                     reordered["points"][index]["parameters"][name],
                 )
+
+    def test_named_corner_axes_expand_in_sample_major_order(self) -> None:
+        plan = statistical_engine.build_statistical_plan(
+            [
+                {
+                    "name": "R",
+                    "distribution": "discrete",
+                    "values": ["10k"],
+                    "weights": [1],
+                }
+            ],
+            2,
+            20260824,
+            corner_axes=[
+                {
+                    "name": "temperature",
+                    "parameter": "TEMP",
+                    "unit": "degC",
+                    "values": [
+                        {"name": "cold", "value": -40},
+                        {"name": "hot", "value": "125"},
+                    ],
+                },
+                {
+                    "name": "supply",
+                    "parameter": "VCC",
+                    "unit": "V",
+                    "values": [
+                        {"name": "low", "value": 3.0},
+                        {"name": "high", "value": "3.6"},
+                    ],
+                },
+            ],
+            corner_aggregate=True,
+        )
+
+        self.assertEqual(plan["generator_version"], "sha256-counter-corners-v5")
+        self.assertEqual(plan["sample_count"], 2)
+        self.assertEqual(plan["point_count"], 8)
+        self.assertEqual(plan["parameter_order"], ["R", "TEMP", "VCC"])
+        self.assertEqual(
+            plan["parameter_units"], {"R": "", "TEMP": "degC", "VCC": "V"}
+        )
+        self.assertEqual(
+            [
+                {
+                    "sample_index": point["sample_index"],
+                    "corners": point["corners"],
+                    "parameters": point["parameters"],
+                }
+                for point in plan["points"]
+            ],
+            [
+                {
+                    "sample_index": sample_index,
+                    "corners": {"temperature": temperature, "supply": supply},
+                    "parameters": {"R": "10k", "TEMP": temp, "VCC": vcc},
+                }
+                for sample_index in range(2)
+                for temperature, temp in (("cold", "-4e+1"), ("hot", "125"))
+                for supply, vcc in (("low", "3"), ("high", "3.6"))
+            ],
+        )
+        self.assertTrue(plan["definition"]["corner_aggregate"])
+        self.assertEqual(
+            plan["definition_hash"],
+            "dade0fb17feba012bbb235f0cf5e1ccc659921f4430b2d67644dfea856c57f6c",
+        )
+        self.assertEqual(
+            hashlib.sha256(statistical_engine._artifact_bytes(plan)).hexdigest(),
+            "5f359e32ce274c0cc75e6046f840a7378e77c710dbce7ab010ef767a8dda9448",
+        )
+        saved = statistical_engine.save_statistical_plan(self.runs, plan)
+        self.assertEqual(saved["point_count"], 8)
+        self.assertTrue(saved["corner_aggregate"])
+        self.assertEqual(saved["corner_axes"], plan["definition"]["corner_axes"])
+        self.assertEqual(
+            statistical_engine.load_statistical_plan(self.runs, saved["plan_id"]),
+            plan,
+        )
+
+    def test_corner_axis_validation_and_expansion_bounds_fail_closed(self) -> None:
+        base_axis = {
+            "name": "temperature",
+            "parameter": "TEMP",
+            "unit": "degC",
+            "values": [
+                {"name": "cold", "value": "-40"},
+                {"name": "hot", "value": "125"},
+            ],
+        }
+        invalid = [
+            ({}, "list"),
+            ([{"name": "temperature"}], "only"),
+            ([{**base_axis, "name": "bad-name"}], "axis names"),
+            ([{**base_axis, "parameter": "bad-name"}], "parameter names"),
+            ([{**base_axis, "values": []}], "values"),
+            (
+                [{**base_axis, "values": [{"name": "cold", "value": "-40\n.end"}]}],
+                "single SPICE token",
+            ),
+            (
+                [
+                    {
+                        **base_axis,
+                        "values": [
+                            {"name": "same", "value": "-40"},
+                            {"name": "same", "value": "125"},
+                        ],
+                    }
+                ],
+                "unique",
+            ),
+            ([base_axis, {**base_axis, "parameter": "VCC"}], "duplicate axis"),
+            (
+                [base_axis, {**base_axis, "name": "supply"}],
+                "duplicate corner parameter",
+            ),
+        ]
+        for axes, message in invalid:
+            with self.subTest(message=message), self.assertRaisesRegex(
+                ValueError, message
+            ):
+                statistical_engine.build_statistical_plan(
+                    self.variables(),
+                    2,
+                    1,
+                    corner_axes=axes,  # type: ignore[arg-type]
+                )
+
+        with self.assertRaisesRegex(ValueError, "collides"):
+            statistical_engine.build_statistical_plan(
+                self.variables(),
+                2,
+                1,
+                corner_axes=[{**base_axis, "parameter": "R"}],
+            )
+        with self.assertRaisesRegex(ValueError, "corner_aggregate"):
+            statistical_engine.build_statistical_plan(
+                self.variables(), 2, 1, corner_aggregate=True
+            )
+        with self.assertRaisesRegex(ValueError, "boolean"):
+            statistical_engine.build_statistical_plan(
+                self.variables(),
+                2,
+                1,
+                corner_axes=[base_axis],
+                corner_aggregate=1,  # type: ignore[arg-type]
+            )
+        with self.assertRaisesRegex(ValueError, "1,000 expanded points"):
+            statistical_engine.build_statistical_plan(
+                self.variables(),
+                501,
+                1,
+                corner_axes=[base_axis],
+            )
+        many_variables = [
+            {
+                "name": f"P{index}",
+                "distribution": "uniform",
+                "minimum": 0,
+                "maximum": 1,
+            }
+            for index in range(statistical_engine.MAX_STATISTICAL_VARIABLES)
+        ]
+        with self.assertRaisesRegex(ValueError, "10,000 values"):
+            statistical_engine.build_statistical_plan(
+                many_variables,
+                300,
+                1,
+                corner_axes=[base_axis],
+            )
 
     def test_empirical_validation_and_csv_confinement_fail_closed(self) -> None:
         source_root = Path(self.temporary_directory.name) / "source"

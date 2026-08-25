@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import itertools
 import json
 import math
 import os
@@ -20,12 +21,14 @@ UNIFORM_GENERATOR_VERSION = "sha256-counter-uniform-v1"
 DISTRIBUTION_GENERATOR_VERSION = "sha256-counter-distributions-v2"
 CORRELATION_GENERATOR_VERSION = "sha256-counter-correlations-v3"
 EMPIRICAL_GENERATOR_VERSION = "sha256-counter-empirical-v4"
+CORNER_GENERATOR_VERSION = "sha256-counter-corners-v5"
 STATISTICAL_GENERATOR_VERSION = UNIFORM_GENERATOR_VERSION
 SUPPORTED_GENERATOR_VERSIONS = {
     UNIFORM_GENERATOR_VERSION,
     DISTRIBUTION_GENERATOR_VERSION,
     CORRELATION_GENERATOR_VERSION,
     EMPIRICAL_GENERATOR_VERSION,
+    CORNER_GENERATOR_VERSION,
 }
 MAX_STATISTICAL_SAMPLES = 1_000
 MAX_STATISTICAL_VARIABLES = 32
@@ -34,6 +37,9 @@ MAX_DISCRETE_VALUES = 256
 MAX_EMPIRICAL_OBSERVATIONS = 10_000
 MAX_EMPIRICAL_CSV_BYTES = 1_000_000
 MAX_EMPIRICAL_CSV_COLUMNS = 256
+MAX_CORNER_AXES = 8
+MAX_CORNER_VALUES = 16
+MAX_STATISTICAL_POINTS = 1_000
 MAX_GAUSSIAN_ATTEMPTS = 4_096
 MIN_GAUSSIAN_SPAN_SIGMA = Decimal("0.1")
 PSD_TOLERANCE = Decimal("1e-60")
@@ -59,9 +65,23 @@ class StatisticalCorrelation(TypedDict):
     matrix: list[list[float]]
 
 
+class StatisticalCornerValue(TypedDict):
+    name: str
+    value: float | str
+
+
+class StatisticalCornerAxis(TypedDict):
+    name: str
+    parameter: str
+    unit: NotRequired[str]
+    values: list[StatisticalCornerValue]
+
+
 class StatisticalPlanPoint(TypedDict):
     index: int
     parameters: dict[str, str]
+    sample_index: NotRequired[int]
+    corners: NotRequired[dict[str, str]]
 
 
 class StatisticalPlan(TypedDict):
@@ -72,6 +92,7 @@ class StatisticalPlan(TypedDict):
     parameter_order: list[str]
     parameter_units: dict[str, str]
     sample_count: int
+    point_count: NotRequired[int]
     points: list[StatisticalPlanPoint]
 
 
@@ -83,7 +104,10 @@ class StatisticalPlanResult(TypedDict):
     definition_hash: str
     correlations: list[dict[str, object]]
     empirical_sources: list[dict[str, object]]
+    corner_axes: list[dict[str, object]]
+    corner_aggregate: bool
     sample_count: int
+    point_count: int
     parameter_order: list[str]
     parameter_units: dict[str, str]
     points: list[StatisticalPlanPoint]
@@ -422,11 +446,154 @@ def _validated_empirical_source(
     return dict(source)
 
 
+def _corner_value(value: object, axis_name: str) -> str:
+    if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool):
+        return _canonical_decimal(_decimal(value, f"corner axis {axis_name} value"))
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 128
+        or re.fullmatch(r"[A-Za-z0-9_.+\-]+", value) is None
+    ):
+        raise ValueError(
+            f"corner axis {axis_name} values must be a single SPICE token"
+        )
+    try:
+        return _canonical_decimal(_decimal(value, f"corner axis {axis_name} value"))
+    except ValueError:
+        return value
+
+
+def _normalized_corner_axes(
+    corner_axes: list[StatisticalCornerAxis] | None,
+    variable_names: set[str],
+    sample_count: int,
+    corner_aggregate: bool,
+) -> list[dict[str, object]]:
+    if not isinstance(corner_aggregate, bool):
+        raise ValueError("corner_aggregate must be a boolean")
+    if corner_axes is None:
+        corner_axes = []
+    if not isinstance(corner_axes, list):
+        raise ValueError("corner_axes must be a list")
+    if not corner_axes:
+        if corner_aggregate:
+            raise ValueError("corner_aggregate requires corner_axes")
+        return []
+    if len(corner_axes) > MAX_CORNER_AXES:
+        raise ValueError(f"corner plans are limited to {MAX_CORNER_AXES} axes")
+
+    normalized: list[dict[str, object]] = []
+    axis_names: set[str] = set()
+    parameter_names: set[str] = set()
+    corner_count = 1
+    for axis in corner_axes:
+        if (
+            not isinstance(axis, dict)
+            or not {"name", "parameter", "values"}.issubset(axis)
+            or set(axis) - {"name", "parameter", "unit", "values"}
+        ):
+            raise ValueError(
+                "corner axes require only name, parameter, unit, and values"
+            )
+        axis_name = axis.get("name")
+        parameter = axis.get("parameter")
+        if (
+            not isinstance(axis_name, str)
+            or len(axis_name) > 64
+            or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", axis_name) is None
+        ):
+            raise ValueError("corner axis names must match [A-Za-z_][A-Za-z0-9_]*")
+        if axis_name in axis_names:
+            raise ValueError(f"duplicate axis name: {axis_name}")
+        if (
+            not isinstance(parameter, str)
+            or len(parameter) > 64
+            or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", parameter) is None
+        ):
+            raise ValueError(
+                "corner parameter names must match [A-Za-z_][A-Za-z0-9_]*"
+            )
+        if parameter in parameter_names:
+            raise ValueError(f"duplicate corner parameter: {parameter}")
+        if parameter in variable_names:
+            raise ValueError(
+                f"corner parameter {parameter} collides with a statistical variable"
+            )
+        unit = axis.get("unit", "")
+        if not isinstance(unit, str) or len(unit) > 64:
+            raise ValueError(
+                f"corner axis {axis_name} unit must be at most 64 characters"
+            )
+        values = axis.get("values")
+        if (
+            not isinstance(values, list)
+            or not values
+            or len(values) > MAX_CORNER_VALUES
+        ):
+            raise ValueError(
+                f"corner axis {axis_name} values must contain 1 to "
+                f"{MAX_CORNER_VALUES} entries"
+            )
+        normalized_values: list[dict[str, str]] = []
+        value_names: set[str] = set()
+        for entry in values:
+            if not isinstance(entry, dict) or set(entry) != {"name", "value"}:
+                raise ValueError(
+                    f"corner axis {axis_name} values require only name and value"
+                )
+            value_name = entry.get("name")
+            if (
+                not isinstance(value_name, str)
+                or not value_name
+                or len(value_name) > 64
+                or any(ord(character) < 32 for character in value_name)
+            ):
+                raise ValueError(
+                    f"corner axis {axis_name} value names must be non-empty labels"
+                )
+            if value_name in value_names:
+                raise ValueError(
+                    f"corner axis {axis_name} value names must be unique"
+                )
+            value_names.add(value_name)
+            normalized_values.append(
+                {
+                    "name": value_name,
+                    "value": _corner_value(entry.get("value"), axis_name),
+                }
+            )
+        corner_count *= len(normalized_values)
+        if sample_count * corner_count > MAX_STATISTICAL_POINTS:
+            raise ValueError(
+                f"corner plans are limited to {MAX_STATISTICAL_POINTS:,} expanded points"
+            )
+        normalized.append(
+            {
+                "name": axis_name,
+                "parameter": parameter,
+                "unit": unit,
+                "values": normalized_values,
+            }
+        )
+        axis_names.add(axis_name)
+        parameter_names.add(parameter)
+    if (len(variable_names) + len(normalized)) * sample_count * corner_count > (
+        MAX_STATISTICAL_CELLS
+    ):
+        raise ValueError(
+            f"corner plans are limited to {MAX_STATISTICAL_CELLS:,} values"
+        )
+    return normalized
+
+
 def _normalized_definition(
     variables: list[StatisticalVariable],
     sample_count: int,
     seed: int,
     correlations: list[StatisticalCorrelation] | None = None,
+    corner_axes: list[StatisticalCornerAxis] | None = None,
+    corner_aggregate: bool = False,
     source_root: Path | None = None,
     allow_empirical_provenance: bool = False,
 ) -> dict[str, object]:
@@ -661,6 +828,15 @@ def _normalized_definition(
     )
     if normalized_correlations:
         definition["correlations"] = normalized_correlations
+    normalized_corner_axes = _normalized_corner_axes(
+        corner_axes,
+        {str(variable["name"]) for variable in normalized_variables},
+        sample_count,
+        corner_aggregate,
+    )
+    if normalized_corner_axes:
+        definition["corner_axes"] = normalized_corner_axes
+        definition["corner_aggregate"] = corner_aggregate
     return definition
 
 
@@ -859,6 +1035,8 @@ def build_statistical_plan(
     sample_count: int,
     seed: int,
     correlations: list[StatisticalCorrelation] | None = None,
+    corner_axes: list[StatisticalCornerAxis] | None = None,
+    corner_aggregate: bool = False,
     source_root: Path | None = None,
     _allow_empirical_provenance: bool = False,
 ) -> StatisticalPlan:
@@ -868,6 +1046,8 @@ def build_statistical_plan(
         sample_count,
         seed,
         correlations,
+        corner_axes,
+        corner_aggregate,
         source_root,
         _allow_empirical_provenance,
     )
@@ -875,8 +1055,12 @@ def build_statistical_plan(
     assert isinstance(normalized_variables, list)
     normalized_correlations = definition.get("correlations", [])
     assert isinstance(normalized_correlations, list)
+    normalized_corner_axes = definition.get("corner_axes", [])
+    assert isinstance(normalized_corner_axes, list)
     generator_version = (
-        EMPIRICAL_GENERATOR_VERSION
+        CORNER_GENERATOR_VERSION
+        if normalized_corner_axes
+        else EMPIRICAL_GENERATOR_VERSION
         if any(
             variable.get("distribution") == "empirical"
             for variable in normalized_variables
@@ -895,7 +1079,10 @@ def build_statistical_plan(
         str(variable["name"]): str(variable["unit"])
         for variable in normalized_variables
     }
-    points: list[StatisticalPlanPoint] = []
+    for axis in normalized_corner_axes:
+        parameter_order.append(str(axis["parameter"]))
+        parameter_units[str(axis["parameter"])] = str(axis["unit"])
+    sample_points: list[StatisticalPlanPoint] = []
     variables_by_name = {
         str(variable["name"]): variable for variable in normalized_variables
     }
@@ -964,11 +1151,34 @@ def build_statistical_plan(
                     parameters[name] = _empirical_value(
                         variable, seed, sample_index
                     )
-            points.append({"index": sample_index, "parameters": parameters})
+            sample_points.append({"index": sample_index, "parameters": parameters})
+    points: list[StatisticalPlanPoint]
+    if normalized_corner_axes:
+        corner_values = [axis["values"] for axis in normalized_corner_axes]
+        assert all(isinstance(values, list) for values in corner_values)
+        points = []
+        for sample_point in sample_points:
+            for combination in itertools.product(*corner_values):
+                parameters = dict(sample_point["parameters"])
+                corners: dict[str, str] = {}
+                for axis, entry in zip(normalized_corner_axes, combination):
+                    assert isinstance(entry, dict)
+                    parameters[str(axis["parameter"])] = str(entry["value"])
+                    corners[str(axis["name"])] = str(entry["name"])
+                points.append(
+                    {
+                        "index": len(points),
+                        "sample_index": sample_point["index"],
+                        "corners": corners,
+                        "parameters": parameters,
+                    }
+                )
+    else:
+        points = sample_points
     definition_hash = hashlib.sha256(
         _canonical_json(definition).encode("utf-8")
     ).hexdigest()
-    return {
+    plan: StatisticalPlan = {
         "schema_version": STATISTICAL_PLAN_SCHEMA_VERSION,
         "generator_version": generator_version,
         "definition_hash": definition_hash,
@@ -978,6 +1188,9 @@ def build_statistical_plan(
         "sample_count": sample_count,
         "points": points,
     }
+    if normalized_corner_axes:
+        plan["point_count"] = len(points)
+    return plan
 
 
 def _artifact_bytes(plan: StatisticalPlan) -> bytes:
@@ -1050,7 +1263,10 @@ def save_statistical_plan(runs_dir: Path, plan: StatisticalPlan) -> StatisticalP
         "definition_hash": plan["definition_hash"],
         "correlations": plan["definition"].get("correlations", []),
         "empirical_sources": _empirical_sources(plan),
+        "corner_axes": plan["definition"].get("corner_axes", []),
+        "corner_aggregate": bool(plan["definition"].get("corner_aggregate", False)),
         "sample_count": plan["sample_count"],
+        "point_count": len(plan["points"]),
         "parameter_order": plan["parameter_order"],
         "parameter_units": plan["parameter_units"],
         "points": plan["points"],
@@ -1063,6 +1279,8 @@ def generate_statistical_plan(
     sample_count: int,
     seed: int,
     correlations: list[StatisticalCorrelation] | None = None,
+    corner_axes: list[StatisticalCornerAxis] | None = None,
+    corner_aggregate: bool = False,
     source_root: Path | None = None,
 ) -> StatisticalPlanResult:
     return save_statistical_plan(
@@ -1072,7 +1290,9 @@ def generate_statistical_plan(
             sample_count,
             seed,
             correlations,
-            source_root,
+            corner_axes,
+            corner_aggregate,
+            source_root=source_root,
         ),
     )
 
@@ -1088,7 +1308,10 @@ def inspect_statistical_plan(runs_dir: Path, plan_id: str) -> StatisticalPlanRes
         "definition_hash": plan["definition_hash"],
         "correlations": plan["definition"].get("correlations", []),
         "empirical_sources": _empirical_sources(plan),
+        "corner_axes": plan["definition"].get("corner_axes", []),
+        "corner_aggregate": bool(plan["definition"].get("corner_aggregate", False)),
         "sample_count": plan["sample_count"],
+        "point_count": len(plan["points"]),
         "parameter_order": plan["parameter_order"],
         "parameter_units": plan["parameter_units"],
         "points": plan["points"],
@@ -1133,6 +1356,8 @@ def load_statistical_plan(runs_dir: Path, plan_id: str) -> StatisticalPlan:
     sample_count = definition.get("sample_count")
     seed = definition.get("seed")
     correlations = definition.get("correlations")
+    corner_axes = definition.get("corner_axes")
+    corner_aggregate = definition.get("corner_aggregate", False)
     if not isinstance(variables, list):
         raise ValueError("statistical plan variables are invalid")
     rebuilt = build_statistical_plan(  # type: ignore[arg-type]
@@ -1140,6 +1365,8 @@ def load_statistical_plan(runs_dir: Path, plan_id: str) -> StatisticalPlan:
         sample_count,
         seed,
         correlations,
+        corner_axes,
+        corner_aggregate,
         _allow_empirical_provenance=True,
     )
     if value != rebuilt:

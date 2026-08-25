@@ -367,12 +367,23 @@ Verification gate:
 - A real 16-point empirical Sallen-Key AC study completed without execution or
   analysis errors and exposed two exact peaking failures (14/16, 87.5% yield)
 
-##### Phase 3C-3: Named operating corners
+##### Phase 3C-3: Named operating corners — complete
 
-- Support temperature, supply, load, and finite device-model corners as named
-  deterministic axes around a statistical sample plan.
-- Report each corner separately as well as an explicitly defined aggregate;
-  do not hide a weak corner inside a global average.
+- Ordered named axes map temperature, supply, load, or a predeclared model name
+  to one bounded SPICE-token parameter and expand inside each sample ordinal
+- Axis/value/parameter validation, collision rejection, and preflight limits on
+  axes, values, expanded points, and total parameter cells fail before output
+- Versioned content-addressed plans preserve sample ordinal, named corner map,
+  parameter values/units, definition hash, and deterministic expansion order
+- Parallel point metadata is frozen into synchronous and durable definitions so
+  checkpoint/resume cannot detach a result from its originating corner
+- MCP, JSON, CSV, and HTML expose classifications, yield, Wilson interval,
+  invalid count, failed samples, and evidence links for every corner combination
+- Pooled yield is absent by default and appears only when the immutable plan
+  explicitly requests it; per-corner results remain mandatory either way
+- A real 4-sample by 4-corner Sallen-Key study completed all 16 analyses: the
+  nominal/light corner passed 4/4 while the deliberately weak nominal/heavy-load
+  corner failed 4/4 and remained independently visible at 0% yield
 
 ##### Phase 3C-4: Stratified and low-discrepancy sampling
 

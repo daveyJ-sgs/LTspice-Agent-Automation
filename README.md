@@ -489,6 +489,50 @@ The bundled CSV is an illustrative test population, not claimed laboratory
 data. Replace it with measured lot characterization or another traceable source
 when drawing engineering conclusions.
 
+Phase 3C-3 crosses every statistical sample with finite named operating-corner
+axes. Each axis controls one netlist placeholder and declares ordered named
+values:
+
+```json
+"corner_axes": [
+  {
+    "name": "temperature",
+    "parameter": "TEMP",
+    "unit": "degC",
+    "values": [
+      {"name": "cold", "value": -40},
+      {"name": "room", "value": 27},
+      {"name": "hot", "value": 125}
+    ]
+  },
+  {
+    "name": "device_model",
+    "parameter": "MODEL",
+    "values": [
+      {"name": "slow", "value": "DIODE_SLOW"},
+      {"name": "fast", "value": "DIODE_FAST"}
+    ]
+  }
+],
+"corner_aggregate": false
+```
+
+Corner values are finite single SPICE tokens, so axes can select temperature,
+supply, load, or a predeclared device-model name without injecting directives.
+Axis and value declaration order defines a deterministic Cartesian corner set;
+samples are the outer ordering and corners vary inside each sample. Axis
+parameters must be unique and cannot collide with statistical variables. Plans
+are limited to eight axes, sixteen values per axis, 1,000 expanded points, and
+10,000 total parameter cells before any simulation is scheduled.
+
+Every expanded point records its base sample ordinal and named corners. That
+metadata is frozen into synchronous and durable experiment definitions and
+survives checkpoint/resume. `statistics.json`, `statistics.csv`, the MCP
+summary, and the offline report always expose each corner combination
+separately. The overall yield is deliberately absent unless
+`corner_aggregate` is explicitly `true`, in which case a clearly labeled
+pooled yield is added without replacing the per-corner results.
+
 Use `get_statistical_plan` to verify and inspect an existing plan. Pass its
 `plan_id` plus an ordinary netlist template to `run_statistical_experiment`:
 

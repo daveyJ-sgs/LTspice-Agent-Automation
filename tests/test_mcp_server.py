@@ -868,6 +868,116 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(comparison["added_points"], 0)
         self.assertEqual(comparison["removed_points"], 0)
 
+    def test_cornered_statistical_study_preserves_named_point_attribution(
+        self,
+    ) -> None:
+        plan = mcp_server.generate_statistical_plan(
+            [
+                {
+                    "name": "R",
+                    "distribution": "discrete",
+                    "values": ["10k"],
+                    "weights": [1],
+                }
+            ],
+            2,
+            19,
+            corner_axes=[
+                {
+                    "name": "temperature",
+                    "parameter": "TEMP",
+                    "unit": "degC",
+                    "values": [
+                        {"name": "cold", "value": -40},
+                        {"name": "hot", "value": 125},
+                    ],
+                }
+            ],
+        )
+        rendered: list[str] = []
+
+        def execute(
+            netlist: str,
+            filename: str,
+            ascii_raw: bool,
+            timeout: int,
+            dest: Path,
+        ) -> Path:
+            rendered.append(netlist)
+            dest.mkdir(parents=True)
+            return dest
+
+        with (
+            patch.object(mcp_server, "_run_netlist_text", side_effect=execute),
+            patch.object(
+                mcp_server,
+                "_summarize_run",
+                return_value={"status": "completed", "measurements": {}},
+            ),
+        ):
+            result = mcp_server.run_statistical_experiment(
+                plan["plan_id"],
+                "* corner={TEMP}\nR1 in 0 {R}\n.end\n",
+            )
+
+        self.assertEqual(result["point_count"], 4)
+        self.assertEqual(
+            [line.splitlines()[0] for line in rendered],
+            ["* corner=-4e+1", "* corner=125", "* corner=-4e+1", "* corner=125"],
+        )
+        manifest = json.loads(Path(result["manifest"]).read_text(encoding="utf-8"))
+        source = manifest["definition"]["point_plan"]["source"]
+        self.assertEqual(source["sample_count"], 2)
+        self.assertFalse(source["corner_aggregate"])
+        self.assertEqual(
+            source["point_metadata"][3],
+            {
+                "index": 3,
+                "sample_index": 1,
+                "corners": {"temperature": "hot"},
+            },
+        )
+        summary = mcp_server.summarize_statistical_experiment(
+            result["experiment_id"]
+        )
+        persisted = json.loads(Path(summary["statistics_json"]).read_text())
+        self.assertIsNone(summary["observed_yield"])
+        self.assertEqual(
+            [entry["corners"] for entry in summary["corner_results"]],
+            [{"temperature": "cold"}, {"temperature": "hot"}],
+        )
+        self.assertEqual(
+            [entry["corners"] for entry in persisted["corner_results"]],
+            [{"temperature": "cold"}, {"temperature": "hot"}],
+        )
+        report = mcp_server.build_experiment_report(result["experiment_id"])
+        report_html = Path(report["report_html"]).read_text(encoding="utf-8")
+        self.assertIn("Operating-corner yield", report_html)
+        self.assertIn("Not requested", report_html)
+        self.assertIn("temperature=cold", report_html)
+
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        try:
+            with patch.object(
+                mcp_server, "_get_experiment_manager", return_value=manager
+            ):
+                defined = mcp_server.define_statistical_study(
+                    plan["plan_id"],
+                    "* corner={TEMP}\nR1 in 0 {R}\n.end\n",
+                    max_concurrency=1,
+                )
+            durable_manifest = json.loads(
+                Path(defined["manifest"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                durable_manifest["definition"]["point_plan"]["source"][
+                    "point_metadata"
+                ],
+                source["point_metadata"],
+            )
+        finally:
+            manager.shutdown()
+
     def test_statistical_plan_tools_are_exposed_through_mcp(self) -> None:
         tools = asyncio.run(mcp_server.mcp.list_tools())
         by_name = {tool.name: tool for tool in tools}
@@ -876,10 +986,16 @@ class MCPServerTests(unittest.TestCase):
         self.assertIn("run_statistical_experiment", by_name)
         self.assertIn("define_statistical_study", by_name)
         self.assertIn("summarize_statistical_experiment", by_name)
+        self.assertIn(
+            "corner_results",
+            by_name["summarize_statistical_experiment"].output_schema["properties"],
+        )
         properties = by_name["generate_statistical_plan"].input_schema["properties"]
         self.assertEqual(properties["sample_count"]["type"], "integer")
         self.assertEqual(properties["seed"]["type"], "integer")
         self.assertIn("correlations", properties)
+        self.assertIn("corner_axes", properties)
+        self.assertIn("corner_aggregate", properties)
         variable_schema = by_name["generate_statistical_plan"].input_schema["$defs"][
             "StatisticalVariable"
         ]["properties"]
@@ -892,6 +1008,14 @@ class MCPServerTests(unittest.TestCase):
         )
         self.assertIn(
             "empirical_sources",
+            by_name["generate_statistical_plan"].output_schema["properties"],
+        )
+        self.assertIn(
+            "corner_axes",
+            by_name["generate_statistical_plan"].output_schema["properties"],
+        )
+        self.assertIn(
+            "point_count",
             by_name["generate_statistical_plan"].output_schema["properties"],
         )
         correlated = asyncio.run(
@@ -949,6 +1073,46 @@ class MCPServerTests(unittest.TestCase):
         )
         self.assertEqual(
             empirical.structured_content["empirical_sources"][0]["name"], "R"
+        )
+        cornered = asyncio.run(
+            mcp_server.mcp.call_tool(
+                "generate_statistical_plan",
+                {
+                    "variables": [
+                        {
+                            "name": "R",
+                            "distribution": "discrete",
+                            "values": ["10k"],
+                            "weights": [1],
+                        }
+                    ],
+                    "sample_count": 2,
+                    "seed": 1,
+                    "corner_axes": [
+                        {
+                            "name": "temperature",
+                            "parameter": "TEMP",
+                            "unit": "degC",
+                            "values": [
+                                {"name": "cold", "value": -40},
+                                {"name": "hot", "value": 125},
+                            ],
+                        }
+                    ],
+                    "corner_aggregate": True,
+                },
+            )
+        )
+        self.assertFalse(cornered.is_error)
+        self.assertEqual(
+            cornered.structured_content["generator_version"],
+            "sha256-counter-corners-v5",
+        )
+        self.assertEqual(cornered.structured_content["sample_count"], 2)
+        self.assertEqual(cornered.structured_content["point_count"], 4)
+        self.assertEqual(
+            cornered.structured_content["points"][2]["corners"],
+            {"temperature": "cold"},
         )
 
     def test_durable_statistical_study_executes_frozen_plan_without_resampling(

@@ -126,6 +126,59 @@ class StatisticalResultsTests(unittest.TestCase):
             {"method": "wilson", "low": None, "high": None},
         )
 
+    def test_named_corners_are_reported_separately_without_implicit_pooling(
+        self,
+    ) -> None:
+        points = [
+            self.point(0, passed=True, value=1.0),
+            self.point(1, passed=False, value=4.0),
+            self.point(2, passed=True, value=2.0),
+        ]
+        metadata = [
+            {"index": 0, "sample_index": 0, "corners": {"temperature": "cold"}},
+            {"index": 1, "sample_index": 0, "corners": {"temperature": "hot"}},
+            {"index": 2, "sample_index": 1, "corners": {"temperature": "cold"}},
+            {"index": 3, "sample_index": 1, "corners": {"temperature": "hot"}},
+        ]
+        results = {
+            "experiment_id": "mcp-experiment-20260824-120000-000000-a1b2c3d4",
+            "point_count": 4,
+            "points": points,
+        }
+        summary = statistical_results.build_statistics(
+            results,
+            point_metadata=metadata,
+            corner_aggregate=False,
+        )
+
+        self.assertIsNone(summary["observed_yield"])
+        self.assertIsNone(summary["planned_pass_fraction"])
+        self.assertIsNone(summary["corner_aggregate"])
+        self.assertEqual(
+            [entry["corners"] for entry in summary["corner_results"]],
+            [{"temperature": "cold"}, {"temperature": "hot"}],
+        )
+        cold, hot = summary["corner_results"]
+        self.assertEqual(cold["observed_yield"], 1.0)
+        self.assertEqual(cold["evaluated_points"], 2)
+        self.assertEqual(cold["invalid_points"], 0)
+        self.assertEqual(hot["observed_yield"], 0.0)
+        self.assertEqual(hot["evaluated_points"], 1)
+        self.assertEqual(hot["invalid_points"], 1)
+        self.assertEqual(summary["samples"][0]["sample_index"], 0)
+        self.assertEqual(
+            summary["samples"][1]["corners"], {"temperature": "hot"}
+        )
+        self.assertIn("corner_yield", statistical_results._csv_document(summary))
+
+        pooled = statistical_results.build_statistics(
+            results,
+            point_metadata=metadata,
+            corner_aggregate=True,
+        )
+        self.assertEqual(pooled["corner_aggregate"], "pooled")
+        self.assertAlmostEqual(pooled["observed_yield"], 2 / 3)
+
     def test_statistics_writer_rejects_a_symlink_target(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
