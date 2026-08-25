@@ -500,10 +500,28 @@ Verification gate:
   margin is most associated with correlated `R1`/`R2`, while peaking margin is
   most associated with `C1`; each corner has eight evaluated samples
 
-##### Phase 3D-C: Local OAT and tornado data
+##### Phase 3D-C: Local OAT and tornado data — complete
 
-- Add controlled local one-at-a-time perturbations and generate tornado data
-  with units, baselines, and requirement margins rather than chart-only values.
+- A completed statistical point can seed a content-addressed baseline plus
+  symmetric low/high relative perturbations for every nonzero numeric sampled
+  variable while its named corner remains fixed
+- The OAT point plan is immutable and runs through the existing durable
+  independent executor, inheriting bounded concurrency, cancellation, resume,
+  cache policy, and per-point evidence
+- Categorical and zero-baseline variables remain explicit skip records instead
+  of receiving fabricated numeric derivatives
+- Per-requirement tornado rows carry baseline/low/high input values and units,
+  signed margins, effects, one-sided slopes, impact ranks, and evidence paths;
+  incomplete simulations remain visible but unranked
+- Individually atomic `tornado.json` and `tornado.csv` artifacts plus
+  `define_local_sensitivity_study` and `analyze_local_sensitivity` expose the
+  durable MCP workflow
+- A real nine-point, 1% OAT study around weak-load Sallen-Key point 2 completed
+  with zero invalid simulations and 12 complete effects. `C1` led local gain
+  impact, while `C2` and `C1` led peaking impact, demonstrating why local OAT
+  and global rank association must remain separate
+- Real evidence is `mcp-experiment-20260825-075328-231073-99031848`, with its
+  interactive `report.html` and traceable RAW/log artifacts
 
 ##### Phase 3D-D: Adaptive boundary sampling
 

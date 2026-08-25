@@ -11,7 +11,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 try:
     import mcp_server
@@ -1027,6 +1027,8 @@ class MCPServerTests(unittest.TestCase):
         self.assertIn("summarize_statistical_experiment", by_name)
         self.assertIn("analyze_statistical_worst_cases", by_name)
         self.assertIn("analyze_statistical_sensitivity", by_name)
+        self.assertIn("define_local_sensitivity_study", by_name)
+        self.assertIn("analyze_local_sensitivity", by_name)
         self.assertIn(
             "corner_results",
             by_name["summarize_statistical_experiment"].output_schema["properties"],
@@ -1042,6 +1044,10 @@ class MCPServerTests(unittest.TestCase):
         self.assertIn(
             "sensitivity_json",
             by_name["analyze_statistical_sensitivity"].output_schema["properties"],
+        )
+        self.assertIn(
+            "tornado_json",
+            by_name["analyze_local_sensitivity"].output_schema["properties"],
         )
         properties = by_name["generate_statistical_plan"].input_schema["properties"]
         self.assertEqual(properties["sample_count"]["type"], "integer")
@@ -2780,6 +2786,103 @@ class MCPServerTests(unittest.TestCase):
         self.assertFalse(result.is_error)
         self.assertEqual(result.structured_content, expected)
         analyze.assert_called_once_with(self.runs, expected["experiment_id"])
+
+    def test_local_sensitivity_tools_work_through_mcp_protocol(self) -> None:
+        source_experiment_id = "mcp-experiment-source"
+        prepared = {
+            "parameter_order": ["R"],
+            "parameter_units": {"R": "ohm"},
+            "points": [{"R": "1000"}, {"R": "990"}, {"R": "1010"}],
+            "source": {"kind": "local_sensitivity"},
+            "netlist_template": "R1 in out {R}\n.end\n",
+            "waveform_analyses": [],
+            "filename": "circuit.cir",
+            "ascii_raw": False,
+            "timeout_seconds": 120,
+        }
+        snapshot = {
+            "experiment_id": "mcp-experiment-local",
+            "experiment_dir": str(self.runs / "mcp-experiment-local"),
+            "manifest": str(self.runs / "mcp-experiment-local" / "experiment_manifest.json"),
+            "results_json": str(self.runs / "mcp-experiment-local" / "results.json"),
+            "results_csv": str(self.runs / "mcp-experiment-local" / "results.csv"),
+            "status": "defined",
+            "point_count": 3,
+            "finished_points": 0,
+            "pending_points": 3,
+            "running_points": 0,
+            "completed_points": 0,
+            "error_points": 0,
+            "passed_points": 0,
+            "failed_points": 0,
+            "all_passed": None,
+            "error": None,
+            "execution_mode": "independent",
+        }
+        manager = Mock()
+        manager.define_explicit.return_value = snapshot
+        with (
+            patch.object(
+                mcp_server.local_sensitivity,
+                "prepare_local_sensitivity_study",
+                return_value=prepared,
+            ) as prepare,
+            patch.object(mcp_server, "_get_experiment_manager", return_value=manager),
+        ):
+            defined = asyncio.run(
+                mcp_server.mcp.call_tool(
+                    "define_local_sensitivity_study",
+                    {
+                        "source_experiment_id": source_experiment_id,
+                        "source_point_index": 7,
+                        "relative_step": 0.02,
+                        "max_concurrency": 1,
+                        "reuse_cache": True,
+                    },
+                )
+            )
+
+        self.assertFalse(defined.is_error)
+        self.assertEqual(defined.structured_content, snapshot)
+        prepare.assert_called_once_with(self.runs, source_experiment_id, 7, 0.02)
+        manager.define_explicit.assert_called_once_with(
+            prepared["netlist_template"],
+            prepared["parameter_order"],
+            prepared["points"],
+            prepared["parameter_units"],
+            prepared["source"],
+            prepared["waveform_analyses"],
+            prepared["filename"],
+            prepared["ascii_raw"],
+            prepared["timeout_seconds"],
+            1,
+            True,
+        )
+
+        expected = {
+            "experiment_id": snapshot["experiment_id"],
+            "tornado_json": str(self.runs / "tornado.json"),
+            "tornado_csv": str(self.runs / "tornado.csv"),
+            "requirement_count": 3,
+            "variable_count": 4,
+            "complete_effects": 12,
+            "invalid_points": 0,
+        }
+        with patch.object(
+            mcp_server.local_sensitivity,
+            "analyze_local_sensitivity",
+            return_value=expected,
+        ) as analyze:
+            analyzed = asyncio.run(
+                mcp_server.mcp.call_tool(
+                    "analyze_local_sensitivity",
+                    {"experiment_id": snapshot["experiment_id"]},
+                )
+            )
+
+        self.assertFalse(analyzed.is_error)
+        self.assertEqual(analyzed.structured_content, expected)
+        analyze.assert_called_once_with(self.runs, snapshot["experiment_id"])
 
     def test_c3_visualization_tools_work_through_mcp_protocol(self) -> None:
         comparison = {

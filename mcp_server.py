@@ -35,6 +35,7 @@ import experiment_index
 import experiment_report
 import experiment_visualization
 import frequency_domain_metrics
+import local_sensitivity
 import ltspice_wrapper as wrapper
 import raw_parser
 import report_runs
@@ -74,6 +75,7 @@ StatisticalPlanResult = statistical_engine.StatisticalPlanResult
 StatisticalSamplingMethod = Literal["independent", "latin_hypercube", "halton"]
 StatisticalSummaryResult = statistical_results.StatisticalSummaryResult
 SensitivityAnalysisResult = sensitivity_analysis.SensitivityAnalysisResult
+LocalSensitivityAnalysisResult = local_sensitivity.LocalSensitivityAnalysisResult
 WorstCaseAnalysisResult = worst_case_analysis.WorstCaseAnalysisResult
 
 ExperimentIndexStatus = Literal[
@@ -1198,6 +1200,44 @@ def analyze_statistical_sensitivity(
     return sensitivity_analysis.analyze_statistical_sensitivity(
         RUNS_DIR, experiment_id
     )
+
+
+@mcp.tool()
+def define_local_sensitivity_study(
+    source_experiment_id: str,
+    source_point_index: int,
+    relative_step: float = 0.01,
+    max_concurrency: int = 2,
+    reuse_cache: bool = False,
+) -> ExperimentJobSnapshot:
+    """Define a durable baseline plus low/high one-at-a-time study."""
+    prepared = local_sensitivity.prepare_local_sensitivity_study(
+        RUNS_DIR,
+        source_experiment_id,
+        source_point_index,
+        relative_step,
+    )
+    return _get_experiment_manager().define_explicit(
+        prepared["netlist_template"],
+        prepared["parameter_order"],
+        prepared["points"],
+        prepared["parameter_units"],
+        prepared["source"],
+        prepared["waveform_analyses"],
+        prepared["filename"],
+        prepared["ascii_raw"],
+        prepared["timeout_seconds"],
+        max_concurrency,
+        reuse_cache,
+    )
+
+
+@mcp.tool()
+def analyze_local_sensitivity(
+    experiment_id: str,
+) -> LocalSensitivityAnalysisResult:
+    """Write structured local effects and tornado data for a terminal study."""
+    return local_sensitivity.analyze_local_sensitivity(RUNS_DIR, experiment_id)
 
 
 @mcp.tool()

@@ -325,6 +325,7 @@ Model Context Protocol, in-process (no REST server needed): `run_netlist`,
 `query_experiments`, `summarize_statistical_experiment`,
 `analyze_statistical_worst_cases`,
 `analyze_statistical_sensitivity`,
+`define_local_sensitivity_study`, `analyze_local_sensitivity`,
 `build_experiment_report`, `build_comparison_report`,
 `build_experiment_dashboard`, `list_runs`, `build_dashboard`, and
 `list_examples`.
@@ -682,6 +683,29 @@ derivatives. The artifacts name correlated sampled inputs beside each result,
 because two correlated components can both rank highly even when the study
 cannot isolate their independent influence. Controlled local perturbations are
 handled separately by Phase 3D-C.
+
+### Run controlled local sensitivity studies
+
+Call `define_local_sensitivity_study` with a completed statistical experiment,
+one electrically evaluated point index, and a relative step. The tool freezes a
+content-addressed plan containing the selected baseline and one low/high pair
+for every nonzero numeric sampled variable. Named-corner parameters remain
+fixed, while categorical and zero-baseline variables are retained as explicit
+skip records. Start and monitor the returned experiment with the normal durable
+`start_experiment` and `get_experiment` tools, including cancellation and
+resume support.
+
+After the study reaches a terminal state, `analyze_local_sensitivity` writes
+individually atomic `tornado.json` and `tornado.csv` artifacts. Every
+requirement-variable row contains the baseline, low, and high input values;
+their units and signed requirement margins; low/high effects and slopes; impact
+rank; and direct point-evidence paths. Missing perturbation results remain
+visible as incomplete and are never ranked.
+
+Tornado impact is the larger absolute margin change from the baseline. This is
+a controlled local response around one evidenced point, not a population-wide
+importance claim. Compare it with global rank sensitivity rather than using
+one as a substitute for the other.
 
 ### Run a durable experiment job
 
