@@ -625,9 +625,13 @@ For completed jobs, `build_experiment_report` detects statistical studies
 automatically and adds yield, confidence, error-accounting, and failed-sample
 sections while linking the JSON and CSV evidence. Its Sampling provenance panel
 names the method and generator, displays both frozen hashes, and links directly
-to the immutable statistical-plan artifact. For transient studies on LTspice,
-request `ascii_raw=true`; AC studies should retain binary RAW so complex
-waveforms are preserved.
+to the immutable statistical-plan artifact. It also regenerates validated
+worst-case and global-rank-sensitivity artifacts, presents bounded distribution
+summaries, and links every analysis JSON/CSV file. Local OAT studies receive a
+ranked tornado-data section with incomplete perturbations left explicit. These
+tables are display views of the structured evidence, not alternate sources of
+electrical truth. For transient studies on LTspice, request `ascii_raw=true`;
+AC studies should retain binary RAW so complex waveforms are preserved.
 
 The final Phase 3C verification combines these contracts in one reproducible
 study: correlated bounded-Gaussian resistors, empirical capacitor observations,

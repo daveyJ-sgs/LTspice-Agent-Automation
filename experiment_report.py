@@ -12,12 +12,16 @@ from typing import TypedDict
 from urllib.parse import quote
 
 import experiment_index
+import local_sensitivity
 import raw_parser
+import sensitivity_analysis
 import statistical_results
+import worst_case_analysis
 
 DISPLAY_POINT_LIMIT = 400
 MAX_TRACE_COUNT = 100
 MAX_DISPLAYED_POINTS = 40_000
+MAX_ANALYSIS_ROWS = 2_000
 REPORT_FILENAME = "report.html"
 _SVG_WIDTH = 900
 _SVG_HEIGHT = 380
@@ -66,6 +70,20 @@ def _load_artifacts(
     runs_dir: Path, experiment_id: str
 ) -> tuple[Path, dict[str, object], dict[str, object], dict[str, object]]:
     return experiment_index.load_completed_experiment(runs_dir, experiment_id)
+
+
+def _load_generated_json(experiment_dir: Path, filename: str) -> dict[str, object]:
+    path = _inside(
+        experiment_dir / filename,
+        experiment_dir,
+        "analysis artifact must remain inside the experiment directory",
+    )
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"{filename} must be a regular file")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"{filename} must contain a JSON object")
+    return value
 
 
 def _sample_indices(values: list[float]) -> list[int]:
@@ -524,6 +542,147 @@ def _sampling_provenance_panel(summary: dict[str, object] | None) -> str:
 </section>"""
 
 
+def _distribution_panel(summary: dict[str, object] | None) -> str:
+    if summary is None:
+        return ""
+    rows: list[str] = []
+    for name, statistics in sorted(summary.get("measurements", {}).items()):
+        rows.append(_distribution_row(str(name), "measurement", "", statistics))
+    for requirement in summary.get("requirement_margins", []):
+        label = f"{requirement['analysis']} / {requirement['metric']}"
+        rows.append(
+            _distribution_row(
+                label,
+                "signed margin",
+                str(requirement["unit"]),
+                requirement["statistics"],
+            )
+        )
+    if len(rows) > MAX_ANALYSIS_ROWS:
+        raise ValueError("statistical distribution rows exceed report budget")
+    if not rows:
+        return ""
+    return f"""
+<section class="panel"><h2>Distribution summaries</h2>
+<p class="muted">Structured descriptive statistics; charts do not replace the linked JSON/CSV evidence.</p>
+<div class="table-wrap"><table><thead><tr><th>Name</th><th>Kind</th><th>Count</th><th>Min</th><th>P05</th><th>Median</th><th>P95</th><th>Max</th><th>Mean</th><th>Std dev</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>
+</section>"""
+
+
+def _distribution_row(
+    name: str,
+    kind: str,
+    unit: str,
+    statistics: dict[str, object],
+) -> str:
+    suffix = f" {_text(unit)}" if unit else ""
+    values = [
+        statistics["minimum"],
+        statistics["p05"],
+        statistics["p50"],
+        statistics["p95"],
+        statistics["maximum"],
+        statistics["mean"],
+        statistics["standard_deviation"],
+    ]
+    cells = "".join(f"<td>{_text(_number(value))}{suffix}</td>" for value in values)
+    return (
+        f"<tr><td>{_text(name)}</td><td>{_text(kind)}</td>"
+        f"<td>{statistics['count']}</td>{cells}</tr>"
+    )
+
+
+def _worst_case_panel(analysis: dict[str, object] | None) -> str:
+    if analysis is None:
+        return ""
+    rows: list[str] = []
+    for requirement in analysis["requirements"]:
+        cases = requirement["worst_cases"]
+        if not cases:
+            continue
+        case = cases[0]
+        corner = ", ".join(
+            f"{name}={value}" for name, value in case["corners"].items()
+        ) or "—"
+        state = "pass" if case["passed"] else "fail"
+        evidence = quote(str(case["evidence_path"]), safe="/")
+        rows.append(
+            f"<tr><td>{_text(requirement['analysis'])} / {_text(requirement['metric'])}</td>"
+            f"<td>{_text(_number(case['margin']))} {_text(requirement['unit'])}</td>"
+            f"<td>{_text(corner)}</td><td>{case['point_index']}</td>"
+            f'<td><span class="badge {state}">{state}</span></td>'
+            f'<td><a href="{evidence}">point-{case["point_index"]:04d}</a></td></tr>'
+        )
+    if len(rows) > MAX_ANALYSIS_ROWS:
+        raise ValueError("worst-case rows exceed report budget")
+    if not rows:
+        return ""
+    return f"""
+<section class="panel"><h2>Worst evidenced cases</h2>
+<div class="table-wrap"><table><thead><tr><th>Requirement</th><th>Worst margin</th><th>Corner</th><th>Point</th><th>Status</th><th>Evidence</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>
+</section>"""
+
+
+def _sensitivity_panel(analysis: dict[str, object] | None) -> str:
+    if analysis is None:
+        return ""
+    rows: list[str] = []
+    for requirement in analysis["requirements"]:
+        label = f"{requirement['analysis']} / {requirement['metric']}"
+        for scope in requirement["scopes"]:
+            corner = ", ".join(
+                f"{name}={value}" for name, value in scope["corners"].items()
+            ) or "all samples"
+            for variable in scope["variables"]:
+                rho = variable.get("rho")
+                rank = variable.get("rank")
+                rows.append(
+                    f"<tr><td>{_text(label)}</td><td>{_text(corner)}</td>"
+                    f"<td>{'—' if rank is None else rank}</td><td>{_text(variable['variable'])}</td>"
+                    f"<td>{'—' if rho is None else _text(_number(rho))}</td>"
+                    f"<td>{_text(variable['status'])}</td>"
+                    f"<td>{_text(', '.join(variable['correlated_with']) or '—')}</td></tr>"
+                )
+    if len(rows) > MAX_ANALYSIS_ROWS:
+        raise ValueError("sensitivity rows exceed report budget")
+    if not rows:
+        return ""
+    return f"""
+<section class="panel"><h2>Global rank sensitivity</h2>
+<p class="muted">Spearman association with signed margin; descriptive, not causal.</p>
+<div class="table-wrap"><table><thead><tr><th>Requirement</th><th>Corner</th><th>Rank</th><th>Variable</th><th>Rho</th><th>Status</th><th>Correlated with</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>
+</section>"""
+
+
+def _tornado_panel(analysis: dict[str, object] | None) -> str:
+    if analysis is None:
+        return ""
+    rows: list[str] = []
+    for requirement in analysis["requirements"]:
+        label = f"{requirement['analysis']} / {requirement['metric']}"
+        for effect in requirement["effects"]:
+            rank = effect.get("rank")
+            low_effect = effect.get("low_effect")
+            high_effect = effect.get("high_effect")
+            impact = effect.get("impact")
+            rows.append(
+                f"<tr><td>{_text(label)}</td><td>{'—' if rank is None else rank}</td>"
+                f"<td>{_text(effect['name'])}</td><td>{_text(effect['status'])}</td>"
+                f"<td>{'—' if low_effect is None else _text(_number(low_effect))}</td>"
+                f"<td>{'—' if high_effect is None else _text(_number(high_effect))}</td>"
+                f"<td>{'—' if impact is None else _text(_number(impact))} {_text(requirement['unit'])}</td></tr>"
+            )
+    if len(rows) > MAX_ANALYSIS_ROWS:
+        raise ValueError("tornado rows exceed report budget")
+    if not rows:
+        return ""
+    return f"""
+<section class="panel"><h2>Local OAT tornado data</h2>
+<p class="muted">Controlled low/high perturbations around one evidenced point.</p>
+<div class="table-wrap"><table><thead><tr><th>Requirement</th><th>Rank</th><th>Variable</th><th>Status</th><th>Low effect</th><th>High effect</th><th>Impact</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>
+</section>"""
+
+
 def _document(
     experiment_id: str,
     results: dict[str, object],
@@ -531,6 +690,9 @@ def _document(
     plots: list[dict[str, object]],
     artifacts: list[str],
     statistical_summary: dict[str, object] | None = None,
+    worst_cases: dict[str, object] | None = None,
+    sensitivity: dict[str, object] | None = None,
+    tornado: dict[str, object] | None = None,
 ) -> str:
     point_rows, requirement_rows = _table_rows(results)
     plot_html = "".join(_svg(plot, index) for index, plot in enumerate(plots))
@@ -586,6 +748,10 @@ a{{color:var(--blue)}} .eyebrow{{color:var(--blue);font-weight:700;text-transfor
 {plot_html}
 {_sampling_provenance_panel(statistical_summary)}
 {_statistical_panel(statistical_summary)}
+{_distribution_panel(statistical_summary)}
+{_worst_case_panel(worst_cases)}
+{_sensitivity_panel(sensitivity)}
+{_tornado_panel(tornado)}
 <section class="panel"><h2>Requirement results</h2><div class="table-wrap"><table><thead><tr><th>Point</th><th>Parameters</th><th>Analysis</th><th>Metric</th><th>Value</th><th>Requirement</th><th>Status</th></tr></thead><tbody>{requirement_rows}{no_requirements}</tbody></table></div></section>
 <section class="panel"><h2>Experiment points</h2><div class="table-wrap"><table><thead><tr><th>Point</th><th>Parameters</th><th>Measurements</th><th>Errors</th><th>Status</th></tr></thead><tbody>{point_rows}</tbody></table></div></section>
 </main>
@@ -625,12 +791,30 @@ def build_experiment_report(runs_dir: Path, experiment_id: str) -> ExperimentRep
     point_plan = definition.get("point_plan") if isinstance(definition, dict) else None
     source = point_plan.get("source") if isinstance(point_plan, dict) else None
     statistical_summary = None
+    worst_cases = None
+    sensitivity = None
+    tornado = None
     if isinstance(source, dict) and source.get("kind") == "statistical":
         statistical_results.summarize_statistical_experiment(runs_dir, experiment_id)
-        statistical_summary = json.loads(
-            (experiment_dir / "statistics.json").read_text(encoding="utf-8")
+        worst_case_analysis.analyze_statistical_worst_cases(runs_dir, experiment_id)
+        sensitivity_analysis.analyze_statistical_sensitivity(runs_dir, experiment_id)
+        statistical_summary = _load_generated_json(experiment_dir, "statistics.json")
+        worst_cases = _load_generated_json(experiment_dir, "worst_cases.json")
+        sensitivity = _load_generated_json(experiment_dir, "sensitivity.json")
+        artifacts.extend(
+            [
+                "statistics.json",
+                "statistics.csv",
+                "worst_cases.json",
+                "worst_cases.csv",
+                "sensitivity.json",
+                "sensitivity.csv",
+            ]
         )
-        artifacts.extend(["statistics.json", "statistics.csv"])
+    elif isinstance(source, dict) and source.get("kind") == "local_sensitivity":
+        local_sensitivity.analyze_local_sensitivity(runs_dir, experiment_id)
+        tornado = _load_generated_json(experiment_dir, "tornado.json")
+        artifacts.extend(["tornado.json", "tornado.csv"])
     document = _document(
         experiment_id,
         results,
@@ -638,6 +822,9 @@ def build_experiment_report(runs_dir: Path, experiment_id: str) -> ExperimentRep
         plots,
         artifacts,
         statistical_summary,
+        worst_cases,
+        sensitivity,
+        tornado,
     )
     report_path = _inside(
         experiment_dir / REPORT_FILENAME,

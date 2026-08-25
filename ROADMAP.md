@@ -557,20 +557,43 @@ Verification gate:
 
 #### Phase 3E: Statistical reports, indexing, and hardening
 
-- Extend the offline HTML report and dashboard with yield summaries,
-  confidence history, distributions, failed-sample tables, corner matrices,
-  sensitivity rankings, and tornado plots.
-- Keep charts display-only: every conclusion must remain available in bounded
-  JSON/CSV and link to full-resolution simulation evidence.
+##### Phase 3E-A: Integrated analysis reports — complete
+
+- Completed statistical reports regenerate and link validated statistics,
+  worst-case, and global-sensitivity JSON/CSV artifacts without rerunning
+  LTspice
+- Bounded HTML tables add measurement and signed-margin distributions, worst
+  evidenced cases, named-corner sensitivity ranks, and correlation cautions to
+  the existing yield, Wilson interval, corner, failure, and waveform views
+- Completed local OAT reports regenerate and link tornado JSON/CSV evidence and
+  retain incomplete effects explicitly instead of ranking them
+- User content remains escaped, analysis row counts and waveform payloads are
+  bounded, and every displayed conclusion remains traceable to structured or
+  full-resolution simulation evidence
+- Real statistical and OAT Sallen-Key reports were rebuilt successfully; the
+  statistical report is
+  `mcp-experiment-20260824-204055-619847-e1afd7fd/report.html`
+
+##### Phase 3E-B: Statistical index and dashboard queries
+
 - Index statistical definitions and summaries for queries by circuit, status,
   yield, confidence bound, corner, variable, and requirement.
+
+##### Phase 3E-C: Compatible statistical comparison
+
 - Add content-addressed comparison of two compatible statistical studies,
   distinguishing changed sample plans from changed circuit outcomes.
+
+##### Phase 3E-D: Resource hardening and production example
+
 - Enforce bounded sample counts, corner expansion, imported data, report
   payloads, runtime, and disk use; malformed studies must be isolated during
   index and dashboard rebuilds.
 - Retire the standalone Monte Carlo example in favor of a documented example
   built on the production statistical API.
+
+##### Phase 3E-E: Real Windows LTspice CI prototype
+
 - As the final Phase 3 hardening step, prototype a GitHub-hosted Windows job
   that installs a pinned, checksum-verified LTspice build and runs bounded real
   simulator smoke tests after resolving first-run consent noninteractively.

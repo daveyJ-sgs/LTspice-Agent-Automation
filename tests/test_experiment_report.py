@@ -41,6 +41,104 @@ class ExperimentReportTests(unittest.TestCase):
         self.assertLessEqual(len(indices), experiment_report.DISPLAY_POINT_LIMIT)
         self.assertTrue({0, 1, 123, 5000, 9998, 9999}.issubset(indices))
 
+    def test_analysis_panels_escape_content_and_enforce_row_budget(self) -> None:
+        statistics = {
+            "measurements": {
+                "gain<script>": {
+                    "count": 2,
+                    "minimum": 1.0,
+                    "p05": 1.0,
+                    "p50": 1.5,
+                    "p95": 2.0,
+                    "maximum": 2.0,
+                    "mean": 1.5,
+                    "standard_deviation": 0.5,
+                }
+            },
+            "requirement_margins": [],
+        }
+        worst_cases = {
+            "requirements": [
+                {
+                    "analysis": "ac<script>",
+                    "metric": "gain",
+                    "unit": "dB",
+                    "worst_cases": [
+                        {
+                            "corners": {"load": "weak"},
+                            "evidence_path": "point-0001/",
+                            "margin": -0.1,
+                            "passed": False,
+                            "point_index": 1,
+                        }
+                    ],
+                }
+            ]
+        }
+        sensitivity = {
+            "requirements": [
+                {
+                    "analysis": "ac",
+                    "metric": "gain",
+                    "scopes": [
+                        {
+                            "corners": {},
+                            "variables": [
+                                {
+                                    "rank": None,
+                                    "variable": "R<script>",
+                                    "rho": None,
+                                    "status": "constant_input",
+                                    "correlated_with": [],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+        tornado = {
+            "requirements": [
+                {
+                    "analysis": "ac",
+                    "metric": "gain",
+                    "unit": "dB",
+                    "effects": [
+                        {
+                            "rank": None,
+                            "name": "R<script>",
+                            "status": "incomplete",
+                            "low_effect": None,
+                            "high_effect": None,
+                            "impact": None,
+                        }
+                    ],
+                }
+            ]
+        }
+
+        document = "".join(
+            (
+                experiment_report._distribution_panel(statistics),
+                experiment_report._worst_case_panel(worst_cases),
+                experiment_report._sensitivity_panel(sensitivity),
+                experiment_report._tornado_panel(tornado),
+            )
+        )
+
+        self.assertIn("Distribution summaries", document)
+        self.assertIn("Worst evidenced cases", document)
+        self.assertIn("Global rank sensitivity", document)
+        self.assertIn("Local OAT tornado data", document)
+        self.assertIn("gain&lt;script&gt;", document)
+        self.assertNotIn("gain<script>", document)
+        self.assertNotIn(">None<", document)
+        with (
+            patch.object(experiment_report, "MAX_ANALYSIS_ROWS", 0),
+            self.assertRaisesRegex(ValueError, "report budget"),
+        ):
+            experiment_report._distribution_panel(statistics)
+
     def _analysis(self, step_index: int, value: float) -> dict[str, object]:
         return {
             "name": "gain </script><script>alert(1)</script>",
