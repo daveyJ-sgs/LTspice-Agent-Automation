@@ -624,6 +624,18 @@ to the immutable statistical-plan artifact. For transient studies on LTspice,
 request `ascii_raw=true`; AC studies should retain binary RAW so complex
 waveforms are preserved.
 
+The final Phase 3C verification combines these contracts in one reproducible
+study: correlated bounded-Gaussian resistors, empirical capacitor observations,
+scrambled Halton sampling, and three named load corners. A real eight-sample
+Sallen-Key run completed all 24 analyses with no invalid points. The light and
+nominal loads passed 8/8 independently, while the deliberately weak 1 kOhm load
+failed 8/8 only on the 7.6 dB low-frequency gain floor (observed
+7.5356–7.5357 dB); no aggregate yield was reported because pooling was not
+requested.
+A byte-stable 128-sample fixture separately verifies the requested 0.8
+correlation, repeated-observation empirical frequencies, sample-major corner
+ordering, immutable reload, and durable-resume provenance on macOS and Windows.
+
 ### Run a durable experiment job
 
 The Phase 2B lifecycle keeps definition and execution separate. First call

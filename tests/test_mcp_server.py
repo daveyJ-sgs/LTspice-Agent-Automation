@@ -1285,6 +1285,184 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(finished["status"], "completed")
         self.assertEqual(executed_points, expected_points)
 
+    def test_durable_statistical_resume_preserves_combined_phase_3c_plan(
+        self,
+    ) -> None:
+        plan = mcp_server.generate_statistical_plan(
+            [
+                {
+                    "name": "R1",
+                    "distribution": "gaussian",
+                    "minimum": 9000,
+                    "maximum": 11000,
+                    "nominal": 10000,
+                    "sigma": 100,
+                },
+                {
+                    "name": "R2",
+                    "distribution": "gaussian",
+                    "minimum": 9000,
+                    "maximum": 11000,
+                    "nominal": 10000,
+                    "sigma": 100,
+                },
+                {
+                    "name": "C",
+                    "distribution": "empirical",
+                    "values": [1e-8, 2.2e-8],
+                },
+            ],
+            2,
+            43,
+            correlations=[
+                {"variables": ["R1", "R2"], "matrix": [[1, 0.75], [0.75, 1]]}
+            ],
+            corner_axes=[
+                {
+                    "name": "load",
+                    "parameter": "RLOAD",
+                    "values": [
+                        {"name": "light", "value": "100k"},
+                        {"name": "heavy", "value": "1k"},
+                    ],
+                }
+            ],
+            sampling_method="halton",
+        )
+        frozen_plan = mcp_server.statistical_engine.load_statistical_plan(
+            self.runs, plan["plan_id"]
+        )
+        source = mcp_server._statistical_plan_source(
+            plan["plan_id"], frozen_plan, plan
+        )
+        first_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        defined = first_manager.define_explicit(
+            "R1 in n1 {R1}\nR2 n1 0 {R2}\nC1 n1 0 {C}\n"
+            "RL n1 0 {RLOAD}\n.end\n",
+            ["R1", "R2", "C", "RLOAD"],
+            [point["parameters"] for point in plan["points"]],
+            {"R1": "", "R2": "", "C": "", "RLOAD": ""},
+            source,
+            max_concurrency=1,
+        )
+        first_manager.shutdown()
+        defined_manifest = json.loads(
+            Path(defined["manifest"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            defined_manifest["definition"]["point_plan"]["source"], source
+        )
+        experiment_dir = Path(defined["experiment_dir"])
+        point_zero = experiment_dir / "point-0000"
+        point_zero.mkdir()
+        mcp_server._write_json(
+            point_zero / "point_result.json",
+            {
+                "index": 0,
+                "parameters": plan["points"][0]["parameters"],
+                "run_dir": str(point_zero / "attempt-0000"),
+                "simulation_status": "completed",
+                "duration_seconds": 0.01,
+                "measurements": {},
+                "analyses": [],
+                "all_passed": True,
+                "error": None,
+            },
+        )
+        manifest_path = Path(defined["manifest"])
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["status"] = "running"
+        mcp_server._write_json(manifest_path, manifest)
+        calls: list[int] = []
+
+        def execute_point(
+            index: int,
+            combination: dict[str, str],
+            point_dir: Path,
+            *args: object,
+        ) -> dict[str, object]:
+            calls.append(index)
+            return {
+                "index": index,
+                "parameters": combination,
+                "run_dir": str(point_dir),
+                "simulation_status": "completed",
+                "duration_seconds": 0.01,
+                "measurements": {},
+                "analyses": [],
+                "all_passed": True,
+                "error": None,
+            }
+
+        with patch.object(mcp_server, "_execute_experiment_point", side_effect=execute_point):
+            resumed_manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+            try:
+                finished = resumed_manager.wait(defined["experiment_id"])
+            finally:
+                resumed_manager.shutdown()
+
+        self.assertEqual(finished["status"], "completed")
+        self.assertEqual(calls, [1, 2, 3])
+        results = json.loads(Path(finished["results_json"]).read_text(encoding="utf-8"))
+        self.assertEqual(
+            [point["parameters"] for point in results["points"]],
+            [point["parameters"] for point in plan["points"]],
+        )
+        summary = mcp_server.summarize_statistical_experiment(
+            defined["experiment_id"]
+        )
+        self.assertEqual(
+            summary["sampling_provenance"],
+            {
+                name: source[name]
+                for name in (
+                    "sampling_method",
+                    "generator_version",
+                    "plan_id",
+                    "plan_sha256",
+                    "definition_hash",
+                    "runs_relative_path",
+                )
+            },
+        )
+        self.assertEqual(
+            [result["corners"] for result in summary["corner_results"]],
+            [{"load": "light"}, {"load": "heavy"}],
+        )
+        self.assertEqual(
+            [result["evaluated_points"] for result in summary["corner_results"]],
+            [2, 2],
+        )
+        persisted_statistics = json.loads(
+            Path(summary["statistics_json"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            [
+                (
+                    sample["index"],
+                    sample["sample_index"],
+                    sample["corners"],
+                    sample["parameters"],
+                )
+                for sample in persisted_statistics["samples"]
+            ],
+            [
+                (
+                    point["index"],
+                    point["sample_index"],
+                    point["corners"],
+                    point["parameters"],
+                )
+                for point in plan["points"]
+            ],
+        )
+        resumed_manifest = json.loads(
+            Path(finished["manifest"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            resumed_manifest["definition"]["point_plan"]["source"], source
+        )
+
     def test_durable_statistical_resume_keeps_checkpointed_duplicate_samples(
         self,
     ) -> None:

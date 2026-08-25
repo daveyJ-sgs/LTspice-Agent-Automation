@@ -218,6 +218,98 @@ class StatisticalEngineTests(unittest.TestCase):
         self.assertEqual(plan["points"][0]["corners"], {"load": "light"})
         self.assertEqual(plan["points"][1]["corners"], {"load": "heavy"})
 
+    def test_combined_phase_3c_plan_is_stable_and_well_formed(self) -> None:
+        plan = statistical_engine.build_statistical_plan(
+            [
+                {
+                    "name": "R1",
+                    "distribution": "gaussian",
+                    "minimum": 14_500,
+                    "maximum": 17_000,
+                    "nominal": 15_750,
+                    "sigma": 350,
+                    "unit": "ohm",
+                },
+                {
+                    "name": "R2",
+                    "distribution": "gaussian",
+                    "minimum": 14_500,
+                    "maximum": 17_000,
+                    "nominal": 15_750,
+                    "sigma": 350,
+                    "unit": "ohm",
+                },
+                {
+                    "name": "CLOT",
+                    "distribution": "empirical",
+                    "values": [9.8e-9, 9.8e-9, 1e-8, 1.01e-8],
+                    "unit": "F",
+                },
+            ],
+            128,
+            20260824,
+            correlations=[
+                {
+                    "variables": ["R1", "R2"],
+                    "matrix": [[1, 0.8], [0.8, 1]],
+                }
+            ],
+            corner_axes=[
+                {
+                    "name": "load",
+                    "parameter": "RLOAD",
+                    "unit": "ohm",
+                    "values": [
+                        {"name": "light", "value": "100k"},
+                        {"name": "nominal", "value": "10k"},
+                        {"name": "weak", "value": "1k"},
+                    ],
+                }
+            ],
+            sampling_method="halton",
+        )
+
+        self.assertEqual(plan["generator_version"], "sha256-stratified-gaussian-v7")
+        self.assertEqual(len(plan["points"]), 384)
+        self.assertEqual(
+            hashlib.sha256(statistical_engine._artifact_bytes(plan)).hexdigest(),
+            "48bc13ca9d9d61587b2543799c8147ef3bc5c148b19f640871f44a02b3d4947c",
+        )
+        base_points = plan["points"][::3]
+        first = [float(point["parameters"]["R1"]) for point in base_points]
+        second = [float(point["parameters"]["R2"]) for point in base_points]
+        self.assertAlmostEqual(
+            statistics.correlation(first, second), 0.8, delta=0.03
+        )
+        self.assertEqual(
+            {
+                value: sum(
+                    point["parameters"]["CLOT"] == value for point in base_points
+                )
+                for value in ("9.8e-9", "1e-8", "1.01e-8")
+            },
+            {"9.8e-9": 64, "1e-8": 32, "1.01e-8": 32},
+        )
+        expected_corners = [
+            {"load": "light"},
+            {"load": "nominal"},
+            {"load": "weak"},
+        ]
+        for sample_index in range(128):
+            sample_points = plan["points"][sample_index * 3 : sample_index * 3 + 3]
+            self.assertEqual(
+                [point["sample_index"] for point in sample_points],
+                [sample_index] * 3,
+            )
+            self.assertEqual(
+                [point["corners"] for point in sample_points], expected_corners
+            )
+        saved = statistical_engine.save_statistical_plan(self.runs, plan)
+        self.assertEqual(
+            statistical_engine.load_statistical_plan(self.runs, saved["plan_id"]),
+            plan,
+        )
+
     def test_stratified_sampling_rejects_invalid_methods(self) -> None:
         with self.assertRaisesRegex(ValueError, "sampling_method must be"):
             statistical_engine.build_statistical_plan(

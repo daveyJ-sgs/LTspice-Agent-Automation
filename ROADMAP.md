@@ -336,7 +336,7 @@ Verification gate:
 - A real 12-sample Sallen-Key tolerance plan exercised both AC and transient
   requirements and identifies the exact failing samples.
 
-#### Phase 3C: Correlation, measured populations, and operating corners — in progress
+#### Phase 3C: Correlation, measured populations, and operating corners — complete
 
 ##### Phase 3C-1: Correlated Gaussian variables — complete
 
@@ -406,7 +406,7 @@ Verification gate:
   LTspice stepping is deferred unless every stepped result can be mapped back
   to its planned point and complete artifacts
 
-##### Phase 3C-5: Integration and verification — in progress
+##### Phase 3C-5: Integration and verification — complete
 
 ###### Phase 3C-5A: Gaussian sampler integration — complete
 
@@ -436,10 +436,23 @@ Verification gate:
 - Malformed provenance, persistence, cancellation, MCP-schema, JSON/CSV, HTML,
   and full macOS/Windows regression coverage
 
-###### Phase 3C-5C: Final Phase 3 verification
+###### Phase 3C-5C: Final Phase 3 verification — complete
 
-- Exercise combined empirical, correlated, cornered, and space-filling studies;
-  complete adversarial review, documentation, and real LTspice validation.
+- A byte-stable 128-sample combined fixture covers empirical inverse-CDF
+  frequencies, correlated bounded Gaussians, scrambled Halton sampling, and
+  three ordered named corners across 384 exact sample-by-corner points
+- The fixture preserves a repeated empirical observation at 64 selections while
+  selecting each other bin 32 times, and measures 0.8154 correlation against
+  the requested 0.8 coefficient
+- Durable restart preserves the combined plan's complete point order, corner
+  attribution, immutable source metadata, and six-field sampling provenance
+- A real 8-sample by 3-corner Sallen-Key study completed all 24 LTspice
+  analyses with zero invalid points: light and nominal loads passed 8/8 while
+  the deliberately weak 1 kOhm load failed 8/8 and remained separately visible
+- Local evidence is `mcp-experiment-20260824-204055-619847-e1afd7fd`, sourced
+  from content-addressed plan `statistical-plan-3b22357b300d3bcb`
+- Adversarial review, complete regression, documentation, offline-report, and
+  macOS/Windows verification close Phase 3C without implicitly pooling corners
 
 Verification gate:
 
