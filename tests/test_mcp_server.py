@@ -879,6 +879,42 @@ class MCPServerTests(unittest.TestCase):
         properties = by_name["generate_statistical_plan"].input_schema["properties"]
         self.assertEqual(properties["sample_count"]["type"], "integer")
         self.assertEqual(properties["seed"]["type"], "integer")
+        self.assertIn("correlations", properties)
+        self.assertIn(
+            "correlations",
+            by_name["generate_statistical_plan"].output_schema["properties"],
+        )
+        correlated = asyncio.run(
+            mcp_server.mcp.call_tool(
+                "generate_statistical_plan",
+                {
+                    "variables": [
+                        {
+                            "name": name,
+                            "distribution": "gaussian",
+                            "minimum": -5,
+                            "maximum": 5,
+                            "nominal": 0,
+                            "sigma": 1,
+                        }
+                        for name in ("A", "B")
+                    ],
+                    "sample_count": 3,
+                    "seed": 1,
+                    "correlations": [
+                        {
+                            "variables": ["A", "B"],
+                            "matrix": [[1, 0.8], [0.8, 1]],
+                        }
+                    ],
+                },
+            )
+        )
+        self.assertFalse(correlated.is_error)
+        self.assertEqual(
+            correlated.structured_content["generator_version"],
+            "sha256-counter-correlations-v3",
+        )
 
     def test_durable_statistical_study_executes_frozen_plan_without_resampling(
         self,

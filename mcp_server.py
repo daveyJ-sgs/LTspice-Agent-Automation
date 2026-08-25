@@ -66,6 +66,7 @@ ExperimentReportResult = experiment_report.ExperimentReportResult
 ComparisonReportResult = experiment_visualization.ComparisonReportResult
 ExperimentDashboardResult = experiment_visualization.ExperimentDashboardResult
 StatisticalVariable = statistical_engine.StatisticalVariable
+StatisticalCorrelation = statistical_engine.StatisticalCorrelation
 StatisticalPlanResult = statistical_engine.StatisticalPlanResult
 StatisticalSummaryResult = statistical_results.StatisticalSummaryResult
 
@@ -964,15 +965,16 @@ def generate_statistical_plan(
     variables: list[StatisticalVariable],
     sample_count: int,
     seed: int,
+    correlations: list[StatisticalCorrelation] | None = None,
 ) -> StatisticalPlanResult:
     """Generate and persist a deterministic statistical point plan without LTspice.
 
-    Phase 3A supports uniform, bounded Gaussian, and weighted discrete
-    variables. The versioned seed produces the same canonical paired points on
-    macOS and Windows.
+    Supports uniform, bounded Gaussian, weighted discrete, and explicit
+    correlated-Gaussian groups. The versioned seed produces the same canonical
+    paired points on macOS and Windows.
     """
     return statistical_engine.generate_statistical_plan(
-        RUNS_DIR, variables, sample_count, seed
+        RUNS_DIR, variables, sample_count, seed, correlations
     )
 
 

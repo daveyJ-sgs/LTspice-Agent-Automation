@@ -336,19 +336,44 @@ Verification gate:
 - A real 12-sample Sallen-Key tolerance plan exercised both AC and transient
   requirements and identifies the exact failing samples.
 
-#### Phase 3C: Correlation, measured populations, and operating corners
+#### Phase 3C: Correlation, measured populations, and operating corners — in progress
 
-- Add correlated statistical variables with validated symmetric positive
-  semidefinite correlation matrices and recorded transformation provenance.
+##### Phase 3C-1: Correlated Gaussian variables — complete
+
+- Named correlated-Gaussian groups with finite, symmetric, unit-diagonal,
+  positive-semidefinite matrices and coefficients bounded to `[-1, 1]`
+- Canonical variable-name ordering with matching matrix permutation, disjoint
+  groups, Gaussian-only membership, and exact normalized matrix provenance
+- Versioned SHA-256 counter draws and an 80-digit Decimal Cholesky transform,
+  including singular positive-semidefinite matrices and bounded joint rejection
+- Backward-compatible Phase 3A artifact bytes when correlations are absent
+- MCP input/output schemas expose normalized correlations, generator version,
+  definition hash, and content-addressed plan evidence
+- Golden, malformed-matrix, reordering, rejection-budget, 1,000-sample
+  population, durable-execution, and real correlated Sallen-Key coverage
+
+##### Phase 3C-2: Empirical measured populations
+
 - Add empirical distributions from inline values and confined CSV inputs,
   including column, unit, resampling, and source-hash provenance.
+
+##### Phase 3C-3: Named operating corners
+
 - Support temperature, supply, load, and finite device-model corners as named
   deterministic axes around a statistical sample plan.
 - Report each corner separately as well as an explicitly defined aggregate;
   do not hide a weak corner inside a global average.
+
+##### Phase 3C-4: Stratified and low-discrepancy sampling
+
 - Add stratified Latin-hypercube and low-discrepancy sampling as versioned plan
   generators. Native LTspice stepping remains an execution optimization only
   when the resulting evidence can be mapped back to every planned point.
+
+##### Phase 3C-5: Integration and verification
+
+- Extend MCP, JSON/CSV, reports, documentation, and macOS/Windows regression
+  coverage across correlation, empirical populations, corners, and samplers.
 
 Verification gate:
 

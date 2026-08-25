@@ -16,10 +16,12 @@ from typing import NotRequired, TypedDict
 STATISTICAL_PLAN_SCHEMA_VERSION = 1
 UNIFORM_GENERATOR_VERSION = "sha256-counter-uniform-v1"
 DISTRIBUTION_GENERATOR_VERSION = "sha256-counter-distributions-v2"
+CORRELATION_GENERATOR_VERSION = "sha256-counter-correlations-v3"
 STATISTICAL_GENERATOR_VERSION = UNIFORM_GENERATOR_VERSION
 SUPPORTED_GENERATOR_VERSIONS = {
     UNIFORM_GENERATOR_VERSION,
     DISTRIBUTION_GENERATOR_VERSION,
+    CORRELATION_GENERATOR_VERSION,
 }
 MAX_STATISTICAL_SAMPLES = 1_000
 MAX_STATISTICAL_VARIABLES = 32
@@ -27,6 +29,7 @@ MAX_STATISTICAL_CELLS = 10_000
 MAX_DISCRETE_VALUES = 256
 MAX_GAUSSIAN_ATTEMPTS = 4_096
 MIN_GAUSSIAN_SPAN_SIGMA = Decimal("0.1")
+PSD_TOLERANCE = Decimal("1e-60")
 MAX_SEED = (1 << 63) - 1
 
 
@@ -40,6 +43,11 @@ class StatisticalVariable(TypedDict):
     values: NotRequired[list[str]]
     weights: NotRequired[list[float]]
     unit: NotRequired[str]
+
+
+class StatisticalCorrelation(TypedDict):
+    variables: list[str]
+    matrix: list[list[float]]
 
 
 class StatisticalPlanPoint(TypedDict):
@@ -62,6 +70,9 @@ class StatisticalPlanResult(TypedDict):
     plan_id: str
     plan_file: str
     plan_sha256: str
+    generator_version: str
+    definition_hash: str
+    correlations: list[dict[str, object]]
     sample_count: int
     parameter_order: list[str]
     parameter_units: dict[str, str]
@@ -121,8 +132,134 @@ def _bounded_canonical_decimal(
     return encoded
 
 
+def _cholesky_psd(matrix: list[list[Decimal]]) -> list[list[Decimal]]:
+    """Return a deterministic lower factor, accepting singular PSD matrices."""
+    size = len(matrix)
+    factor = [[Decimal(0) for _ in range(size)] for _ in range(size)]
+    with localcontext() as context:
+        context.prec = 80
+        for row in range(size):
+            for column in range(row + 1):
+                residual = matrix[row][column] - sum(
+                    (
+                        factor[row][index] * factor[column][index]
+                        for index in range(column)
+                    ),
+                    Decimal(0),
+                )
+                if row == column:
+                    if residual < -PSD_TOLERANCE:
+                        raise ValueError(
+                            "correlation matrix must be positive semidefinite"
+                        )
+                    factor[row][column] = (
+                        Decimal(0) if residual <= PSD_TOLERANCE else residual.sqrt()
+                    )
+                elif factor[column][column] == 0:
+                    if abs(residual) > PSD_TOLERANCE:
+                        raise ValueError(
+                            "correlation matrix must be positive semidefinite"
+                        )
+                else:
+                    factor[row][column] = residual / factor[column][column]
+    return factor
+
+
+def _normalized_correlations(
+    correlations: list[StatisticalCorrelation] | None,
+    variables: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    if correlations is None:
+        return []
+    if not isinstance(correlations, list):
+        raise ValueError("correlations must be a list")
+    variables_by_name = {str(variable["name"]): variable for variable in variables}
+    normalized: list[dict[str, object]] = []
+    used_names: set[str] = set()
+    for group in correlations:
+        if not isinstance(group, dict):
+            raise ValueError("correlations must contain objects")
+        if set(group) != {"variables", "matrix"}:
+            raise ValueError("correlation groups require only variables and matrix")
+        names = group.get("variables")
+        matrix = group.get("matrix")
+        if not isinstance(names, list) or len(names) < 2:
+            raise ValueError("correlation groups require at least two variables")
+        if any(not isinstance(name, str) for name in names) or len(names) != len(
+            set(names)
+        ):
+            raise ValueError(
+                "correlation group variables must be strings without duplicates"
+            )
+        unknown = next((name for name in names if name not in variables_by_name), None)
+        if unknown is not None:
+            raise ValueError(f"correlation group references unknown variable {unknown}")
+        non_gaussian = next(
+            (
+                name
+                for name in names
+                if variables_by_name[name]["distribution"] != "gaussian"
+            ),
+            None,
+        )
+        if non_gaussian is not None:
+            raise ValueError(
+                f"correlation variable {non_gaussian} must use gaussian distribution"
+            )
+        if used_names.intersection(names):
+            raise ValueError("correlation groups must not contain overlapping variables")
+        if (
+            not isinstance(matrix, list)
+            or len(matrix) != len(names)
+            or any(not isinstance(row, list) or len(row) != len(names) for row in matrix)
+        ):
+            raise ValueError("correlation matrix must be square and match its variables")
+        parsed = [
+            [
+                _decimal(value, "correlation matrix value")
+                for value in row
+            ]
+            for row in matrix
+        ]
+        if any(abs(value) > 1 for row in parsed for value in row):
+            raise ValueError("correlation matrix values must be between -1 and 1")
+        if any(parsed[index][index] != 1 for index in range(len(names))):
+            raise ValueError("correlation matrix diagonal must contain 1")
+        if any(
+            parsed[row][column] != parsed[column][row]
+            for row in range(len(names))
+            for column in range(row)
+        ):
+            raise ValueError("correlation matrix must be symmetric")
+
+        original_positions = {name: index for index, name in enumerate(names)}
+        canonical_names = sorted(names)
+        canonical_matrix = [
+            [
+                parsed[original_positions[row_name]][original_positions[column_name]]
+                for column_name in canonical_names
+            ]
+            for row_name in canonical_names
+        ]
+        _cholesky_psd(canonical_matrix)
+        normalized.append(
+            {
+                "variables": canonical_names,
+                "matrix": [
+                    [_canonical_decimal(value) for value in row]
+                    for row in canonical_matrix
+                ],
+            }
+        )
+        used_names.update(names)
+    return sorted(normalized, key=lambda group: group["variables"])
+
+
 def _normalized_definition(
-    variables: list[StatisticalVariable], sample_count: int, seed: int
+    variables: list[StatisticalVariable],
+    sample_count: int,
+    seed: int,
+    correlations: list[StatisticalCorrelation] | None = None,
 ) -> dict[str, object]:
     if not isinstance(variables, list) or not variables:
         raise ValueError("variables must be a non-empty list")
@@ -290,11 +427,17 @@ def _normalized_definition(
                 f"variable {name} distribution must be 'uniform', "
                 "'gaussian', or 'discrete'"
             )
-    return {
+    definition: dict[str, object] = {
         "variables": normalized_variables,
         "sample_count": sample_count,
         "seed": seed,
     }
+    normalized_correlations = _normalized_correlations(
+        correlations, normalized_variables
+    )
+    if normalized_correlations:
+        definition["correlations"] = normalized_correlations
+    return definition
 
 
 def _uniform_fraction(seed: int, sample_index: int, name: str) -> Decimal:
@@ -385,15 +528,102 @@ def _weighted_discrete(
     return str(values[-1])
 
 
+def _correlation_fraction(
+    seed: int,
+    sample_index: int,
+    group_key: str,
+    attempt: int,
+    coordinate: int,
+) -> Decimal:
+    material = b"\0".join(
+        (
+            CORRELATION_GENERATOR_VERSION.encode("ascii"),
+            str(seed).encode("ascii"),
+            str(sample_index).encode("ascii"),
+            group_key.encode("utf-8"),
+            str(attempt).encode("ascii"),
+            str(coordinate).encode("ascii"),
+        )
+    )
+    integer = int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
+    return Decimal(integer) / Decimal(1 << 64)
+
+
+def _correlated_gaussians(
+    group: dict[str, object],
+    factor: list[list[Decimal]],
+    variables_by_name: dict[str, dict[str, object]],
+    seed: int,
+    sample_index: int,
+) -> dict[str, Decimal]:
+    names = group["variables"]
+    assert isinstance(names, list)
+    group_key = ",".join(str(name) for name in names)
+    with localcontext() as context:
+        context.prec = 80
+        for attempt in range(MAX_GAUSSIAN_ATTEMPTS):
+            independent: list[Decimal] = []
+            for coordinate in range(len(names)):
+                x = 2 * _correlation_fraction(
+                    seed, sample_index, group_key, attempt, coordinate * 2
+                ) - 1
+                y = 2 * _correlation_fraction(
+                    seed, sample_index, group_key, attempt, coordinate * 2 + 1
+                ) - 1
+                radius_squared = x * x + y * y
+                if radius_squared <= 0 or radius_squared >= 1:
+                    break
+                independent.append(
+                    x * ((-2 * radius_squared.ln() / radius_squared).sqrt())
+                )
+            if len(independent) != len(names):
+                continue
+            values: dict[str, Decimal] = {}
+            for row, name in enumerate(names):
+                variable = variables_by_name[str(name)]
+                standard_normal = sum(
+                    (
+                        factor[row][column] * independent[column]
+                        for column in range(row + 1)
+                    ),
+                    Decimal(0),
+                )
+                value = Decimal(str(variable["nominal"])) + Decimal(
+                    str(variable["sigma"])
+                ) * standard_normal
+                if not (
+                    Decimal(str(variable["minimum"]))
+                    <= value
+                    <= Decimal(str(variable["maximum"]))
+                ):
+                    break
+                values[str(name)] = value
+            if len(values) == len(names):
+                return values
+    raise ValueError(
+        f"correlation group {group_key} could not draw bounded gaussian values "
+        f"within {MAX_GAUSSIAN_ATTEMPTS} attempts"
+    )
+
+
 def build_statistical_plan(
-    variables: list[StatisticalVariable], sample_count: int, seed: int
+    variables: list[StatisticalVariable],
+    sample_count: int,
+    seed: int,
+    correlations: list[StatisticalCorrelation] | None = None,
 ) -> StatisticalPlan:
     """Build a portable, deterministic plan without running LTspice."""
-    definition = _normalized_definition(variables, sample_count, seed)
+    definition = _normalized_definition(
+        variables, sample_count, seed, correlations
+    )
     normalized_variables = definition["variables"]
     assert isinstance(normalized_variables, list)
+    normalized_correlations = definition.get("correlations", [])
+    assert isinstance(normalized_correlations, list)
     generator_version = (
-        UNIFORM_GENERATOR_VERSION
+        CORRELATION_GENERATOR_VERSION
+        if normalized_correlations
+        else UNIFORM_GENERATOR_VERSION
         if all(
             variable.get("distribution") == "uniform"
             for variable in normalized_variables
@@ -406,14 +636,50 @@ def build_statistical_plan(
         for variable in normalized_variables
     }
     points: list[StatisticalPlanPoint] = []
+    variables_by_name = {
+        str(variable["name"]): variable for variable in normalized_variables
+    }
+    correlated_names = {
+        str(name)
+        for group in normalized_correlations
+        for name in group["variables"]
+    }
+    correlation_factors = {
+        ",".join(str(name) for name in group["variables"]): _cholesky_psd(
+            [
+                [Decimal(str(value)) for value in row]
+                for row in group["matrix"]
+            ]
+        )
+        for group in normalized_correlations
+    }
     with localcontext() as context:
         context.prec = 80
         for sample_index in range(sample_count):
             parameters: dict[str, str] = {}
+            correlated_values: dict[str, Decimal] = {}
+            for group in normalized_correlations:
+                correlated_values.update(
+                    _correlated_gaussians(
+                        group,
+                        correlation_factors[
+                            ",".join(str(name) for name in group["variables"])
+                        ],
+                        variables_by_name,
+                        seed,
+                        sample_index,
+                    )
+                )
             for variable in normalized_variables:
                 name = str(variable["name"])
                 distribution = variable["distribution"]
-                if distribution == "uniform":
+                if name in correlated_names:
+                    parameters[name] = _bounded_canonical_decimal(
+                        correlated_values[name],
+                        Decimal(str(variable["minimum"])),
+                        Decimal(str(variable["maximum"])),
+                    )
+                elif distribution == "uniform":
                     minimum = Decimal(str(variable["minimum"]))
                     maximum = Decimal(str(variable["maximum"]))
                     value = minimum + (maximum - minimum) * _uniform_fraction(
@@ -502,6 +768,9 @@ def save_statistical_plan(runs_dir: Path, plan: StatisticalPlan) -> StatisticalP
         "plan_id": plan_id,
         "plan_file": str(plan_file),
         "plan_sha256": digest,
+        "generator_version": plan["generator_version"],
+        "definition_hash": plan["definition_hash"],
+        "correlations": plan["definition"].get("correlations", []),
         "sample_count": plan["sample_count"],
         "parameter_order": plan["parameter_order"],
         "parameter_units": plan["parameter_units"],
@@ -514,9 +783,11 @@ def generate_statistical_plan(
     variables: list[StatisticalVariable],
     sample_count: int,
     seed: int,
+    correlations: list[StatisticalCorrelation] | None = None,
 ) -> StatisticalPlanResult:
     return save_statistical_plan(
-        runs_dir, build_statistical_plan(variables, sample_count, seed)
+        runs_dir,
+        build_statistical_plan(variables, sample_count, seed, correlations),
     )
 
 
@@ -527,6 +798,9 @@ def inspect_statistical_plan(runs_dir: Path, plan_id: str) -> StatisticalPlanRes
         "plan_id": plan_id,
         "plan_file": str(plan_file),
         "plan_sha256": hashlib.sha256(plan_file.read_bytes()).hexdigest(),
+        "generator_version": plan["generator_version"],
+        "definition_hash": plan["definition_hash"],
+        "correlations": plan["definition"].get("correlations", []),
         "sample_count": plan["sample_count"],
         "parameter_order": plan["parameter_order"],
         "parameter_units": plan["parameter_units"],
@@ -571,9 +845,12 @@ def load_statistical_plan(runs_dir: Path, plan_id: str) -> StatisticalPlan:
     variables = definition.get("variables")
     sample_count = definition.get("sample_count")
     seed = definition.get("seed")
+    correlations = definition.get("correlations")
     if not isinstance(variables, list):
         raise ValueError("statistical plan variables are invalid")
-    rebuilt = build_statistical_plan(variables, sample_count, seed)  # type: ignore[arg-type]
+    rebuilt = build_statistical_plan(  # type: ignore[arg-type]
+        variables, sample_count, seed, correlations
+    )
     if value != rebuilt:
         raise ValueError("statistical plan contents do not match its definition")
     return rebuilt

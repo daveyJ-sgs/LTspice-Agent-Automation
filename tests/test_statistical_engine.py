@@ -66,6 +66,12 @@ class StatisticalEngineTests(unittest.TestCase):
             hashlib.sha256(statistical_engine._artifact_bytes(plan)).hexdigest(),
             "d76f4c9d1381ed738526e056144b82ff88c9829a0d20b8057cd24f044231c587",
         )
+        self.assertEqual(
+            plan,
+            statistical_engine.build_statistical_plan(
+                self.variables(), 3, 20260824, correlations=[]
+            ),
+        )
 
     def test_mixed_plan_matches_gaussian_and_discrete_golden_values(self) -> None:
         plan = statistical_engine.build_statistical_plan(
@@ -169,6 +175,272 @@ class StatisticalEngineTests(unittest.TestCase):
                     original["points"][index]["parameters"][name],
                     reordered["points"][index]["parameters"][name],
                 )
+
+    def test_correlated_gaussian_plan_is_stable_under_equivalent_reordering(
+        self,
+    ) -> None:
+        variables = [
+            {
+                "name": "R1",
+                "distribution": "gaussian",
+                "minimum": -5.0,
+                "maximum": 5.0,
+                "nominal": 0.0,
+                "sigma": 1.0,
+            },
+            {
+                "name": "R2",
+                "distribution": "gaussian",
+                "minimum": -10.0,
+                "maximum": 10.0,
+                "nominal": 0.0,
+                "sigma": 2.0,
+            },
+        ]
+        original = statistical_engine.build_statistical_plan(
+            variables,
+            4,
+            20260824,
+            correlations=[
+                {"variables": ["R1", "R2"], "matrix": [[1, 0.75], [0.75, 1]]}
+            ],
+        )
+        reordered = statistical_engine.build_statistical_plan(
+            list(reversed(variables)),
+            4,
+            20260824,
+            correlations=[
+                {"variables": ["R2", "R1"], "matrix": [[1, 0.75], [0.75, 1]]}
+            ],
+        )
+
+        self.assertEqual(
+            original["generator_version"], "sha256-counter-correlations-v3"
+        )
+        self.assertEqual(
+            original["definition"]["correlations"],
+            [{"variables": ["R1", "R2"], "matrix": [["1", "0.75"], ["0.75", "1"]]}],
+        )
+        self.assertEqual(
+            original["definition_hash"],
+            "d5c3120fbac545f3dc7ad2e2de81d0890b2d2694dcd7f9532e07b14540290646",
+        )
+        self.assertEqual(
+            [point["parameters"] for point in original["points"]],
+            [
+                {"R1": "-2.9516371952559719", "R2": "-5.6651716855255113"},
+                {"R1": "-0.75042367881680089", "R2": "-0.74642184300600231"},
+                {"R1": "-0.0630219704527577", "R2": "-1.5764784558766531"},
+                {"R1": "-0.84334084519936672", "R2": "-1.3870394390606106"},
+            ],
+        )
+        self.assertEqual(
+            hashlib.sha256(statistical_engine._artifact_bytes(original)).hexdigest(),
+            "4d12fec907fa5dddf9bfee9c6bc0f0a495d58249e8f8632f450a9f7dbb7d9883",
+        )
+        for index in range(4):
+            for name in ("R1", "R2"):
+                self.assertEqual(
+                    original["points"][index]["parameters"][name],
+                    reordered["points"][index]["parameters"][name],
+                )
+        saved = statistical_engine.save_statistical_plan(self.runs, original)
+        self.assertEqual(saved["generator_version"], "sha256-counter-correlations-v3")
+        self.assertEqual(saved["correlations"], original["definition"]["correlations"])
+        self.assertEqual(
+            statistical_engine.load_statistical_plan(self.runs, saved["plan_id"]),
+            original,
+        )
+
+    def test_correlated_population_tracks_requested_relationship(self) -> None:
+        plan = statistical_engine.build_statistical_plan(
+            [
+                {
+                    "name": name,
+                    "distribution": "gaussian",
+                    "minimum": -10.0,
+                    "maximum": 10.0,
+                    "nominal": 0.0,
+                    "sigma": 1.0,
+                }
+                for name in ("A", "B")
+            ],
+            1_000,
+            17,
+            correlations=[
+                {"variables": ["A", "B"], "matrix": [[1, 0.8], [0.8, 1]]}
+            ],
+        )
+        first = [float(point["parameters"]["A"]) for point in plan["points"]]
+        second = [float(point["parameters"]["B"]) for point in plan["points"]]
+        measured = statistics.correlation(first, second)
+        self.assertGreater(measured, 0.76)
+        self.assertLess(measured, 0.84)
+
+    def test_correlation_matrix_permutation_is_canonicalized_by_name(self) -> None:
+        variables = [
+            {
+                "name": name,
+                "distribution": "gaussian",
+                "minimum": -5.0,
+                "maximum": 5.0,
+                "nominal": 0.0,
+                "sigma": 1.0,
+            }
+            for name in ("A", "B", "C")
+        ]
+        original = statistical_engine.build_statistical_plan(
+            variables,
+            5,
+            12,
+            correlations=[
+                {
+                    "variables": ["A", "B", "C"],
+                    "matrix": [[1, 0.2, 0.6], [0.2, 1, -0.1], [0.6, -0.1, 1]],
+                }
+            ],
+        )
+        permuted = statistical_engine.build_statistical_plan(
+            [variables[2], variables[0], variables[1]],
+            5,
+            12,
+            correlations=[
+                {
+                    "variables": ["C", "A", "B"],
+                    "matrix": [[1, 0.6, -0.1], [0.6, 1, 0.2], [-0.1, 0.2, 1]],
+                }
+            ],
+        )
+        for index in range(5):
+            for name in ("A", "B", "C"):
+                self.assertEqual(
+                    original["points"][index]["parameters"][name],
+                    permuted["points"][index]["parameters"][name],
+                )
+
+    def test_positive_semidefinite_perfect_correlation_is_supported(self) -> None:
+        plan = statistical_engine.build_statistical_plan(
+            [
+                {
+                    "name": name,
+                    "distribution": "gaussian",
+                    "minimum": -5.0,
+                    "maximum": 5.0,
+                    "nominal": 0.0,
+                    "sigma": 1.0,
+                }
+                for name in ("A", "B")
+            ],
+            10,
+            9,
+            correlations=[
+                {"variables": ["A", "B"], "matrix": [[1, 1], [1, 1]]}
+            ],
+        )
+        self.assertEqual(
+            [point["parameters"]["A"] for point in plan["points"]],
+            [point["parameters"]["B"] for point in plan["points"]],
+        )
+
+    def test_correlation_validation_is_fail_closed(self) -> None:
+        variables = [
+            {
+                "name": name,
+                "distribution": "gaussian",
+                "minimum": -5.0,
+                "maximum": 5.0,
+                "nominal": 0.0,
+                "sigma": 1.0,
+            }
+            for name in ("A", "B", "C")
+        ]
+        invalid = [
+            ("list", {}),
+            ("at least two", [{"variables": ["A"], "matrix": [[1]]}]),
+            ("unknown", [{"variables": ["A", "Z"], "matrix": [[1, 0], [0, 1]]}]),
+            ("duplicate", [{"variables": ["A", "A"], "matrix": [[1, 0], [0, 1]]}]),
+            ("square", [{"variables": ["A", "B"], "matrix": [[1, 0]]}]),
+            (
+                "symmetric",
+                [{"variables": ["A", "B"], "matrix": [[1, 0.2], [0.3, 1]]}],
+            ),
+            ("diagonal", [{"variables": ["A", "B"], "matrix": [[0.9, 0], [0, 1]]}]),
+            ("between -1 and 1", [{"variables": ["A", "B"], "matrix": [[1, 2], [2, 1]]}]),
+            (
+                "positive semidefinite",
+                [
+                    {
+                        "variables": ["A", "B", "C"],
+                        "matrix": [
+                            [1, 0.9, 0.9],
+                            [0.9, 1, -0.9],
+                            [0.9, -0.9, 1],
+                        ],
+                    }
+                ],
+            ),
+            (
+                "overlapping",
+                [
+                    {"variables": ["A", "B"], "matrix": [[1, 0], [0, 1]]},
+                    {"variables": ["B", "C"], "matrix": [[1, 0], [0, 1]]},
+                ],
+            ),
+            (
+                "finite",
+                [
+                    {
+                        "variables": ["A", "B"],
+                        "matrix": [[1, float("nan")], [float("nan"), 1]],
+                    }
+                ],
+            ),
+        ]
+        for message, correlations in invalid:
+            with self.subTest(message=message), self.assertRaisesRegex(
+                ValueError, message
+            ):
+                statistical_engine.build_statistical_plan(
+                    variables,
+                    2,
+                    1,
+                    correlations=correlations,  # type: ignore[arg-type]
+                )
+
+        with self.assertRaisesRegex(ValueError, "must use gaussian"):
+            statistical_engine.build_statistical_plan(
+                self.variables(),
+                2,
+                1,
+                correlations=[
+                    {"variables": ["R", "C"], "matrix": [[1, 0.5], [0.5, 1]]}
+                ],
+            )
+
+    def test_correlated_gaussian_rejection_work_is_bounded(self) -> None:
+        with patch.object(
+            statistical_engine,
+            "_correlation_fraction",
+            return_value=Decimal("0.5"),
+        ), self.assertRaisesRegex(ValueError, "within 4096 attempts"):
+            statistical_engine.build_statistical_plan(
+                [
+                    {
+                        "name": name,
+                        "distribution": "gaussian",
+                        "minimum": -1.0,
+                        "maximum": 1.0,
+                        "nominal": 0.0,
+                        "sigma": 1.0,
+                    }
+                    for name in ("A", "B")
+                ],
+                1,
+                0,
+                correlations=[
+                    {"variables": ["A", "B"], "matrix": [[1, 0], [0, 1]]}
+                ],
+            )
 
     def test_discrete_cumulative_boundaries_choose_the_next_bin(self) -> None:
         variable = {

@@ -436,6 +436,27 @@ positive finite `weights`. Weights are normalized canonically, and an exact
 cumulative boundary selects the next bin. Plans are limited to 1,000 samples,
 32 variables, and 10,000 generated values.
 
+Phase 3C-1 adds optional correlated Gaussian groups. Each group names at least
+two Gaussian variables and supplies a matching correlation matrix:
+
+```json
+"correlations": [
+  {
+    "variables": ["R1", "R2"],
+    "matrix": [[1, 0.8], [0.8, 1]]
+  }
+]
+```
+
+Matrices must be finite, symmetric, positive semidefinite, have unit diagonal,
+and contain coefficients from -1 through 1. A variable may belong to only one
+group. Group variables and matrices are canonicalized by variable name, so an
+equivalent reordered definition produces the same named samples. The versioned
+Decimal Cholesky transform redraws the complete group whenever any bounded
+component is rejected; it never clips individual values or weakens the declared
+relationship. Existing uncorrelated Phase 3A plans and artifact hashes remain
+unchanged.
+
 Use `get_statistical_plan` to verify and inspect an existing plan. Pass its
 `plan_id` plus an ordinary netlist template to `run_statistical_experiment`:
 
