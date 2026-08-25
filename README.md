@@ -324,6 +324,7 @@ Model Context Protocol, in-process (no REST server needed): `run_netlist`,
 `cancel_experiment`, `compare_experiments`, `build_experiment_index`,
 `query_experiments`, `summarize_statistical_experiment`,
 `analyze_statistical_worst_cases`,
+`analyze_statistical_sensitivity`,
 `build_experiment_report`, `build_comparison_report`,
 `build_experiment_dashboard`, `list_runs`, `build_dashboard`, and
 `list_examples`.
@@ -657,6 +658,30 @@ ranking, not a prediction beyond the simulated population.
 The canonical experiment validator rejects duplicate intrinsic requirement
 identities, so ordinal copies of an otherwise identical check are not treated
 as separate requirements.
+
+### Rank global statistical sensitivity
+
+Call `analyze_statistical_sensitivity` with a terminal statistical experiment
+ID. It writes individually atomic `sensitivity.json` and `sensitivity.csv`
+artifacts without rerunning LTspice. For every requirement and sampled variable,
+it computes Spearman's rank correlation between the variable and signed
+requirement margin. Average ranks preserve exact ties. Positive correlation
+means increasing the variable tends to improve margin; negative correlation
+means it tends to consume margin.
+
+Named corners are analyzed independently and are never pooled implicitly. A
+coefficient requires at least five evaluated samples and variation in both the
+input and response. Otherwise the row explicitly reports
+`insufficient_samples`, `constant_input`, `constant_response`, or
+`non_numeric_input`. An absolute coefficient of at least 0.5 is labeled
+meaningfully monotonic; lower values remain visible as weak or negligible
+associations rather than being discarded.
+
+These coefficients are descriptive associations, not causal effects or design
+derivatives. The artifacts name correlated sampled inputs beside each result,
+because two correlated components can both rank highly even when the study
+cannot isolate their independent influence. Controlled local perturbations are
+handled separately by Phase 3D-C.
 
 ### Run a durable experiment job
 

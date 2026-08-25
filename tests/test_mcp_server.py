@@ -1026,6 +1026,7 @@ class MCPServerTests(unittest.TestCase):
         self.assertIn("define_statistical_study", by_name)
         self.assertIn("summarize_statistical_experiment", by_name)
         self.assertIn("analyze_statistical_worst_cases", by_name)
+        self.assertIn("analyze_statistical_sensitivity", by_name)
         self.assertIn(
             "corner_results",
             by_name["summarize_statistical_experiment"].output_schema["properties"],
@@ -1037,6 +1038,10 @@ class MCPServerTests(unittest.TestCase):
         self.assertIn(
             "worst_cases_json",
             by_name["analyze_statistical_worst_cases"].output_schema["properties"],
+        )
+        self.assertIn(
+            "sensitivity_json",
+            by_name["analyze_statistical_sensitivity"].output_schema["properties"],
         )
         properties = by_name["generate_statistical_plan"].input_schema["properties"]
         self.assertEqual(properties["sample_count"]["type"], "integer")
@@ -2741,6 +2746,33 @@ class MCPServerTests(unittest.TestCase):
             result = asyncio.run(
                 mcp_server.mcp.call_tool(
                     "analyze_statistical_worst_cases",
+                    {"experiment_id": expected["experiment_id"]},
+                )
+            )
+
+        self.assertFalse(result.is_error)
+        self.assertEqual(result.structured_content, expected)
+        analyze.assert_called_once_with(self.runs, expected["experiment_id"])
+
+    def test_sensitivity_analysis_works_through_mcp_protocol(self) -> None:
+        expected = {
+            "experiment_id": "mcp-experiment-20260825-090000-000000-a1b2c3d4",
+            "sensitivity_json": str(self.runs / "sensitivity.json"),
+            "sensitivity_csv": str(self.runs / "sensitivity.csv"),
+            "requirement_count": 3,
+            "variable_count": 4,
+            "scope_count": 3,
+            "evaluated_pairs": 288,
+            "invalid_points": 0,
+        }
+        with patch.object(
+            mcp_server.sensitivity_analysis,
+            "analyze_statistical_sensitivity",
+            return_value=expected,
+        ) as analyze:
+            result = asyncio.run(
+                mcp_server.mcp.call_tool(
+                    "analyze_statistical_sensitivity",
                     {"experiment_id": expected["experiment_id"]},
                 )
             )

@@ -481,11 +481,24 @@ Verification gate:
 - The combined Phase 3C Sallen-Key evidence ranks the weak 1 kOhm load first
   for the 7.6 dB gain floor at -0.06435 dB margin, with exact point evidence
 
-##### Phase 3D-B: Global rank sensitivity
+##### Phase 3D-B: Global rank sensitivity — complete
 
-- Rank input influence using documented global rank-correlation measures and
-  state when the data are insufficient or the relationship is not meaningfully
-  monotonic.
+- Per-requirement Spearman coefficients rank sampled inputs against signed
+  electrical margin using average ranks for exact ties
+- Named corners remain separate scopes; invalid points are excluded and no
+  corner population is pooled implicitly
+- Five paired observations and variation in both ranks are required;
+  insufficient, constant, nonnumeric, weak, and non-monotonic evidence remain
+  explicit instead of producing invented influence values
+- Absolute rho of 0.5 is the documented meaningful-monotonic threshold, with
+  direction, strength, sample cardinality, units, and dense influence rank
+- Correlated input names accompany each association so the result is not
+  presented as independent causality or a local design derivative
+- Individually atomic `sensitivity.json` and `sensitivity.csv` artifacts plus
+  `analyze_statistical_sensitivity` expose the same MCP contract
+- The 24-point Sallen-Key study keeps all three load corners separate: gain
+  margin is most associated with correlated `R1`/`R2`, while peaking margin is
+  most associated with `C1`; each corner has eight evaluated samples
 
 ##### Phase 3D-C: Local OAT and tornado data
 
@@ -523,6 +536,9 @@ Verification gate:
   index and dashboard rebuilds.
 - Retire the standalone Monte Carlo example in favor of a documented example
   built on the production statistical API.
+- As the final Phase 3 hardening step, prototype a GitHub-hosted Windows job
+  that installs a pinned, checksum-verified LTspice build and runs bounded real
+  simulator smoke tests after resolving first-run consent noninteractively.
 
 Phase 3 completion criteria:
 

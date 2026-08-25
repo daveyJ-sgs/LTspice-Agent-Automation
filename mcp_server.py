@@ -38,6 +38,7 @@ import frequency_domain_metrics
 import ltspice_wrapper as wrapper
 import raw_parser
 import report_runs
+import sensitivity_analysis
 import statistical_engine
 import statistical_results
 import waveform_metrics
@@ -72,6 +73,7 @@ StatisticalCornerAxis = statistical_engine.StatisticalCornerAxis
 StatisticalPlanResult = statistical_engine.StatisticalPlanResult
 StatisticalSamplingMethod = Literal["independent", "latin_hypercube", "halton"]
 StatisticalSummaryResult = statistical_results.StatisticalSummaryResult
+SensitivityAnalysisResult = sensitivity_analysis.SensitivityAnalysisResult
 WorstCaseAnalysisResult = worst_case_analysis.WorstCaseAnalysisResult
 
 ExperimentIndexStatus = Literal[
@@ -1184,6 +1186,16 @@ def analyze_statistical_worst_cases(
 ) -> WorstCaseAnalysisResult:
     """Rank worst observed requirement margins and finite named corners."""
     return worst_case_analysis.analyze_statistical_worst_cases(
+        RUNS_DIR, experiment_id
+    )
+
+
+@mcp.tool()
+def analyze_statistical_sensitivity(
+    experiment_id: str,
+) -> SensitivityAnalysisResult:
+    """Rank global input associations with signed requirement margins."""
+    return sensitivity_analysis.analyze_statistical_sensitivity(
         RUNS_DIR, experiment_id
     )
 
