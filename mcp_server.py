@@ -969,12 +969,18 @@ def generate_statistical_plan(
 ) -> StatisticalPlanResult:
     """Generate and persist a deterministic statistical point plan without LTspice.
 
-    Supports uniform, bounded Gaussian, weighted discrete, and explicit
-    correlated-Gaussian groups. The versioned seed produces the same canonical
-    paired points on macOS and Windows.
+    Supports uniform, bounded Gaussian, weighted discrete, empirical measured
+    populations, and explicit correlated-Gaussian groups. Empirical values may
+    be inline or read from a UTF-8 CSV confined to this project. The versioned
+    seed produces the same canonical paired points on macOS and Windows.
     """
     return statistical_engine.generate_statistical_plan(
-        RUNS_DIR, variables, sample_count, seed, correlations
+        RUNS_DIR,
+        variables,
+        sample_count,
+        seed,
+        correlations,
+        source_root=PROJECT_DIR,
     )
 
 

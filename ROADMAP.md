@@ -352,10 +352,20 @@ Verification gate:
 - Golden, malformed-matrix, reordering, rejection-budget, 1,000-sample
   population, durable-execution, and real correlated Sallen-Key coverage
 
-##### Phase 3C-2: Empirical measured populations
+##### Phase 3C-2: Empirical measured populations — complete
 
-- Add empirical distributions from inline values and confined CSV inputs,
-  including column, unit, resampling, and source-hash provenance.
+- Deterministic with-replacement resampling from inline numeric observations or
+  a named numeric column in a project-confined UTF-8 CSV
+- Self-contained immutable plans freeze canonical observations plus input kind,
+  unit, column, raw/canonical SHA-256, row count, and resampling provenance
+- Bounded CSV bytes, rows, and columns with fail-closed malformed, nonfinite,
+  missing-column, path-escape, and symlink handling before publication
+- Versioned per-variable SHA-256 counter draws preserve duplicates and remain
+  stable under declaration reordering; Phase 3A/3C-1 artifacts stay unchanged
+- MCP schema/protocol, inline/CSV equivalence, golden artifact, source-change,
+  1,000-sample frequency, immutable reload, and cross-platform regression tests
+- A real 16-point empirical Sallen-Key AC study completed without execution or
+  analysis errors and exposed two exact peaking failures (14/16, 87.5% yield)
 
 ##### Phase 3C-3: Named operating corners
 

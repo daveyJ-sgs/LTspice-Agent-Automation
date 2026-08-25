@@ -127,6 +127,264 @@ class StatisticalEngineTests(unittest.TestCase):
             ],
         )
 
+    def test_empirical_inline_plan_is_deterministic_and_self_contained(self) -> None:
+        plan = statistical_engine.build_statistical_plan(
+            [
+                {
+                    "name": "R",
+                    "distribution": "empirical",
+                    "values": [9980, "10020", 10075.0, 9950],
+                    "unit": "ohm",
+                }
+            ],
+            6,
+            20260824,
+        )
+
+        self.assertEqual(plan["generator_version"], "sha256-counter-empirical-v4")
+        variable = plan["definition"]["variables"][0]
+        self.assertEqual(
+            variable["values"], ["9.98e+3", "1.002e+4", "10075", "9.95e+3"]
+        )
+        self.assertEqual(
+            variable["source"],
+            {
+                "kind": "inline",
+                "sha256": "e20545664020aa577486c4a65be0c64c2fee1b085590b8cb366af64144d5fc7f",
+                "observation_count": 4,
+                "resampling": "with_replacement",
+            },
+        )
+        self.assertEqual(
+            [point["parameters"]["R"] for point in plan["points"]],
+            ["1.002e+4", "9.98e+3", "9.95e+3", "10075", "9.98e+3", "9.98e+3"],
+        )
+        self.assertEqual(
+            plan["definition_hash"],
+            "3ef8f085302821a7d2b01699130f105d191f2c51fc4034fd036d563c7b8704f4",
+        )
+        self.assertEqual(
+            hashlib.sha256(statistical_engine._artifact_bytes(plan)).hexdigest(),
+            "423dc97d96882e26cd673b756c3d2adb3b93cc4a6524706070610b70de4bd59f",
+        )
+        saved = statistical_engine.save_statistical_plan(self.runs, plan)
+        self.assertEqual(
+            saved["empirical_sources"],
+            [{"name": "R", "unit": "ohm", **variable["source"]}],
+        )
+        self.assertEqual(
+            statistical_engine.load_statistical_plan(self.runs, saved["plan_id"]),
+            plan,
+        )
+
+    def test_empirical_csv_matches_inline_draws_and_records_raw_source(self) -> None:
+        source_root = Path(self.temporary_directory.name) / "source"
+        source_root.mkdir()
+        csv_path = source_root / "lot.csv"
+        csv_path.write_text(
+            "serial,resistance_ohm\nA,9980\nB,10020\nC,10075\nD,9950\n",
+            encoding="utf-8",
+        )
+        csv_plan = statistical_engine.build_statistical_plan(
+            [
+                {
+                    "name": "R",
+                    "distribution": "empirical",
+                    "csv_path": "lot.csv",
+                    "column": "resistance_ohm",
+                    "unit": "ohm",
+                }
+            ],
+            20,
+            7,
+            source_root=source_root,
+        )
+        inline_plan = statistical_engine.build_statistical_plan(
+            [
+                {
+                    "name": "R",
+                    "distribution": "empirical",
+                    "values": [9980, 10020, 10075, 9950],
+                    "unit": "ohm",
+                }
+            ],
+            20,
+            7,
+        )
+
+        self.assertEqual(csv_plan["points"], inline_plan["points"])
+        source = csv_plan["definition"]["variables"][0]["source"]
+        self.assertEqual(source["kind"], "csv")
+        self.assertEqual(source["path"], "lot.csv")
+        self.assertEqual(source["column"], "resistance_ohm")
+        self.assertEqual(source["observation_count"], 4)
+        self.assertEqual(
+            source["sha256"], hashlib.sha256(csv_path.read_bytes()).hexdigest()
+        )
+        csv_path.write_text(
+            "serial,resistance_ohm\nA,9980\nB,10020\nC,10075\nD,9960\n",
+            encoding="utf-8",
+        )
+        changed = statistical_engine.build_statistical_plan(
+            [
+                {
+                    "name": "R",
+                    "distribution": "empirical",
+                    "csv_path": "lot.csv",
+                    "column": "resistance_ohm",
+                    "unit": "ohm",
+                }
+            ],
+            20,
+            7,
+            source_root=source_root,
+        )
+        self.assertNotEqual(changed["definition_hash"], csv_plan["definition_hash"])
+        csv_path.unlink()
+        saved = statistical_engine.save_statistical_plan(self.runs, csv_plan)
+        self.assertEqual(
+            statistical_engine.load_statistical_plan(self.runs, saved["plan_id"]),
+            csv_plan,
+        )
+
+    def test_empirical_population_preserves_observed_frequencies(self) -> None:
+        plan = statistical_engine.build_statistical_plan(
+            [
+                {
+                    "name": "LOT",
+                    "distribution": "empirical",
+                    "values": [1, 1, 1, 2],
+                }
+            ],
+            1_000,
+            91,
+        )
+        values = [point["parameters"]["LOT"] for point in plan["points"]]
+        self.assertGreater(values.count("1"), 700)
+        self.assertLess(values.count("1"), 800)
+
+    def test_empirical_draws_are_stable_under_variable_reordering(self) -> None:
+        variables = [
+            {"name": "R", "distribution": "empirical", "values": [1, 2, 3]},
+            {"name": "C", "distribution": "empirical", "values": [4, 5, 6]},
+        ]
+        original = statistical_engine.build_statistical_plan(variables, 20, 33)
+        reordered = statistical_engine.build_statistical_plan(
+            list(reversed(variables)), 20, 33
+        )
+        for index in range(20):
+            for name in ("R", "C"):
+                self.assertEqual(
+                    original["points"][index]["parameters"][name],
+                    reordered["points"][index]["parameters"][name],
+                )
+
+    def test_empirical_validation_and_csv_confinement_fail_closed(self) -> None:
+        source_root = Path(self.temporary_directory.name) / "source"
+        source_root.mkdir()
+        outside = Path(self.temporary_directory.name) / "outside.csv"
+        outside.write_text("value\n1\n", encoding="utf-8")
+        invalid_inline = [
+            ({"values": []}, "observations"),
+            ({"values": [1, float("nan")]}, "finite"),
+            ({"values": [1], "csv_path": "lot.csv", "column": "value"}, "either"),
+            ({"csv_path": "lot.csv"}, "column"),
+            ({"source": {}}, "not valid"),
+        ]
+        for fields, message in invalid_inline:
+            with self.subTest(fields=fields), self.assertRaisesRegex(ValueError, message):
+                statistical_engine.build_statistical_plan(
+                    [{"name": "E", "distribution": "empirical", **fields}],
+                    2,
+                    1,
+                    source_root=source_root,
+                )
+
+        with self.assertRaisesRegex(ValueError, "inside source_root"):
+            statistical_engine.build_statistical_plan(
+                [
+                    {
+                        "name": "E",
+                        "distribution": "empirical",
+                        "csv_path": "../outside.csv",
+                        "column": "value",
+                    }
+                ],
+                2,
+                1,
+                source_root=source_root,
+            )
+        linked = source_root / "linked.csv"
+        linked.symlink_to(outside)
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            statistical_engine.build_statistical_plan(
+                [
+                    {
+                        "name": "E",
+                        "distribution": "empirical",
+                        "csv_path": "linked.csv",
+                        "column": "value",
+                    }
+                ],
+                2,
+                1,
+                source_root=source_root,
+            )
+
+        malformed = {
+            "missing.csv": ("other\n1\n", "column"),
+            "empty.csv": ("value\n", "observations"),
+            "nonfinite.csv": ("value\nNaN\n", "finite"),
+            "ragged.csv": ("value\n1,2\n", "row"),
+        }
+        for filename, (contents, message) in malformed.items():
+            (source_root / filename).write_text(contents, encoding="utf-8")
+            with self.subTest(filename=filename), self.assertRaisesRegex(
+                ValueError, message
+            ):
+                statistical_engine.build_statistical_plan(
+                    [
+                        {
+                            "name": "E",
+                            "distribution": "empirical",
+                            "csv_path": filename,
+                            "column": "value",
+                        }
+                    ],
+                    2,
+                    1,
+                    source_root=source_root,
+                )
+
+        bounded = source_root / "bounded.csv"
+        bounded.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
+        definition = [
+            {
+                "name": "E",
+                "distribution": "empirical",
+                "csv_path": "bounded.csv",
+                "column": "a",
+            }
+        ]
+        with patch.object(
+            statistical_engine, "MAX_EMPIRICAL_CSV_BYTES", 4
+        ), self.assertRaisesRegex(ValueError, "exceeds 4 bytes"):
+            statistical_engine.build_statistical_plan(
+                definition, 2, 1, source_root=source_root
+            )
+        with patch.object(
+            statistical_engine, "MAX_EMPIRICAL_CSV_COLUMNS", 1
+        ), self.assertRaisesRegex(ValueError, "header"):
+            statistical_engine.build_statistical_plan(
+                definition, 2, 1, source_root=source_root
+            )
+        with patch.object(
+            statistical_engine, "MAX_EMPIRICAL_OBSERVATIONS", 1
+        ), self.assertRaisesRegex(ValueError, "exceeds 1 observations"):
+            statistical_engine.build_statistical_plan(
+                definition, 2, 1, source_root=source_root
+            )
+
     def test_draws_are_stable_per_variable_and_change_with_seed(self) -> None:
         original = statistical_engine.build_statistical_plan(
             self.variables(), 3, 20260824

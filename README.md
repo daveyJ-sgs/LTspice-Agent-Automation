@@ -457,6 +457,38 @@ component is rejected; it never clips individual values or weakens the declared
 relationship. Existing uncorrelated Phase 3A plans and artifact hashes remain
 unchanged.
 
+Phase 3C-2 adds empirical variables for resampling observed component
+populations. Supply either inline numeric observations:
+
+```json
+{"name": "R", "distribution": "empirical",
+ "values": [9980, 10020, 10075, 9950], "unit": "ohm"}
+```
+
+or a UTF-8 CSV path confined to this project and a numeric column:
+
+```json
+{"name": "R", "distribution": "empirical",
+ "csv_path": "examples/illustrative_component_population.csv",
+ "column": "resistance_ohm", "unit": "ohm"}
+```
+
+Sampling is deterministic with replacement and preserves duplicate
+observations, so repeated measured values retain their empirical frequency.
+The immutable plan freezes the canonical observations along with source kind,
+SHA-256, observation count, resampling method, and CSV path/column when
+applicable. Editing or removing a CSV after plan generation cannot change a
+saved study; regenerating from changed bytes produces different provenance and
+a different content-addressed plan. CSV input is bounded to 1 MB, 10,000 rows,
+and 256 columns. Missing, blank, nonnumeric, nonfinite, malformed, escaped, and
+symlinked inputs fail before a plan is written. Units remain metadata and are
+never converted implicitly. Empirical variables cannot be placed in the
+Gaussian correlation groups described above.
+
+The bundled CSV is an illustrative test population, not claimed laboratory
+data. Replace it with measured lot characterization or another traceable source
+when drawing engineering conclusions.
+
 Use `get_statistical_plan` to verify and inspect an existing plan. Pass its
 `plan_id` plus an ordinary netlist template to `run_statistical_experiment`:
 

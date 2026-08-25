@@ -880,8 +880,18 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(properties["sample_count"]["type"], "integer")
         self.assertEqual(properties["seed"]["type"], "integer")
         self.assertIn("correlations", properties)
+        variable_schema = by_name["generate_statistical_plan"].input_schema["$defs"][
+            "StatisticalVariable"
+        ]["properties"]
+        self.assertIn("csv_path", variable_schema)
+        self.assertIn("column", variable_schema)
+        self.assertNotIn("source", variable_schema)
         self.assertIn(
             "correlations",
+            by_name["generate_statistical_plan"].output_schema["properties"],
+        )
+        self.assertIn(
+            "empirical_sources",
             by_name["generate_statistical_plan"].output_schema["properties"],
         )
         correlated = asyncio.run(
@@ -914,6 +924,31 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(
             correlated.structured_content["generator_version"],
             "sha256-counter-correlations-v3",
+        )
+        empirical = asyncio.run(
+            mcp_server.mcp.call_tool(
+                "generate_statistical_plan",
+                {
+                    "variables": [
+                        {
+                            "name": "R",
+                            "distribution": "empirical",
+                            "values": [9980, 10020, 10075, 9950],
+                            "unit": "ohm",
+                        }
+                    ],
+                    "sample_count": 3,
+                    "seed": 1,
+                },
+            )
+        )
+        self.assertFalse(empirical.is_error)
+        self.assertEqual(
+            empirical.structured_content["generator_version"],
+            "sha256-counter-empirical-v4",
+        )
+        self.assertEqual(
+            empirical.structured_content["empirical_sources"][0]["name"], "R"
         )
 
     def test_durable_statistical_study_executes_frozen_plan_without_resampling(

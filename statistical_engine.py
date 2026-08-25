@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import math
 import os
@@ -17,16 +19,21 @@ STATISTICAL_PLAN_SCHEMA_VERSION = 1
 UNIFORM_GENERATOR_VERSION = "sha256-counter-uniform-v1"
 DISTRIBUTION_GENERATOR_VERSION = "sha256-counter-distributions-v2"
 CORRELATION_GENERATOR_VERSION = "sha256-counter-correlations-v3"
+EMPIRICAL_GENERATOR_VERSION = "sha256-counter-empirical-v4"
 STATISTICAL_GENERATOR_VERSION = UNIFORM_GENERATOR_VERSION
 SUPPORTED_GENERATOR_VERSIONS = {
     UNIFORM_GENERATOR_VERSION,
     DISTRIBUTION_GENERATOR_VERSION,
     CORRELATION_GENERATOR_VERSION,
+    EMPIRICAL_GENERATOR_VERSION,
 }
 MAX_STATISTICAL_SAMPLES = 1_000
 MAX_STATISTICAL_VARIABLES = 32
 MAX_STATISTICAL_CELLS = 10_000
 MAX_DISCRETE_VALUES = 256
+MAX_EMPIRICAL_OBSERVATIONS = 10_000
+MAX_EMPIRICAL_CSV_BYTES = 1_000_000
+MAX_EMPIRICAL_CSV_COLUMNS = 256
 MAX_GAUSSIAN_ATTEMPTS = 4_096
 MIN_GAUSSIAN_SPAN_SIGMA = Decimal("0.1")
 PSD_TOLERANCE = Decimal("1e-60")
@@ -40,8 +47,10 @@ class StatisticalVariable(TypedDict):
     maximum: NotRequired[float]
     nominal: NotRequired[float | str]
     sigma: NotRequired[float]
-    values: NotRequired[list[str]]
+    values: NotRequired[list[float | str]]
     weights: NotRequired[list[float]]
+    csv_path: NotRequired[str]
+    column: NotRequired[str]
     unit: NotRequired[str]
 
 
@@ -73,6 +82,7 @@ class StatisticalPlanResult(TypedDict):
     generator_version: str
     definition_hash: str
     correlations: list[dict[str, object]]
+    empirical_sources: list[dict[str, object]]
     sample_count: int
     parameter_order: list[str]
     parameter_units: dict[str, str]
@@ -255,11 +265,170 @@ def _normalized_correlations(
     return sorted(normalized, key=lambda group: group["variables"])
 
 
+def _empirical_values(values: object, name: str) -> list[str]:
+    if (
+        not isinstance(values, list)
+        or not values
+        or len(values) > MAX_EMPIRICAL_OBSERVATIONS
+    ):
+        raise ValueError(
+            f"variable {name} empirical observations must contain 1 to "
+            f"{MAX_EMPIRICAL_OBSERVATIONS} values"
+        )
+    return [
+        _canonical_decimal(_decimal(value, f"variable {name} empirical observation"))
+        for value in values
+    ]
+
+
+def _inline_empirical_sha256(values: list[str]) -> str:
+    return hashlib.sha256(
+        (_canonical_json(values) + "\n").encode("utf-8")
+    ).hexdigest()
+
+
+def _read_empirical_csv(
+    csv_path: object,
+    column: object,
+    source_root: Path | None,
+    name: str,
+) -> tuple[list[str], dict[str, object]]:
+    if not isinstance(csv_path, str) or not csv_path or len(csv_path) > 1_024:
+        raise ValueError(f"variable {name} csv_path must be a non-empty string")
+    if not isinstance(column, str) or not column or len(column) > 128:
+        raise ValueError(f"variable {name} column must be a non-empty string")
+    if source_root is None:
+        raise ValueError(f"variable {name} csv_path requires source_root")
+    root = source_root.resolve()
+    candidate = Path(csv_path)
+    candidate = candidate if candidate.is_absolute() else root / candidate
+    try:
+        lexical_relative = candidate.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(
+            f"variable {name} empirical CSV must be inside source_root"
+        ) from exc
+    current = root
+    for part in lexical_relative.parts:
+        current /= part
+        if current.is_symlink():
+            raise ValueError(
+                f"variable {name} empirical CSV must not use symlinks"
+            )
+    try:
+        resolved = candidate.resolve(strict=True)
+        relative = resolved.relative_to(root)
+    except (FileNotFoundError, ValueError) as exc:
+        raise ValueError(
+            f"variable {name} empirical CSV must be inside source_root"
+        ) from exc
+    if not resolved.is_file():
+        raise ValueError(f"variable {name} empirical CSV must be a regular file")
+    with resolved.open("rb") as handle:
+        raw = handle.read(MAX_EMPIRICAL_CSV_BYTES + 1)
+    if len(raw) > MAX_EMPIRICAL_CSV_BYTES:
+        raise ValueError(
+            f"variable {name} empirical CSV exceeds {MAX_EMPIRICAL_CSV_BYTES} bytes"
+        )
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"variable {name} empirical CSV must be UTF-8") from exc
+    try:
+        rows = csv.reader(io.StringIO(text, newline=""), strict=True)
+        header = next(rows)
+        if (
+            not header
+            or len(header) > MAX_EMPIRICAL_CSV_COLUMNS
+            or any(not value or len(value) > 128 for value in header)
+            or len(header) != len(set(header))
+        ):
+            raise ValueError(f"variable {name} empirical CSV header is invalid")
+        if column not in header:
+            raise ValueError(
+                f"variable {name} empirical CSV does not contain column {column}"
+            )
+        column_index = header.index(column)
+        observations: list[object] = []
+        for row_index, row in enumerate(rows, start=2):
+            if len(row) != len(header):
+                raise ValueError(
+                    f"variable {name} empirical CSV row {row_index} has "
+                    "the wrong number of columns"
+                )
+            observations.append(row[column_index])
+            if len(observations) > MAX_EMPIRICAL_OBSERVATIONS:
+                raise ValueError(
+                    f"variable {name} empirical CSV exceeds "
+                    f"{MAX_EMPIRICAL_OBSERVATIONS} observations"
+                )
+    except csv.Error as exc:
+        raise ValueError(f"variable {name} empirical CSV is malformed") from exc
+    values = _empirical_values(observations, name)
+    return values, {
+        "kind": "csv",
+        "path": relative.as_posix(),
+        "column": column,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "observation_count": len(values),
+        "resampling": "with_replacement",
+    }
+
+
+def _validated_empirical_source(
+    source: object, values: list[str], name: str
+) -> dict[str, object]:
+    if not isinstance(source, dict):
+        raise ValueError(f"variable {name} empirical source is invalid")
+    kind = source.get("kind")
+    expected_fields = (
+        {"kind", "sha256", "observation_count", "resampling"}
+        if kind == "inline"
+        else {
+            "kind",
+            "path",
+            "column",
+            "sha256",
+            "observation_count",
+            "resampling",
+        }
+        if kind == "csv"
+        else set()
+    )
+    if set(source) != expected_fields:
+        raise ValueError(f"variable {name} empirical source is invalid")
+    digest = source.get("sha256")
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ValueError(f"variable {name} empirical source hash is invalid")
+    if source.get("observation_count") != len(values):
+        raise ValueError(f"variable {name} empirical source count is invalid")
+    if source.get("resampling") != "with_replacement":
+        raise ValueError(f"variable {name} empirical resampling is invalid")
+    if kind == "inline" and digest != _inline_empirical_sha256(values):
+        raise ValueError(f"variable {name} empirical source hash is invalid")
+    if kind == "csv":
+        path = source.get("path")
+        column = source.get("column")
+        if (
+            not isinstance(path, str)
+            or not path
+            or Path(path).is_absolute()
+            or ".." in Path(path).parts
+            or not isinstance(column, str)
+            or not column
+            or len(column) > 128
+        ):
+            raise ValueError(f"variable {name} empirical CSV source is invalid")
+    return dict(source)
+
+
 def _normalized_definition(
     variables: list[StatisticalVariable],
     sample_count: int,
     seed: int,
     correlations: list[StatisticalCorrelation] | None = None,
+    source_root: Path | None = None,
+    allow_empirical_provenance: bool = False,
 ) -> dict[str, object]:
     if not isinstance(variables, list) or not variables:
         raise ValueError("variables must be a non-empty list")
@@ -334,6 +503,15 @@ def _normalized_definition(
                 "weights",
                 "nominal",
                 "unit",
+            },
+            "empirical": {
+                "name",
+                "distribution",
+                "values",
+                "csv_path",
+                "column",
+                "unit",
+                "source",
             },
         }
         if distribution in allowed_fields:
@@ -422,10 +600,56 @@ def _normalized_definition(
                     "unit": unit,
                 }
             )
+        elif distribution == "empirical":
+            if "source" in variable:
+                if not allow_empirical_provenance:
+                    raise ValueError(
+                        f"variable {name} source is not valid for empirical input"
+                    )
+                if "csv_path" in variable or "column" in variable:
+                    raise ValueError(
+                        f"variable {name} normalized empirical input is invalid"
+                    )
+                values = _empirical_values(variable.get("values"), name)
+                source = _validated_empirical_source(
+                    variable.get("source"), values, name
+                )
+            else:
+                has_values = "values" in variable
+                has_csv = "csv_path" in variable or "column" in variable
+                if has_values == has_csv:
+                    raise ValueError(
+                        f"variable {name} empirical input must use either values "
+                        "or csv_path with column"
+                    )
+                if has_values:
+                    values = _empirical_values(variable.get("values"), name)
+                    source = {
+                        "kind": "inline",
+                        "sha256": _inline_empirical_sha256(values),
+                        "observation_count": len(values),
+                        "resampling": "with_replacement",
+                    }
+                else:
+                    values, source = _read_empirical_csv(
+                        variable.get("csv_path"),
+                        variable.get("column"),
+                        source_root,
+                        name,
+                    )
+            normalized_variables.append(
+                {
+                    "name": name,
+                    "distribution": "empirical",
+                    "values": values,
+                    "unit": unit,
+                    "source": source,
+                }
+            )
         else:
             raise ValueError(
                 f"variable {name} distribution must be 'uniform', "
-                "'gaussian', or 'discrete'"
+                "'gaussian', 'discrete', or 'empirical'"
             )
     definition: dict[str, object] = {
         "variables": normalized_variables,
@@ -549,6 +773,30 @@ def _correlation_fraction(
     return Decimal(integer) / Decimal(1 << 64)
 
 
+def _empirical_fraction(seed: int, sample_index: int, name: str) -> Decimal:
+    material = b"\0".join(
+        (
+            EMPIRICAL_GENERATOR_VERSION.encode("ascii"),
+            str(seed).encode("ascii"),
+            str(sample_index).encode("ascii"),
+            name.encode("utf-8"),
+        )
+    )
+    integer = int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
+    return Decimal(integer) / Decimal(1 << 64)
+
+
+def _empirical_value(
+    variable: dict[str, object], seed: int, sample_index: int
+) -> str:
+    values = variable["values"]
+    assert isinstance(values, list)
+    index = int(
+        _empirical_fraction(seed, sample_index, str(variable["name"])) * len(values)
+    )
+    return str(values[index])
+
+
 def _correlated_gaussians(
     group: dict[str, object],
     factor: list[list[Decimal]],
@@ -611,17 +859,29 @@ def build_statistical_plan(
     sample_count: int,
     seed: int,
     correlations: list[StatisticalCorrelation] | None = None,
+    source_root: Path | None = None,
+    _allow_empirical_provenance: bool = False,
 ) -> StatisticalPlan:
     """Build a portable, deterministic plan without running LTspice."""
     definition = _normalized_definition(
-        variables, sample_count, seed, correlations
+        variables,
+        sample_count,
+        seed,
+        correlations,
+        source_root,
+        _allow_empirical_provenance,
     )
     normalized_variables = definition["variables"]
     assert isinstance(normalized_variables, list)
     normalized_correlations = definition.get("correlations", [])
     assert isinstance(normalized_correlations, list)
     generator_version = (
-        CORRELATION_GENERATOR_VERSION
+        EMPIRICAL_GENERATOR_VERSION
+        if any(
+            variable.get("distribution") == "empirical"
+            for variable in normalized_variables
+        )
+        else CORRELATION_GENERATOR_VERSION
         if normalized_correlations
         else UNIFORM_GENERATOR_VERSION
         if all(
@@ -696,8 +956,12 @@ def build_statistical_plan(
                         minimum,
                         maximum,
                     )
-                else:
+                elif distribution == "discrete":
                     parameters[name] = _weighted_discrete(
+                        variable, seed, sample_index
+                    )
+                else:
+                    parameters[name] = _empirical_value(
                         variable, seed, sample_index
                     )
             points.append({"index": sample_index, "parameters": parameters})
@@ -718,6 +982,20 @@ def build_statistical_plan(
 
 def _artifact_bytes(plan: StatisticalPlan) -> bytes:
     return (_canonical_json(plan, pretty=True) + "\n").encode("utf-8")
+
+
+def _empirical_sources(plan: StatisticalPlan) -> list[dict[str, object]]:
+    variables = plan["definition"]["variables"]
+    assert isinstance(variables, list)
+    return [
+        {
+            "name": str(variable["name"]),
+            "unit": str(variable["unit"]),
+            **variable["source"],
+        }
+        for variable in variables
+        if variable["distribution"] == "empirical"
+    ]
 
 
 def _plans_root(runs_dir: Path) -> Path:
@@ -771,6 +1049,7 @@ def save_statistical_plan(runs_dir: Path, plan: StatisticalPlan) -> StatisticalP
         "generator_version": plan["generator_version"],
         "definition_hash": plan["definition_hash"],
         "correlations": plan["definition"].get("correlations", []),
+        "empirical_sources": _empirical_sources(plan),
         "sample_count": plan["sample_count"],
         "parameter_order": plan["parameter_order"],
         "parameter_units": plan["parameter_units"],
@@ -784,10 +1063,17 @@ def generate_statistical_plan(
     sample_count: int,
     seed: int,
     correlations: list[StatisticalCorrelation] | None = None,
+    source_root: Path | None = None,
 ) -> StatisticalPlanResult:
     return save_statistical_plan(
         runs_dir,
-        build_statistical_plan(variables, sample_count, seed, correlations),
+        build_statistical_plan(
+            variables,
+            sample_count,
+            seed,
+            correlations,
+            source_root,
+        ),
     )
 
 
@@ -801,6 +1087,7 @@ def inspect_statistical_plan(runs_dir: Path, plan_id: str) -> StatisticalPlanRes
         "generator_version": plan["generator_version"],
         "definition_hash": plan["definition_hash"],
         "correlations": plan["definition"].get("correlations", []),
+        "empirical_sources": _empirical_sources(plan),
         "sample_count": plan["sample_count"],
         "parameter_order": plan["parameter_order"],
         "parameter_units": plan["parameter_units"],
@@ -849,7 +1136,11 @@ def load_statistical_plan(runs_dir: Path, plan_id: str) -> StatisticalPlan:
     if not isinstance(variables, list):
         raise ValueError("statistical plan variables are invalid")
     rebuilt = build_statistical_plan(  # type: ignore[arg-type]
-        variables, sample_count, seed, correlations
+        variables,
+        sample_count,
+        seed,
+        correlations,
+        _allow_empirical_provenance=True,
     )
     if value != rebuilt:
         raise ValueError("statistical plan contents do not match its definition")
