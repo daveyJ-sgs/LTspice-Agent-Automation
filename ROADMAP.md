@@ -248,32 +248,46 @@ paired point rather than expanding into a cross-product. The saved point plan
 is the reproducibility boundary and can be inspected or transferred without
 running LTspice.
 
-#### Phase 3A: Deterministic statistical point plans
+#### Phase 3A: Deterministic statistical point plans — in progress
 
-- Add a portable explicit-point plan to the experiment engine while preserving
-  the existing Cartesian `run_experiment` behavior.
-- Define typed statistical variables, nominal values, units, distribution
-  parameters, sample count, and a required reproducibility seed.
-- Support uniform, bounded/truncated Gaussian, and weighted discrete
-  distributions as the first useful slice.
-- Use a versioned sampling algorithm and canonical decimal serialization so a
-  definition and seed produce the same ordered parameter values on macOS and
-  Windows.
-- Validate finite values, distribution bounds, weights, names, cardinality,
-  payload sizes, and placeholder coverage before creating a durable job.
-- Save the normalized definition, generator version, seed, sample ordinal, and
-  resolved parameter values in an immutable sample-plan artifact.
-- Expose a focused MCP operation that can generate and inspect the plan without
-  invoking LTspice.
+##### Phase 3A-1: Uniform point-plan foundation — complete
 
-Verification gate:
+- Typed statistical variables with nominal values, units, bounds, sample
+  count, and a required reproducibility seed
+- Versioned SHA-256 counter-based uniform sampling with canonical decimal
+  serialization and byte-stable golden fixtures
+- Immutable content-addressed sample-plan artifacts with generator, seed,
+  sample ordinal, resolved values, definition hash, and artifact hash
+- `generate_statistical_plan` and `get_statistical_plan` MCP operations that do
+  not invoke LTspice
+- Portable explicit-point execution through `run_statistical_experiment`
+  without changing Cartesian `run_experiment` behavior
+- Existing results, CSV, canonical index, comparison, and offline-report
+  compatibility
+- Bounded variables, samples, generated cells, identifiers, units, values,
+  payloads, and path publication
+- Real three-point RC validation proving paired R/C samples execute as three
+  Phase 2 points rather than a nine-point cross-product
+
+##### Phase 3A-2: Bounded Gaussian and weighted discrete distributions
+
+- Add bounded/truncated Gaussian variables with explicit nominal, sigma, and
+  bound semantics that never rely on platform-specific library sampling.
+- Add weighted discrete variables with canonical values, positive finite
+  weights, deterministic boundary behavior, and complete provenance.
+- Preserve draw independence by variable name, sample ordinal, seed, and
+  generator version as new distribution algorithms are added.
+- Extend golden fixtures and validation coverage across distribution edges,
+  degenerate weights, rejection bounds, and mixed-distribution paired plans.
+
+Phase 3A verification gate:
 
 - Golden fixtures prove byte-identical sample plans across repeated runs and
-  platforms.
+  platforms for every Phase 3A distribution.
 - Unit tests cover invalid definitions, boundary values, stable ordering, and
   the absence of accidental Cartesian expansion.
-- One small RC study compiles into ordinary Phase 2 execution points without a
-  parallel simulation path.
+- Uniform, Gaussian, and discrete variables compile into ordinary Phase 2
+  execution points without a parallel simulation path.
 
 #### Phase 3B: Durable yield studies
 
@@ -549,11 +563,12 @@ expensive evaluation.
 
 ## Immediate next milestone
 
-Begin Phase 3A with the smallest complete statistical-planning slice:
+Continue Phase 3A with the distribution-completion slice:
 
-1. Define the versioned statistical definition and explicit-point-plan schemas.
-2. Implement seeded uniform sampling with canonical decimal serialization.
-3. Expose plan generation and inspection without invoking LTspice.
-4. Compile one paired RC tolerance plan into the existing experiment executor.
-5. Verify golden plans and paired-point behavior on macOS and Windows before
-   adding more distributions.
+1. Specify deterministic bounded-Gaussian transformation and truncation rules.
+2. Add bounded Gaussian variables with byte-stable golden fixtures.
+3. Add weighted discrete variables and exact boundary tests.
+4. Exercise a mixed uniform/Gaussian/discrete paired plan through the existing
+   experiment executor.
+5. Verify all Phase 3A plan fixtures on macOS and Windows before beginning
+   durable yield studies in Phase 3B.

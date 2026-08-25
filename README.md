@@ -319,6 +319,7 @@ network mode is intentionally outside this local bridge.
 Model Context Protocol, in-process (no REST server needed): `run_netlist`,
 `run_netlist_file`, `get_measurements`, `get_waveform`, `export_waveform_csv`,
 `analyze_waveform`, `run_parameter_sweep`, `run_experiment`,
+`generate_statistical_plan`, `get_statistical_plan`, `run_statistical_experiment`,
 `define_experiment`, `start_experiment`, `get_experiment`,
 `cancel_experiment`, `compare_experiments`, `build_experiment_index`,
 `query_experiments`, `build_experiment_report`, `build_comparison_report`,
@@ -398,6 +399,47 @@ Forward references are allowed. Unknown dependencies, duplicate names, cycles,
 and parameters that cannot affect the netlist are rejected before LTspice runs.
 Returned point parameters and CSV columns contain resolved derived strings in
 their original declaration order.
+
+### Generate a deterministic statistical plan
+
+Phase 3A separates sampling from simulation. Call `generate_statistical_plan`
+with a seed and bounded variables to create an immutable, content-addressed
+plan under `runs/statistical-plans/` without invoking LTspice:
+
+```json
+{
+  "variables": [
+    {"name": "R", "distribution": "uniform", "minimum": 9000,
+     "maximum": 11000, "nominal": 10000, "unit": "ohm"},
+    {"name": "C", "distribution": "uniform", "minimum": 0.0000009,
+     "maximum": 0.0000011, "nominal": 0.000001, "unit": "F"}
+  ],
+  "sample_count": 24,
+  "seed": 20260824
+}
+```
+
+The versioned SHA-256 counter generator maps each `(seed, sample, variable)`
+directly to a canonical decimal value. Reordering unrelated variables or
+resuming later cannot consume a different random stream. Plans are limited to
+1,000 samples, 32 variables, and 10,000 generated values.
+
+Use `get_statistical_plan` to verify and inspect an existing plan. Pass its
+`plan_id` plus an ordinary netlist template to `run_statistical_experiment`:
+
+```json
+{
+  "plan_id": "statistical-plan-0123456789abcdef",
+  "netlist_template": "* Statistical RC study\nR1 in out {R}\nC1 out 0 {C}\n.ac dec 100 10 1Meg\n.end\n"
+}
+```
+
+Statistical values stay paired by sample ordinal: 24 R/C samples execute as 24
+independent Phase 2 points, not a 24-by-24 Cartesian grid. The resulting
+manifest records the source plan hash and remains compatible with the existing
+results, CSV, index, comparison, and offline-report validators. Phase 3A
+currently supports uniform variables; bounded Gaussian and weighted discrete
+variables are the next distribution slice.
 
 ### Run a durable experiment job
 

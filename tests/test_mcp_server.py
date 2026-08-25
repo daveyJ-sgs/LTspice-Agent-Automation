@@ -768,6 +768,93 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(rows[1]["parameter.C"], "22n")
         self.assertEqual(rows[3]["measurement.gain"], "3.0")
 
+    def test_statistical_plan_runs_paired_points_without_cartesian_expansion(self) -> None:
+        variables = [
+            {
+                "name": "R",
+                "distribution": "uniform",
+                "minimum": 9_000.0,
+                "maximum": 11_000.0,
+                "unit": "ohm",
+            },
+            {
+                "name": "C",
+                "distribution": "uniform",
+                "minimum": 9e-7,
+                "maximum": 1.1e-6,
+                "unit": "F",
+            },
+        ]
+        plan = mcp_server.generate_statistical_plan(variables, 3, 20260824)
+        rendered_netlists: list[str] = []
+
+        def execute(
+            netlist: str,
+            filename: str,
+            ascii_raw: bool,
+            timeout: int,
+            dest: Path,
+        ) -> Path:
+            rendered_netlists.append(netlist)
+            dest.mkdir(parents=True)
+            return dest
+
+        with (
+            patch.object(mcp_server, "_run_netlist_text", side_effect=execute),
+            patch.object(
+                mcp_server,
+                "_summarize_run",
+                return_value={"status": "completed", "measurements": {}},
+            ),
+        ):
+            result = mcp_server.run_statistical_experiment(
+                plan["plan_id"],
+                "R1 in out {R}\nC1 out 0 {C}\n.end\n",
+            )
+
+        self.assertEqual(result["point_count"], 3)
+        self.assertEqual(result["parameter_order"], ["R", "C"])
+        self.assertEqual(
+            [point["parameters"] for point in result["points"]],
+            [point["parameters"] for point in plan["points"]],
+        )
+        self.assertEqual(
+            rendered_netlists,
+            [
+                f"R1 in out {point['parameters']['R']}\n"
+                f"C1 out 0 {point['parameters']['C']}\n.end\n"
+                for point in plan["points"]
+            ],
+        )
+        manifest = json.loads(Path(result["manifest"]).read_text(encoding="utf-8"))
+        self.assertEqual(
+            manifest["definition"]["point_plan"]["source"]["plan_id"],
+            plan["plan_id"],
+        )
+        index_result = mcp_server.experiment_index.build_experiment_index(self.runs)
+        self.assertEqual(index_result["indexed_experiments"], 1)
+        self.assertEqual(index_result["issues"], [])
+        report = mcp_server.experiment_report.build_experiment_report(
+            self.runs, result["experiment_id"]
+        )
+        self.assertTrue(Path(report["report_html"]).is_file())
+        comparison = mcp_server.compare_experiments(
+            result["experiment_id"], result["experiment_id"]
+        )
+        self.assertEqual(comparison["matched_points"], 3)
+        self.assertEqual(comparison["added_points"], 0)
+        self.assertEqual(comparison["removed_points"], 0)
+
+    def test_statistical_plan_tools_are_exposed_through_mcp(self) -> None:
+        tools = asyncio.run(mcp_server.mcp.list_tools())
+        by_name = {tool.name: tool for tool in tools}
+        self.assertIn("generate_statistical_plan", by_name)
+        self.assertIn("get_statistical_plan", by_name)
+        self.assertIn("run_statistical_experiment", by_name)
+        properties = by_name["generate_statistical_plan"].input_schema["properties"]
+        self.assertEqual(properties["sample_count"]["type"], "integer")
+        self.assertEqual(properties["seed"]["type"], "integer")
+
     def test_run_experiment_native_maps_one_validated_batch(self) -> None:
         rendered_netlists: list[str] = []
 

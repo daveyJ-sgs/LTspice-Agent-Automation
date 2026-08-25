@@ -442,6 +442,63 @@ def _prepare_experiment(
     return names, derived_order, points, units
 
 
+def _prepare_explicit_experiment(
+    netlist_template: str,
+    parameter_order: list[str],
+    points: list[dict[str, str]],
+    parameter_units: dict[str, str],
+    waveform_analyses: list[ExperimentWaveformAnalysis],
+) -> tuple[list[str], list[str], list[dict[str, str]], dict[str, str]]:
+    """Validate paired points while reusing the ordinary experiment contract."""
+    if not isinstance(parameter_order, list) or not parameter_order:
+        raise ValueError("explicit parameter_order must be a non-empty list")
+    if (
+        any(
+            not isinstance(name, str)
+            or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None
+            for name in parameter_order
+        )
+        or len(parameter_order) != len(set(parameter_order))
+    ):
+        raise ValueError("explicit parameter_order contains invalid or duplicate names")
+    if (
+        not isinstance(points, list)
+        or not points
+        or len(points) > MAX_EXPERIMENT_POINTS
+    ):
+        raise ValueError(
+            f"explicit point plans must contain between 1 and {MAX_EXPERIMENT_POINTS} points"
+        )
+    if (
+        not isinstance(parameter_units, dict)
+        or set(parameter_units) != set(parameter_order)
+        or any(not isinstance(unit, str) for unit in parameter_units.values())
+    ):
+        raise ValueError("explicit parameter_units must match parameter_order")
+    copied_points: list[dict[str, str]] = []
+    for index, point in enumerate(points):
+        if not isinstance(point, dict) or set(point) != set(parameter_order):
+            raise ValueError(f"explicit point {index} parameters do not match parameter_order")
+        if any(not isinstance(point[name], str) or not point[name] for name in parameter_order):
+            raise ValueError(f"explicit point {index} values must be non-empty strings")
+        copied_points.append({name: point[name] for name in parameter_order})
+
+    validation_parameters: list[ExperimentParameter] = [
+        {
+            "name": name,
+            "values": [copied_points[0][name]],
+            "unit": parameter_units[name],
+        }
+        for name in parameter_order
+    ]
+    _prepare_experiment(
+        netlist_template,
+        validation_parameters,
+        waveform_analyses,
+    )
+    return list(parameter_order), [], copied_points, dict(parameter_units)
+
+
 def _find_derived_cycle(
     pending: list[str], dependencies: dict[str, list[str]]
 ) -> list[str]:
@@ -1138,6 +1195,10 @@ def run_experiment_sync(
     reuse_cache: bool = False,
     execution_mode: str = "independent",
     execute_native: Callable[..., tuple[list[ExperimentPointResult], dict[str, object]]] | None = None,
+    explicit_points: list[dict[str, str]] | None = None,
+    explicit_parameter_order: list[str] | None = None,
+    explicit_parameter_units: dict[str, str] | None = None,
+    source_point_plan: dict[str, object] | None = None,
 ) -> ExperimentResult:
     """Execute an experiment independently or as one validated native batch."""
     normalized_filename = _netlist_filename(filename)
@@ -1148,14 +1209,32 @@ def run_experiment_sync(
     if execution_mode == "native" and execute_native is None:
         raise ValueError("native execution requires an execute_native callback")
     analyses = [] if waveform_analyses is None else waveform_analyses
-    (
-        parameter_order,
-        derived_parameter_order,
-        combinations,
-        parameter_units,
-    ) = _prepare_experiment(
-        netlist_template, parameters, analyses, derived_parameters
-    )
+    if explicit_points is None:
+        (
+            parameter_order,
+            derived_parameter_order,
+            combinations,
+            parameter_units,
+        ) = _prepare_experiment(
+            netlist_template, parameters, analyses, derived_parameters
+        )
+    else:
+        if execution_mode != "independent":
+            raise ValueError("explicit point plans currently require independent execution")
+        if derived_parameters:
+            raise ValueError("explicit point plans do not accept derived_parameters")
+        (
+            parameter_order,
+            derived_parameter_order,
+            combinations,
+            parameter_units,
+        ) = _prepare_explicit_experiment(
+            netlist_template,
+            [] if explicit_parameter_order is None else explicit_parameter_order,
+            explicit_points,
+            {} if explicit_parameter_units is None else explicit_parameter_units,
+            analyses,
+        )
     native_netlist = None
     if execution_mode == "native":
         native_netlist = _render_native_experiment_netlist(
@@ -1174,27 +1253,35 @@ def run_experiment_sync(
     results_csv_path = experiment_dir / "results.csv"
     started_at = datetime.now().astimezone()
     started_clock = time.monotonic()
+    definition: dict[str, object] = {
+        "netlist_template": netlist_template,
+        "parameters": parameters,
+        "parameter_order": parameter_order,
+        "derived_parameters": []
+        if derived_parameters is None
+        else derived_parameters,
+        "derived_parameter_order": derived_parameter_order,
+        "parameter_units": parameter_units,
+        "waveform_analyses": analyses,
+        "filename": normalized_filename,
+        "ascii_raw": ascii_raw,
+        "timeout_seconds": timeout_seconds,
+        "reuse_cache": reuse_cache,
+        "execution_mode": execution_mode,
+    }
+    if explicit_points is not None:
+        definition["parameters"] = []
+        definition["point_plan"] = {
+            "schema_version": 1,
+            "points": combinations,
+            "source": {} if source_point_plan is None else source_point_plan,
+        }
     manifest: dict[str, object] = {
         "schema_version": 1,
         "experiment_id": experiment_id,
         "status": "running",
         "started_at": started_at.isoformat(),
-        "definition": {
-            "netlist_template": netlist_template,
-            "parameters": parameters,
-            "parameter_order": parameter_order,
-            "derived_parameters": []
-            if derived_parameters is None
-            else derived_parameters,
-            "derived_parameter_order": derived_parameter_order,
-            "parameter_units": parameter_units,
-            "waveform_analyses": analyses,
-            "filename": normalized_filename,
-            "ascii_raw": ascii_raw,
-            "timeout_seconds": timeout_seconds,
-            "reuse_cache": reuse_cache,
-            "execution_mode": execution_mode,
-        },
+        "definition": definition,
         "point_count": len(combinations),
     }
     _write_json(manifest_path, manifest)

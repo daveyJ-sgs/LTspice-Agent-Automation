@@ -223,6 +223,59 @@ def _timestamp(manifest: dict[str, object], experiment_id: str) -> str:
 def _definition_parameters(
     definition: dict[str, object], experiment_id: str
 ) -> tuple[list[dict[str, object]], dict[str, int]]:
+    point_plan = definition.get("point_plan")
+    if point_plan is not None:
+        if not isinstance(point_plan, dict) or point_plan.get("schema_version") != 1:
+            raise ValueError(f"{experiment_id} definition.point_plan is invalid")
+        if definition.get("parameters", []) or definition.get("derived_parameters", []):
+            raise ValueError(
+                f"{experiment_id} explicit point plan cannot declare Cartesian parameters"
+            )
+        parameter_order = definition.get("parameter_order")
+        points = point_plan.get("points")
+        units = definition.get("parameter_units")
+        if (
+            not isinstance(parameter_order, list)
+            or not parameter_order
+            or any(
+                not isinstance(name, str)
+                or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None
+                for name in parameter_order
+            )
+            or len(parameter_order) != len(set(parameter_order))
+        ):
+            raise ValueError(f"{experiment_id} definition.parameter_order is invalid")
+        if not isinstance(points, list) or not points:
+            raise ValueError(f"{experiment_id} definition.point_plan points are invalid")
+        if (
+            not isinstance(units, dict)
+            or set(units) != set(parameter_order)
+            or any(not isinstance(unit, str) for unit in units.values())
+        ):
+            raise ValueError(f"{experiment_id} definition.parameter_units is inconsistent")
+        for point in points:
+            if (
+                not isinstance(point, dict)
+                or set(point) != set(parameter_order)
+                or any(not isinstance(value, str) or not value for value in point.values())
+            ):
+                raise ValueError(f"{experiment_id} definition.point_plan points are invalid")
+        return (
+            [
+                {
+                    "ordinal": ordinal,
+                    "name": name,
+                    "kind": "base",
+                    "unit": units[name],
+                    "declared_values_json": json.dumps(
+                        [point[name] for point in points], separators=(",", ":")
+                    ),
+                    "template": None,
+                }
+                for ordinal, name in enumerate(parameter_order)
+            ],
+            {name: ordinal for ordinal, name in enumerate(parameter_order)},
+        )
     by_kind: dict[str, dict[str, dict[str, object]]] = {"base": {}, "derived": {}}
     input_order: dict[str, list[str]] = {"base": [], "derived": []}
     seen: set[str] = set()
@@ -339,12 +392,17 @@ def _manifest_record(
         raise ValueError("unsupported experiment execution_mode")
     point_count = _plain_int(manifest.get("point_count"), "manifest point_count")
     parameters, ordinals = _definition_parameters(definition, experiment_id)
-    base_value_lists = [
-        json.loads(str(item["declared_values_json"]))
-        for item in parameters
-        if item["kind"] == "base"
-    ]
-    expected_point_count = math.prod(len(values) for values in base_value_lists)
+    point_plan = definition.get("point_plan")
+    if isinstance(point_plan, dict):
+        planned_points = point_plan.get("points")
+        expected_point_count = len(planned_points) if isinstance(planned_points, list) else 0
+    else:
+        base_value_lists = [
+            json.loads(str(item["declared_values_json"]))
+            for item in parameters
+            if item["kind"] == "base"
+        ]
+        expected_point_count = math.prod(len(values) for values in base_value_lists)
     if (
         point_count < 1
         or point_count > MAX_EXPERIMENT_POINTS
@@ -475,6 +533,7 @@ def _result_children(
     record: dict[str, object],
     parameter_records: list[dict[str, object]],
     ordinals: dict[str, int],
+    point_plan: object = None,
 ) -> tuple[
     list[dict[str, object]],
     list[dict[str, object]],
@@ -506,14 +565,17 @@ def _result_children(
     }
     if document.get("parameter_units", {}) != expected_units:
         raise ValueError("definition and results parameter_units do not match")
-    base_values = [
-        json.loads(str(item["declared_values_json"]))
-        for item in parameter_records
-        if item["kind"] == "base"
-    ]
-    expected_base_parameters = [
-        dict(zip(base_order, values)) for values in itertools.product(*base_values)
-    ]
+    if isinstance(point_plan, dict) and isinstance(point_plan.get("points"), list):
+        expected_base_parameters = point_plan["points"]
+    else:
+        base_values = [
+            json.loads(str(item["declared_values_json"]))
+            for item in parameter_records
+            if item["kind"] == "base"
+        ]
+        expected_base_parameters = [
+            dict(zip(base_order, values)) for values in itertools.product(*base_values)
+        ]
     point_count = _plain_int(document.get("point_count"), "results point_count")
     if point_count != record["point_count"]:
         raise ValueError("manifest and results point_count do not match")
@@ -772,7 +834,9 @@ def load_completed_experiment(
     if record["status"] != "completed":
         raise ValueError(f"Experiment {experiment_id} is not completed")
     results, results_hash = _load_json(results_path)
-    _result_children(results, record, parameters, ordinals)
+    definition = manifest.get("definition")
+    point_plan = definition.get("point_plan") if isinstance(definition, dict) else None
+    _result_children(results, record, parameters, ordinals, point_plan)
     _verify_waveform_artifacts(results, experiment_dir, experiment_id)
     record.update(
         index_state="results_valid",
@@ -1018,8 +1082,14 @@ def build_experiment_index(
                         try:
                             _relative_path(results_path, root)
                             results, results_hash = _load_json(results_path)
+                            definition = manifest.get("definition")
+                            point_plan = (
+                                definition.get("point_plan")
+                                if isinstance(definition, dict)
+                                else None
+                            )
                             child_rows = _result_children(
-                                results, record, parameters, ordinals
+                                results, record, parameters, ordinals, point_plan
                             )
                             _verify_waveform_artifacts(
                                 results, experiment_dir, experiment_id

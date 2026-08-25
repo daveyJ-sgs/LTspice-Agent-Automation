@@ -38,6 +38,7 @@ import frequency_domain_metrics
 import ltspice_wrapper as wrapper
 import raw_parser
 import report_runs
+import statistical_engine
 import waveform_metrics
 
 PROJECT_DIR = wrapper.PROJECT_DIR
@@ -63,6 +64,8 @@ ExperimentQueryResult = experiment_index.ExperimentQueryResult
 ExperimentReportResult = experiment_report.ExperimentReportResult
 ComparisonReportResult = experiment_visualization.ComparisonReportResult
 ExperimentDashboardResult = experiment_visualization.ExperimentDashboardResult
+StatisticalVariable = statistical_engine.StatisticalVariable
+StatisticalPlanResult = statistical_engine.StatisticalPlanResult
 
 ExperimentIndexStatus = Literal[
     "defined",
@@ -951,6 +954,73 @@ def run_experiment(
         reuse_cache,
         execution_mode,
         _execute_native_experiment,
+    )
+
+
+@mcp.tool()
+def generate_statistical_plan(
+    variables: list[StatisticalVariable],
+    sample_count: int,
+    seed: int,
+) -> StatisticalPlanResult:
+    """Generate and persist a deterministic statistical point plan without LTspice.
+
+    Phase 3A supports bounded uniform variables. Each variable needs a name,
+    distribution="uniform", numeric minimum and maximum, and optional nominal
+    and unit fields. The versioned seed produces the same canonical paired
+    points on macOS and Windows.
+    """
+    return statistical_engine.generate_statistical_plan(
+        RUNS_DIR, variables, sample_count, seed
+    )
+
+
+@mcp.tool()
+def get_statistical_plan(plan_id: str) -> StatisticalPlanResult:
+    """Load and verify a previously generated statistical point plan."""
+    return statistical_engine.inspect_statistical_plan(RUNS_DIR, plan_id)
+
+
+@mcp.tool()
+def run_statistical_experiment(
+    plan_id: str,
+    netlist_template: str,
+    waveform_analyses: list[ExperimentWaveformAnalysis] | None = None,
+    filename: str = "circuit.cir",
+    ascii_raw: bool = False,
+    timeout_seconds: int = 120,
+    reuse_cache: bool = False,
+) -> ExperimentResult:
+    """Run every paired point in a verified statistical plan independently."""
+    plan = statistical_engine.load_statistical_plan(RUNS_DIR, plan_id)
+    plan_result = statistical_engine.inspect_statistical_plan(RUNS_DIR, plan_id)
+    combinations = [point["parameters"] for point in plan["points"]]
+    return experiment_engine.run_experiment_sync(
+        RUNS_DIR,
+        _execute_experiment_point,
+        netlist_template,
+        [],
+        waveform_analyses,
+        filename,
+        ascii_raw,
+        timeout_seconds,
+        None,
+        reuse_cache,
+        "independent",
+        _execute_native_experiment,
+        explicit_points=combinations,
+        explicit_parameter_order=plan["parameter_order"],
+        explicit_parameter_units=plan["parameter_units"],
+        source_point_plan={
+            "kind": "statistical",
+            "plan_id": plan_id,
+            "plan_sha256": plan_result["plan_sha256"],
+            "runs_relative_path": (
+                f"statistical-plans/{plan_id}/statistical_plan.json"
+            ),
+            "generator_version": plan["generator_version"],
+            "definition_hash": plan["definition_hash"],
+        },
     )
 
 
