@@ -462,15 +462,38 @@ Verification gate:
 - A deliberately weak Sallen-Key corner fails while stronger corners remain
   independently visible in the structured results.
 
-#### Phase 3D: Sensitivity and worst-credible-case analysis
+#### Phase 3D: Sensitivity and worst-credible-case analysis — in progress
+
+##### Phase 3D-A: Worst evidenced cases — complete
+
+- Deterministic post-processing ranks each requirement independently by
+  ascending signed margin without rerunning LTspice or comparing unlike units
+- Dense sample and finite-corner ranks preserve exact ties; the bounded top-25
+  sample window expands at its cutoff so a tie is never split
+- Every ranked sample carries point/sample ordinals, parameters, named corners,
+  measured value, pass state, signed margin, and portable evidence path
+- Declared corners with no evaluated evidence remain explicit with null ranks;
+  invalid, cancelled, and unfinished points are counted but never ranked
+- Individually atomic `worst_cases.json` and flat `worst_cases.csv` artifacts plus
+  `analyze_statistical_worst_cases` expose the same validated MCP contract
+- Synthetic tie, empty-corner, cutoff, artifact, schema, real Sallen-Key, and
+  macOS/Windows regression coverage
+- The combined Phase 3C Sallen-Key evidence ranks the weak 1 kOhm load first
+  for the 7.6 dB gain floor at -0.06435 dB margin, with exact point evidence
+
+##### Phase 3D-B: Global rank sensitivity
 
 - Rank input influence using documented global rank-correlation measures and
-  local one-at-a-time perturbations; state when the data are insufficient or
-  the relationship is not meaningfully monotonic.
-- Generate tornado data from controlled perturbations with units, baselines,
-  and requirement margins rather than chart-only values.
-- Enumerate declared finite corners exactly and rank observed samples by
-  requirement margin to identify the worst evidenced cases.
+  state when the data are insufficient or the relationship is not meaningfully
+  monotonic.
+
+##### Phase 3D-C: Local OAT and tornado data
+
+- Add controlled local one-at-a-time perturbations and generate tornado data
+  with units, baselines, and requirement margins rather than chart-only values.
+
+##### Phase 3D-D: Adaptive boundary sampling
+
 - Add deterministic, batched adaptive sampling near observed failure
   boundaries, with stopping rules, sample budgets, and confidence history.
 - Keep continuous design optimization and Pareto selection in Phase 4; Phase 3

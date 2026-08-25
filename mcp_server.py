@@ -41,6 +41,7 @@ import report_runs
 import statistical_engine
 import statistical_results
 import waveform_metrics
+import worst_case_analysis
 
 PROJECT_DIR = wrapper.PROJECT_DIR
 RUNS_DIR = wrapper.RUNS_DIR
@@ -71,6 +72,7 @@ StatisticalCornerAxis = statistical_engine.StatisticalCornerAxis
 StatisticalPlanResult = statistical_engine.StatisticalPlanResult
 StatisticalSamplingMethod = Literal["independent", "latin_hypercube", "halton"]
 StatisticalSummaryResult = statistical_results.StatisticalSummaryResult
+WorstCaseAnalysisResult = worst_case_analysis.WorstCaseAnalysisResult
 
 ExperimentIndexStatus = Literal[
     "defined",
@@ -1172,6 +1174,16 @@ def summarize_statistical_experiment(
 ) -> StatisticalSummaryResult:
     """Create bounded JSON/CSV yield evidence for a completed statistical study."""
     return statistical_results.summarize_statistical_experiment(
+        RUNS_DIR, experiment_id
+    )
+
+
+@mcp.tool()
+def analyze_statistical_worst_cases(
+    experiment_id: str,
+) -> WorstCaseAnalysisResult:
+    """Rank worst observed requirement margins and finite named corners."""
+    return worst_case_analysis.analyze_statistical_worst_cases(
         RUNS_DIR, experiment_id
     )
 

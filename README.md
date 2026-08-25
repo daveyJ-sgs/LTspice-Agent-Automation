@@ -323,6 +323,7 @@ Model Context Protocol, in-process (no REST server needed): `run_netlist`,
 `define_experiment`, `define_statistical_study`, `start_experiment`, `get_experiment`,
 `cancel_experiment`, `compare_experiments`, `build_experiment_index`,
 `query_experiments`, `summarize_statistical_experiment`,
+`analyze_statistical_worst_cases`,
 `build_experiment_report`, `build_comparison_report`,
 `build_experiment_dashboard`, `list_runs`, `build_dashboard`, and
 `list_examples`.
@@ -635,6 +636,27 @@ requested.
 A byte-stable 128-sample fixture separately verifies the requested 0.8
 correlation, repeated-observation empirical frequencies, sample-major corner
 ordering, immutable reload, and durable-resume provenance on macOS and Windows.
+
+### Rank worst evidenced statistical cases
+
+Call `analyze_statistical_worst_cases` with a terminal statistical experiment
+ID. It performs no simulations and writes portable `worst_cases.json` and
+`worst_cases.csv` artifacts from the already validated requirement results.
+Each requirement is ranked independently by ascending signed margin, so values
+with different metrics or units are never compared. Dense ranks preserve exact
+ties, and a nominal top-25 sample bound expands only when needed to retain every
+tie at the cutoff. Named corners are ranked by their worst observed margin for
+that same requirement; declared corners with no evaluated evidence remain
+visible with a null rank instead of disappearing.
+
+Every sample row retains its point ordinal, base sample ordinal, resolved
+parameters, named corners, measured value, signed margin, pass/fail result, and
+runs-relative evidence path. Invalid, cancelled, and unfinished points are
+counted but excluded from electrical rankings. This is an observed-evidence
+ranking, not a prediction beyond the simulated population.
+The canonical experiment validator rejects duplicate intrinsic requirement
+identities, so ordinal copies of an otherwise identical check are not treated
+as separate requirements.
 
 ### Run a durable experiment job
 
