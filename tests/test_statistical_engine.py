@@ -83,6 +83,162 @@ class StatisticalEngineTests(unittest.TestCase):
                 corner_aggregate=False,
             ),
         )
+        self.assertEqual(
+            plan,
+            statistical_engine.build_statistical_plan(
+                self.variables(), 3, 20260824, sampling_method="independent"
+            ),
+        )
+
+    def test_latin_hypercube_uses_every_stratum_once_and_matches_golden(self) -> None:
+        plan = statistical_engine.build_statistical_plan(
+            self.variables(),
+            8,
+            20260824,
+            sampling_method="latin_hypercube",
+        )
+
+        self.assertEqual(plan["generator_version"], "sha256-stratified-halton-v6")
+        self.assertEqual(plan["definition"]["sampling_method"], "latin_hypercube")
+        self.assertEqual(
+            plan["definition_hash"],
+            "badb6215a9fe597854488f74ed2d1c9cd5c3262757e834f9cce3531ad276d902",
+        )
+        self.assertEqual(
+            hashlib.sha256(statistical_engine._artifact_bytes(plan)).hexdigest(),
+            "fdfd287c28e439cc20cba55b12c6665653c86f70ed1c16dc5450281cc85ddc5d",
+        )
+        for name, minimum, maximum in (("R", 9000, 11000), ("C", 9e-7, 1.1e-6)):
+            strata = {
+                int(
+                    (float(point["parameters"][name]) - minimum)
+                    / (maximum - minimum)
+                    * 8
+                )
+                for point in plan["points"]
+            }
+            self.assertEqual(strata, set(range(8)))
+        self.assertEqual(
+            [point["parameters"] for point in plan["points"][:3]],
+            [
+                {"R": "10266.003649594882", "C": "9.6614642410280936e-7"},
+                {"R": "9449.9216849581659", "C": "0.0000010986707784386026"},
+                {"R": "10530.513831815364", "C": "9.2615859546493145e-7"},
+            ],
+        )
+        saved = statistical_engine.save_statistical_plan(self.runs, plan)
+        self.assertEqual(saved["sampling_method"], "latin_hypercube")
+        self.assertEqual(
+            statistical_engine.load_statistical_plan(self.runs, saved["plan_id"]),
+            plan,
+        )
+
+    def test_halton_is_deterministic_reorder_stable_and_well_spread(self) -> None:
+        variables = self.variables()
+        plan = statistical_engine.build_statistical_plan(
+            variables, 16, 42, sampling_method="halton"
+        )
+        repeated = statistical_engine.build_statistical_plan(
+            variables, 16, 42, sampling_method="halton"
+        )
+        reordered = statistical_engine.build_statistical_plan(
+            list(reversed(variables)), 16, 42, sampling_method="halton"
+        )
+
+        self.assertEqual(plan, repeated)
+        self.assertEqual(plan["definition"]["sampling_method"], "halton")
+        self.assertEqual(
+            hashlib.sha256(statistical_engine._artifact_bytes(plan)).hexdigest(),
+            "e3367eb82679e9c70a28c4dccfafec4c640448cd3d5a9b9bc29efeedd55811bd",
+        )
+        self.assertEqual(
+            [point["parameters"]["R"] for point in plan["points"]],
+            [point["parameters"]["R"] for point in reordered["points"]],
+        )
+        normalized = sorted(
+            (float(point["parameters"]["R"]) - 9000) / 2000
+            for point in plan["points"]
+        )
+        gaps = [
+            right - left
+            for left, right in zip([0.0, *normalized], [*normalized, 1.0])
+        ]
+        self.assertLess(max(gaps), 0.13)
+
+    def test_stratified_sampling_maps_discrete_empirical_and_corners(self) -> None:
+        plan = statistical_engine.build_statistical_plan(
+            [
+                {
+                    "name": "GRADE",
+                    "distribution": "discrete",
+                    "values": ["A", "B"],
+                    "weights": [1, 3],
+                    "nominal": "B",
+                },
+                {
+                    "name": "LOT",
+                    "distribution": "empirical",
+                    "values": [10, 20, 30, 40],
+                },
+            ],
+            8,
+            7,
+            corner_axes=[
+                {
+                    "name": "load",
+                    "parameter": "RLOAD",
+                    "values": [
+                        {"name": "light", "value": "100k"},
+                        {"name": "heavy", "value": "1k"},
+                    ],
+                }
+            ],
+            sampling_method="latin_hypercube",
+        )
+
+        base_points = plan["points"][::2]
+        self.assertEqual(
+            sorted(point["parameters"]["GRADE"] for point in base_points),
+            ["A", "A", "B", "B", "B", "B", "B", "B"],
+        )
+        self.assertEqual(
+            sorted(point["parameters"]["LOT"] for point in base_points),
+            [
+                "1e+1",
+                "1e+1",
+                "2e+1",
+                "2e+1",
+                "3e+1",
+                "3e+1",
+                "4e+1",
+                "4e+1",
+            ],
+        )
+        self.assertEqual(len(plan["points"]), 16)
+        self.assertEqual(plan["points"][0]["corners"], {"load": "light"})
+        self.assertEqual(plan["points"][1]["corners"], {"load": "heavy"})
+
+    def test_stratified_sampling_rejects_invalid_methods_and_gaussians(self) -> None:
+        with self.assertRaisesRegex(ValueError, "sampling_method must be"):
+            statistical_engine.build_statistical_plan(
+                self.variables(), 4, 1, sampling_method="sobol"
+            )
+        with self.assertRaisesRegex(ValueError, "does not support gaussian"):
+            statistical_engine.build_statistical_plan(
+                [
+                    {
+                        "name": "R",
+                        "distribution": "gaussian",
+                        "minimum": 9000,
+                        "maximum": 11000,
+                        "nominal": 10000,
+                        "sigma": 100,
+                    }
+                ],
+                4,
+                1,
+                sampling_method="halton",
+            )
 
     def test_mixed_plan_matches_gaussian_and_discrete_golden_values(self) -> None:
         plan = statistical_engine.build_statistical_plan(

@@ -385,11 +385,26 @@ Verification gate:
   nominal/light corner passed 4/4 while the deliberately weak nominal/heavy-load
   corner failed 4/4 and remained independently visible at 0% yield
 
-##### Phase 3C-4: Stratified and low-discrepancy sampling
+##### Phase 3C-4: Stratified and low-discrepancy sampling — complete
 
-- Add stratified Latin-hypercube and low-discrepancy sampling as versioned plan
-  generators. Native LTspice stepping remains an execution optimization only
-  when the resulting evidence can be mapped back to every planned point.
+- Optional `independent`, `latin_hypercube`, and seeded digit-scrambled `halton`
+  methods with byte-identical legacy plans when the method is omitted
+- Versioned SHA-256 Latin-hypercube permutations and jitter that use every
+  per-variable stratum exactly once
+- Stable name-ranked Halton prime dimensions, deterministic digit scrambling,
+  and seeded shifts that are invariant to variable declaration reordering
+- Inverse-CDF mapping for uniform, weighted-discrete, and empirical variables,
+  with ordinary sample-major corner expansion and evidence attribution
+- Fail-closed rejection of Gaussian and correlated-Gaussian combinations until
+  Phase 3C-5 supplies a deterministic bounded transform with honest guarantees
+- Golden artifacts, coverage/discrepancy, malformed-input, population,
+  persistence, MCP schema, corner, and macOS/Windows regression coverage
+- A real 16-point scrambled-Halton Sallen-Key study completed every LTspice
+  analysis with no invalid samples and exposed six exact requirement failures
+  (10/16 passing, 62.5% observed yield)
+- Explicit-point execution remains the evidence-preserving path; native
+  LTspice stepping is deferred unless every stepped result can be mapped back
+  to its planned point and complete artifacts
 
 ##### Phase 3C-5: Integration and verification
 

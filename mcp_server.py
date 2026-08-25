@@ -69,6 +69,7 @@ StatisticalVariable = statistical_engine.StatisticalVariable
 StatisticalCorrelation = statistical_engine.StatisticalCorrelation
 StatisticalCornerAxis = statistical_engine.StatisticalCornerAxis
 StatisticalPlanResult = statistical_engine.StatisticalPlanResult
+StatisticalSamplingMethod = Literal["independent", "latin_hypercube", "halton"]
 StatisticalSummaryResult = statistical_results.StatisticalSummaryResult
 
 ExperimentIndexStatus = Literal[
@@ -969,15 +970,18 @@ def generate_statistical_plan(
     correlations: list[StatisticalCorrelation] | None = None,
     corner_axes: list[StatisticalCornerAxis] | None = None,
     corner_aggregate: bool = False,
+    sampling_method: StatisticalSamplingMethod = "independent",
 ) -> StatisticalPlanResult:
     """Generate and persist a deterministic statistical point plan without LTspice.
 
     Supports uniform, bounded Gaussian, weighted discrete, empirical measured
-    populations, explicit correlated-Gaussian groups, and bounded named corner
-    axes. Empirical values may be inline or read from a UTF-8 CSV confined to
-    this project. The versioned seed produces the same canonical paired points
-    on macOS and Windows. Set corner_aggregate only to request a pooled yield in
-    addition to the mandatory per-corner results.
+    populations, explicit correlated-Gaussian groups, bounded named corner
+    axes, Latin-hypercube sampling, and scrambled Halton sampling. Empirical
+    values may be inline or read from a UTF-8 CSV confined to this project. The
+    versioned seed produces the same canonical paired points on macOS and
+    Windows. Stratified methods support uniform, discrete, and empirical
+    variables. Set corner_aggregate only to request a pooled yield in addition
+    to the mandatory per-corner results.
     """
     return statistical_engine.generate_statistical_plan(
         RUNS_DIR,
@@ -988,6 +992,7 @@ def generate_statistical_plan(
         corner_axes,
         corner_aggregate,
         source_root=PROJECT_DIR,
+        sampling_method=sampling_method,
     )
 
 
@@ -1009,6 +1014,7 @@ def _statistical_plan_source(
         "runs_relative_path": f"statistical-plans/{plan_id}/statistical_plan.json",
         "generator_version": plan["generator_version"],
         "definition_hash": plan["definition_hash"],
+        "sampling_method": plan_result["sampling_method"],
     }
     definition = plan["definition"]
     assert isinstance(definition, dict)

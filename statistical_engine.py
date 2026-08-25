@@ -22,6 +22,7 @@ DISTRIBUTION_GENERATOR_VERSION = "sha256-counter-distributions-v2"
 CORRELATION_GENERATOR_VERSION = "sha256-counter-correlations-v3"
 EMPIRICAL_GENERATOR_VERSION = "sha256-counter-empirical-v4"
 CORNER_GENERATOR_VERSION = "sha256-counter-corners-v5"
+STRATIFIED_GENERATOR_VERSION = "sha256-stratified-halton-v6"
 STATISTICAL_GENERATOR_VERSION = UNIFORM_GENERATOR_VERSION
 SUPPORTED_GENERATOR_VERSIONS = {
     UNIFORM_GENERATOR_VERSION,
@@ -29,6 +30,7 @@ SUPPORTED_GENERATOR_VERSIONS = {
     CORRELATION_GENERATOR_VERSION,
     EMPIRICAL_GENERATOR_VERSION,
     CORNER_GENERATOR_VERSION,
+    STRATIFIED_GENERATOR_VERSION,
 }
 MAX_STATISTICAL_SAMPLES = 1_000
 MAX_STATISTICAL_VARIABLES = 32
@@ -44,6 +46,11 @@ MAX_GAUSSIAN_ATTEMPTS = 4_096
 MIN_GAUSSIAN_SPAN_SIGMA = Decimal("0.1")
 PSD_TOLERANCE = Decimal("1e-60")
 MAX_SEED = (1 << 63) - 1
+SAMPLING_METHODS = {"independent", "latin_hypercube", "halton"}
+HALTON_PRIMES = (
+    2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53,
+    59, 61, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127, 131,
+)
 
 
 class StatisticalVariable(TypedDict):
@@ -106,6 +113,7 @@ class StatisticalPlanResult(TypedDict):
     empirical_sources: list[dict[str, object]]
     corner_axes: list[dict[str, object]]
     corner_aggregate: bool
+    sampling_method: str
     sample_count: int
     point_count: int
     parameter_order: list[str]
@@ -594,6 +602,7 @@ def _normalized_definition(
     correlations: list[StatisticalCorrelation] | None = None,
     corner_axes: list[StatisticalCornerAxis] | None = None,
     corner_aggregate: bool = False,
+    sampling_method: str = "independent",
     source_root: Path | None = None,
     allow_empirical_provenance: bool = False,
 ) -> dict[str, object]:
@@ -623,6 +632,10 @@ def _normalized_definition(
         or seed > MAX_SEED
     ):
         raise ValueError(f"seed must be an integer between 0 and {MAX_SEED}")
+    if sampling_method not in SAMPLING_METHODS:
+        raise ValueError(
+            "sampling_method must be 'independent', 'latin_hypercube', or 'halton'"
+        )
 
     normalized_variables: list[dict[str, object]] = []
     seen: set[str] = set()
@@ -837,7 +850,85 @@ def _normalized_definition(
     if normalized_corner_axes:
         definition["corner_axes"] = normalized_corner_axes
         definition["corner_aggregate"] = corner_aggregate
+    if sampling_method != "independent":
+        gaussian = next(
+            (
+                str(variable["name"])
+                for variable in normalized_variables
+                if variable["distribution"] == "gaussian"
+            ),
+            None,
+        )
+        if gaussian is not None:
+            raise ValueError(
+                f"sampling_method {sampling_method} does not support gaussian "
+                f"variable {gaussian}"
+            )
+        definition["sampling_method"] = sampling_method
     return definition
+
+
+def _sampler_digest(*parts: object) -> bytes:
+    return hashlib.sha256(
+        b"\0".join(
+            [STRATIFIED_GENERATOR_VERSION.encode("ascii")]
+            + [str(part).encode("utf-8") for part in parts]
+        )
+    ).digest()
+
+
+def _sampler_unit_fraction(*parts: object) -> Decimal:
+    integer = int.from_bytes(_sampler_digest(*parts)[:8], "big")
+    return Decimal(integer) / Decimal(1 << 64)
+
+
+def _latin_hypercube_fractions(
+    seed: int, name: str, sample_count: int
+) -> list[Decimal]:
+    strata = sorted(
+        range(sample_count),
+        key=lambda index: (
+            _sampler_digest("latin_hypercube", seed, name, index),
+            index,
+        ),
+    )
+    count = Decimal(sample_count)
+    return [
+        (
+            Decimal(strata[sample_index])
+            + _sampler_unit_fraction(
+                "latin_hypercube", seed, name, sample_index, "jitter"
+            )
+        )
+        / count
+        for sample_index in range(sample_count)
+    ]
+
+
+def _halton_fractions(
+    seed: int, name: str, sample_count: int, dimension: int
+) -> list[Decimal]:
+    base = HALTON_PRIMES[dimension]
+    nonzero_digits = sorted(
+        range(1, base),
+        key=lambda digit: (
+            _sampler_digest("halton", seed, name, "digit", digit),
+            digit,
+        ),
+    )
+    permutation = [0, *nonzero_digits]
+    shift = _sampler_unit_fraction("halton", seed, name, "shift")
+    fractions: list[Decimal] = []
+    for sample_index in range(sample_count):
+        index = sample_index + 1
+        denominator = Decimal(base)
+        radical_inverse = Decimal(0)
+        while index:
+            index, digit = divmod(index, base)
+            radical_inverse += Decimal(permutation[digit]) / denominator
+            denominator *= base
+        fractions.append((radical_inverse + shift) % Decimal(1))
+    return fractions
 
 
 def _uniform_fraction(seed: int, sample_index: int, name: str) -> Decimal:
@@ -909,7 +1000,10 @@ def _bounded_gaussian(
 
 
 def _weighted_discrete(
-    variable: dict[str, object], seed: int, sample_index: int
+    variable: dict[str, object],
+    seed: int,
+    sample_index: int,
+    fraction: Decimal | None = None,
 ) -> str:
     name = str(variable["name"])
     values = variable["values"]
@@ -917,8 +1011,10 @@ def _weighted_discrete(
     assert isinstance(values, list) and isinstance(weights, list)
     parsed_weights = [Decimal(str(weight)) for weight in weights]
     total = sum(parsed_weights, Decimal(0))
-    threshold = _distribution_fraction(
-        "discrete", seed, sample_index, name
+    threshold = (
+        _distribution_fraction("discrete", seed, sample_index, name)
+        if fraction is None
+        else fraction
     ) * total
     cumulative = Decimal(0)
     for value, weight in zip(values, parsed_weights):
@@ -963,12 +1059,20 @@ def _empirical_fraction(seed: int, sample_index: int, name: str) -> Decimal:
 
 
 def _empirical_value(
-    variable: dict[str, object], seed: int, sample_index: int
+    variable: dict[str, object],
+    seed: int,
+    sample_index: int,
+    fraction: Decimal | None = None,
 ) -> str:
     values = variable["values"]
     assert isinstance(values, list)
     index = int(
-        _empirical_fraction(seed, sample_index, str(variable["name"])) * len(values)
+        (
+            _empirical_fraction(seed, sample_index, str(variable["name"]))
+            if fraction is None
+            else fraction
+        )
+        * len(values)
     )
     return str(values[index])
 
@@ -1039,6 +1143,7 @@ def build_statistical_plan(
     corner_aggregate: bool = False,
     source_root: Path | None = None,
     _allow_empirical_provenance: bool = False,
+    sampling_method: str = "independent",
 ) -> StatisticalPlan:
     """Build a portable, deterministic plan without running LTspice."""
     definition = _normalized_definition(
@@ -1048,6 +1153,7 @@ def build_statistical_plan(
         correlations,
         corner_axes,
         corner_aggregate,
+        sampling_method,
         source_root,
         _allow_empirical_provenance,
     )
@@ -1057,8 +1163,13 @@ def build_statistical_plan(
     assert isinstance(normalized_correlations, list)
     normalized_corner_axes = definition.get("corner_axes", [])
     assert isinstance(normalized_corner_axes, list)
+    normalized_sampling_method = str(
+        definition.get("sampling_method", "independent")
+    )
     generator_version = (
-        CORNER_GENERATOR_VERSION
+        STRATIFIED_GENERATOR_VERSION
+        if normalized_sampling_method != "independent"
+        else CORNER_GENERATOR_VERSION
         if normalized_corner_axes
         else EMPIRICAL_GENERATOR_VERSION
         if any(
@@ -1100,6 +1211,25 @@ def build_statistical_plan(
         )
         for group in normalized_correlations
     }
+    sampling_fractions: dict[str, list[Decimal]] = {}
+    if normalized_sampling_method == "latin_hypercube":
+        sampling_fractions = {
+            str(variable["name"]): _latin_hypercube_fractions(
+                seed, str(variable["name"]), sample_count
+            )
+            for variable in normalized_variables
+        }
+    elif normalized_sampling_method == "halton":
+        dimensions = {
+            name: dimension
+            for dimension, name in enumerate(
+                sorted(str(variable["name"]) for variable in normalized_variables)
+            )
+        }
+        sampling_fractions = {
+            name: _halton_fractions(seed, name, sample_count, dimension)
+            for name, dimension in dimensions.items()
+        }
     with localcontext() as context:
         context.prec = 80
         for sample_index in range(sample_count):
@@ -1120,6 +1250,11 @@ def build_statistical_plan(
             for variable in normalized_variables:
                 name = str(variable["name"])
                 distribution = variable["distribution"]
+                fraction = (
+                    sampling_fractions[name][sample_index]
+                    if sampling_fractions
+                    else None
+                )
                 if name in correlated_names:
                     parameters[name] = _bounded_canonical_decimal(
                         correlated_values[name],
@@ -1129,8 +1264,10 @@ def build_statistical_plan(
                 elif distribution == "uniform":
                     minimum = Decimal(str(variable["minimum"]))
                     maximum = Decimal(str(variable["maximum"]))
-                    value = minimum + (maximum - minimum) * _uniform_fraction(
-                        seed, sample_index, name
+                    value = minimum + (maximum - minimum) * (
+                        _uniform_fraction(seed, sample_index, name)
+                        if fraction is None
+                        else fraction
                     )
                     parameters[name] = _bounded_canonical_decimal(
                         value, minimum, maximum
@@ -1145,11 +1282,11 @@ def build_statistical_plan(
                     )
                 elif distribution == "discrete":
                     parameters[name] = _weighted_discrete(
-                        variable, seed, sample_index
+                        variable, seed, sample_index, fraction
                     )
                 else:
                     parameters[name] = _empirical_value(
-                        variable, seed, sample_index
+                        variable, seed, sample_index, fraction
                     )
             sample_points.append({"index": sample_index, "parameters": parameters})
     points: list[StatisticalPlanPoint]
@@ -1265,6 +1402,9 @@ def save_statistical_plan(runs_dir: Path, plan: StatisticalPlan) -> StatisticalP
         "empirical_sources": _empirical_sources(plan),
         "corner_axes": plan["definition"].get("corner_axes", []),
         "corner_aggregate": bool(plan["definition"].get("corner_aggregate", False)),
+        "sampling_method": str(
+            plan["definition"].get("sampling_method", "independent")
+        ),
         "sample_count": plan["sample_count"],
         "point_count": len(plan["points"]),
         "parameter_order": plan["parameter_order"],
@@ -1282,6 +1422,7 @@ def generate_statistical_plan(
     corner_axes: list[StatisticalCornerAxis] | None = None,
     corner_aggregate: bool = False,
     source_root: Path | None = None,
+    sampling_method: str = "independent",
 ) -> StatisticalPlanResult:
     return save_statistical_plan(
         runs_dir,
@@ -1293,6 +1434,7 @@ def generate_statistical_plan(
             corner_axes,
             corner_aggregate,
             source_root=source_root,
+            sampling_method=sampling_method,
         ),
     )
 
@@ -1310,6 +1452,9 @@ def inspect_statistical_plan(runs_dir: Path, plan_id: str) -> StatisticalPlanRes
         "empirical_sources": _empirical_sources(plan),
         "corner_axes": plan["definition"].get("corner_axes", []),
         "corner_aggregate": bool(plan["definition"].get("corner_aggregate", False)),
+        "sampling_method": str(
+            plan["definition"].get("sampling_method", "independent")
+        ),
         "sample_count": plan["sample_count"],
         "point_count": len(plan["points"]),
         "parameter_order": plan["parameter_order"],
@@ -1358,6 +1503,7 @@ def load_statistical_plan(runs_dir: Path, plan_id: str) -> StatisticalPlan:
     correlations = definition.get("correlations")
     corner_axes = definition.get("corner_axes")
     corner_aggregate = definition.get("corner_aggregate", False)
+    sampling_method = definition.get("sampling_method", "independent")
     if not isinstance(variables, list):
         raise ValueError("statistical plan variables are invalid")
     rebuilt = build_statistical_plan(  # type: ignore[arg-type]
@@ -1368,6 +1514,7 @@ def load_statistical_plan(runs_dir: Path, plan_id: str) -> StatisticalPlan:
         corner_axes,
         corner_aggregate,
         _allow_empirical_provenance=True,
+        sampling_method=sampling_method,
     )
     if value != rebuilt:
         raise ValueError("statistical plan contents do not match its definition")

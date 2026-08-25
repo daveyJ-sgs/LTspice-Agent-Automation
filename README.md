@@ -533,6 +533,41 @@ separately. The overall yield is deliberately absent unless
 `corner_aggregate` is explicitly `true`, in which case a clearly labeled
 pooled yield is added without replacing the per-corner results.
 
+Phase 3C-4 adds deterministic space-filling alternatives to independent random
+sampling. Set `sampling_method` when generating a plan:
+
+```json
+{
+  "variables": [
+    {"name": "R", "distribution": "uniform", "minimum": 9000,
+     "maximum": 11000, "nominal": 10000, "unit": "ohm"},
+    {"name": "C", "distribution": "empirical",
+     "values": [9.8e-9, 10e-9, 10.2e-9], "unit": "F"}
+  ],
+  "sample_count": 16,
+  "seed": 20260824,
+  "sampling_method": "latin_hypercube"
+}
+```
+
+`latin_hypercube` uses every one-dimensional stratum exactly once, with a
+seeded permutation and deterministic within-stratum jitter for each variable.
+`halton` uses stable prime dimensions, deterministic digit scrambling, and a
+seeded shift. Variable names determine their streams and Halton dimensions, so
+reordering declarations does not redraw an existing named variable. Uniform
+variables use the resulting fraction directly; weighted-discrete and empirical
+variables use inverse-CDF selection. Named corners still expand after sampling
+and therefore preserve the same sample-major evidence mapping.
+
+Omitting `sampling_method`, or setting it to `independent`, preserves all prior
+generator versions and artifact bytes. The versioned stratified generator is
+`sha256-stratified-halton-v6`. Phase 3C-4 deliberately rejects Gaussian and
+correlated-Gaussian variables under the two space-filling methods: correct
+bounded and correlated Gaussian stratification needs a deterministic truncated
+normal transform and is reserved for Phase 3C-5 rather than approximated or
+silently clipped. Native LTspice stepping is not used; each planned point keeps
+its own log, RAW file, measurements, and requirement evidence.
+
 Use `get_statistical_plan` to verify and inspect an existing plan. Pass its
 `plan_id` plus an ordinary netlist template to `run_statistical_experiment`:
 

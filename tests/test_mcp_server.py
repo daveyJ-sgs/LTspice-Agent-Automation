@@ -996,6 +996,10 @@ class MCPServerTests(unittest.TestCase):
         self.assertIn("correlations", properties)
         self.assertIn("corner_axes", properties)
         self.assertIn("corner_aggregate", properties)
+        self.assertEqual(
+            properties["sampling_method"]["enum"],
+            ["independent", "latin_hypercube", "halton"],
+        )
         variable_schema = by_name["generate_statistical_plan"].input_schema["$defs"][
             "StatisticalVariable"
         ]["properties"]
@@ -1016,6 +1020,10 @@ class MCPServerTests(unittest.TestCase):
         )
         self.assertIn(
             "point_count",
+            by_name["generate_statistical_plan"].output_schema["properties"],
+        )
+        self.assertIn(
+            "sampling_method",
             by_name["generate_statistical_plan"].output_schema["properties"],
         )
         correlated = asyncio.run(
@@ -1113,6 +1121,30 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(
             cornered.structured_content["points"][2]["corners"],
             {"temperature": "cold"},
+        )
+        halton = asyncio.run(
+            mcp_server.mcp.call_tool(
+                "generate_statistical_plan",
+                {
+                    "variables": [
+                        {
+                            "name": "R",
+                            "distribution": "uniform",
+                            "minimum": 9000,
+                            "maximum": 11000,
+                        }
+                    ],
+                    "sample_count": 4,
+                    "seed": 1,
+                    "sampling_method": "halton",
+                },
+            )
+        )
+        self.assertFalse(halton.is_error)
+        self.assertEqual(halton.structured_content["sampling_method"], "halton")
+        self.assertEqual(
+            halton.structured_content["generator_version"],
+            "sha256-stratified-halton-v6",
         )
 
     def test_durable_statistical_study_executes_frozen_plan_without_resampling(
