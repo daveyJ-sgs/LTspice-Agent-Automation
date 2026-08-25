@@ -2237,6 +2237,7 @@ class MCPServerTests(unittest.TestCase):
         maximum_active = 0
         completion_order: list[int] = []
         first_pair = threading.Barrier(2)
+        point_one_finished = threading.Event()
 
         def execute_point(
             index: int,
@@ -2251,9 +2252,13 @@ class MCPServerTests(unittest.TestCase):
             try:
                 if index < 2:
                     first_pair.wait()
+                if index == 0 and not point_one_finished.wait(2):
+                    raise RuntimeError("point 1 did not finish before point 0")
                 time.sleep(0.01 * (4 - index))
                 point_dir.mkdir(parents=True)
                 completion_order.append(index)
+                if index == 1:
+                    point_one_finished.set()
                 return {
                     "index": index,
                     "parameters": combination,
