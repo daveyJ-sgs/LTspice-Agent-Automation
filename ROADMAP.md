@@ -886,13 +886,18 @@ expensive evaluation.
 
 ## Immediate next milestone
 
-Begin Phase 3B with the smallest complete durable-yield slice:
+Begin Phase 4A with the smallest complete deterministic optimization slice:
 
-1. Define a statistical-study artifact that binds an immutable point plan to
-   an experiment definition and its requirements.
-2. Execute the saved plan through the durable Phase 2 worker without redrawing
-   samples during cancellation or resume.
-3. Separate simulation/analysis errors from electrical requirement failures.
-4. Produce observed yield and a Wilson binomial confidence interval with
-   hand-calculated fixtures.
-5. Validate one resumable Sallen-Key tolerance study on macOS and Windows.
+1. Freeze a versioned candidate-plan schema that records optimizer state,
+   objectives, hard constraints, parameter domains, and reproducibility data.
+2. Generate a bounded coarse Sallen-Key candidate population containing
+   continuous and preferred-value-series component choices without invoking a
+   second simulation runner.
+3. Evaluate candidates through the existing experiment and requirement paths,
+   keeping electrical constraint failures separate from simulation or analysis
+   errors.
+4. Produce a traceable Pareto report and an explicit explanation for one
+   selected candidate; do not add local refinement until the coarse-search
+   evidence contract is stable.
+5. Serialize, resume, and compare the same candidate plan on macOS and Windows
+   before expanding Phase 4 to additional parameter types or the DAQ circuit.
