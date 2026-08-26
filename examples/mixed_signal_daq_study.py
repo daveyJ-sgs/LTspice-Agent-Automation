@@ -212,7 +212,7 @@ def _finish(experiment_id: str) -> dict[str, object]:
     return {"summary": summary, "report": report}
 
 
-def main() -> None:
+def run_study() -> dict[str, object]:
     plan = generate_statistical_plan(
         VARIABLES,
         SAMPLE_COUNT,
@@ -240,11 +240,23 @@ def main() -> None:
     ac_outputs = _finish(ac["experiment_id"])
     transient_outputs = _finish(transient["experiment_id"])
 
+    return {
+        "plan": plan,
+        "ac": {"experiment": ac, **ac_outputs},
+        "transient": {"experiment": transient, **transient_outputs},
+    }
+
+
+def main() -> None:
+    study = run_study()
+    plan = study["plan"]
+
     print(f"Plan: {plan['plan_id']} ({plan['point_count']} points)")
-    for label, experiment, outputs in (
-        ("AC", ac, ac_outputs),
-        ("Transient", transient, transient_outputs),
+    for label, outputs in (
+        ("AC", study["ac"]),
+        ("Transient", study["transient"]),
     ):
+        experiment = outputs["experiment"]
         summary = outputs["summary"]
         observed = summary["observed_yield"]
         if observed is None:

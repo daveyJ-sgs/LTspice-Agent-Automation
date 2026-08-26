@@ -1,4 +1,4 @@
-name: Real LTspice Windows smoke
+name: Real LTspice Windows qualification
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ concurrency:
 jobs:
   real-ltspice:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       LTSPICE_VERSION: 26.0.2
       LTSPICE_MSI_SHA256: 485dabd2d7d8293de733a399719f6538efda4a54b48b181a14e07271186984d3
@@ -24,6 +24,10 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
+
+      - name: Install Python analysis dependencies
+        shell: pwsh
+        run: python -m pip install -r requirements.txt -r requirements-mcp.txt
 
       - name: Download and verify official LTspice installer
         shell: pwsh
@@ -167,6 +171,13 @@ jobs:
         timeout-minutes: 3
         run: python tests/real_ltspice_smoke.py
 
+      - name: Run complete structured DAQ qualification
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          REAL_LTSPICE_DAQ_EVIDENCE_DIR: ${{ runner.temp }}\ltspice-real-daq
+        run: python tests/real_ltspice_daq.py
+
       - name: Upload compact verification evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -181,3 +192,4 @@ jobs:
             ${{ runner.temp }}/ltspice-real-smoke/rc_lowpass.log
             ${{ runner.temp }}/ltspice-real-smoke/rc_lowpass.raw
             ${{ runner.temp }}/ltspice-real-smoke/smoke_summary.json
+            ${{ runner.temp }}/ltspice-real-daq

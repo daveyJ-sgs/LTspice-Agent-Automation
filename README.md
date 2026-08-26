@@ -298,6 +298,16 @@ sensitivity, and interactive offline HTML. The companion
 can resolve the real pass/fail acquisition-time boundary without conflating
 other tolerances.
 
+Open [`examples/mixed_signal_daq.asc`](examples/mixed_signal_daq.asc) in
+LTspice for the human-facing version of the acquisition channel. It uses stock
+LTspice symbols, labeled functional blocks and nets, nominal parameter values,
+and notes explaining the filter, buffer, ADC driver, sample/hold, ADC loading,
+droop, and acquisition-error observer. The active schematic is the nominal
+transient profile; a note identifies the source and clock changes used by the
+companion AC study. Automation continues to run the `.cir` templates, and a
+regression test keeps the schematic component/value inventory aligned with the
+transient netlist.
+
 ## Search for a target response
 
 The design-search example uses a logarithmic binary search to select resistance
@@ -1119,15 +1129,20 @@ Then launch LTspice once from the Start menu and answer the "Anonymously Share
 LTspice Usage Data" prompt. Until it is answered, batch mode hangs with no
 output and no error; see [LEARNINGS.md](LEARNINGS.md#windows-portability).
 
-The opt-in `Real LTspice Windows smoke` GitHub workflow performs the same path
-on an ephemeral hosted runner without burdening every push. It downloads the
-[official Analog Devices Windows installer](https://www.analog.com/en/resources/design-tools-and-calculators/ltspice-simulator.html),
+The opt-in `Real LTspice Windows qualification` GitHub workflow performs the
+same path on an ephemeral hosted runner without burdening every push. It
+downloads the [official Analog Devices Windows installer](https://www.analog.com/en/resources/design-tools-and-calculators/ltspice-simulator.html),
 pins version 26.0.2 and the complete MSI SHA-256, installs silently, explicitly
-selects **No** in the first-run usage-data dialog, and then executes
-`tests/real_ltspice_smoke.py`. The smoke requires a real 501-point RAW file,
-decoded `.meas` evidence, the expected RC cutoff and gain, and a completed run
-manifest. The RAW waveform plus compact logs, manifest, summary, and first-run
-screenshot are kept for seven days. Run it manually with:
+selects **No** in the first-run usage-data dialog, and then executes both
+`tests/real_ltspice_smoke.py` and `tests/real_ltspice_daq.py`. The RC smoke
+requires a real 501-point RAW file, decoded `.meas` evidence, the expected
+cutoff and gain, and a completed run manifest. The DAQ qualification runs the
+complete shared 24-point AC and 24-point transient statistical studies and
+fails closed unless both ADC-load corners pass without simulation or analysis
+errors. Its uploaded evidence preserves the immutable point plan, all primary
+RAW/log/run-manifest files, structured JSON/CSV analyses, and both interactive
+HTML reports with their relative links intact. Evidence is retained for seven
+days. Run it manually with:
 
 ```bash
 gh workflow run ltspice-windows-real.yml --ref main
