@@ -72,10 +72,12 @@ jobs:
           $ErrorActionPreference = "Stop"
           Add-Type -AssemblyName UIAutomationClient
           Add-Type -AssemblyName UIAutomationTypes
+          Add-Type -AssemblyName System.Drawing
           $process = Start-Process $env:LTSPICE_EXECUTABLE -PassThru
           $deadline = (Get-Date).AddSeconds(30)
           $declined = $false
-          while ((Get-Date) -lt $deadline -and -not $declined) {
+          $captured = $false
+          while ((Get-Date) -lt $deadline -and -not $declined -and -not $captured) {
             Start-Sleep -Milliseconds 250
             $process.Refresh()
             if ($process.HasExited) {
@@ -89,6 +91,25 @@ jobs:
             }
             foreach ($window in $windows) {
               Write-Host "LTspice window: $($window.Current.Name)"
+              if ($window.Current.Name -eq "Anonymously Share LTspice Usage Data") {
+                $bounds = $window.Current.BoundingRectangle
+                $bitmap = [System.Drawing.Bitmap]::new(
+                  [int]$bounds.Width, [int]$bounds.Height
+                )
+                $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+                $graphics.CopyFromScreen(
+                  [int]$bounds.X,
+                  [int]$bounds.Y,
+                  0,
+                  0,
+                  $bitmap.Size
+                )
+                $screenshot = Join-Path $env:RUNNER_TEMP "ltspice-first-run.png"
+                $bitmap.Save($screenshot, [System.Drawing.Imaging.ImageFormat]::Png)
+                $graphics.Dispose()
+                $bitmap.Dispose()
+                $captured = $true
+              }
               $buttons = $window.FindAll(
                 [System.Windows.Automation.TreeScope]::Descendants,
                 [System.Windows.Automation.Condition]::TrueCondition
@@ -111,7 +132,7 @@ jobs:
           }
           if (-not $declined) {
             if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
-            throw "LTspice first-run usage-data dialog was not found"
+            throw "LTspice first-run usage-data dialog requires bounded targeting"
           }
           Start-Sleep -Seconds 2
           $process.Refresh()
@@ -131,6 +152,7 @@ jobs:
           retention-days: 7
           path: |
             ${{ runner.temp }}/ltspice-install.log
+            ${{ runner.temp }}/ltspice-first-run.png
             ${{ runner.temp }}/ltspice-real-smoke/run_manifest.json
             ${{ runner.temp }}/ltspice-real-smoke/rc_lowpass.log
             ${{ runner.temp }}/ltspice-real-smoke/smoke_summary.json
