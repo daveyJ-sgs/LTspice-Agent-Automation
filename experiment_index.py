@@ -527,6 +527,16 @@ def _requirement_row(
             raise ValueError("requirement parameters must be finite")
     target = _finite_number(threshold.get("target"), "requirement target")
     measured = _finite_number(value.get("value"), "requirement value")
+    comparisons = {
+        "<": measured < target,
+        "<=": measured <= target,
+        ">": measured > target,
+        ">=": measured >= target,
+    }
+    if operator not in comparisons:
+        raise ValueError("requirement threshold operator is invalid")
+    if passed != comparisons[operator]:
+        raise ValueError("requirement passed state does not match its threshold")
     parameters_json = json.dumps(
         parameters,
         sort_keys=True,
@@ -1113,6 +1123,7 @@ def _insert_children(
 
 
 def _statistical_metadata(
+    root: Path,
     manifest: dict[str, object],
     results: dict[str, object] | None,
     parameters: list[dict[str, object]],
@@ -1163,7 +1174,7 @@ def _statistical_metadata(
     )
     import statistical_results
 
-    provenance = statistical_results._sampling_provenance(source)
+    provenance, _ = statistical_results._verified_sampling_plan(root, source)
     metadata: dict[str, object] = {
         "sampling_method": provenance["sampling_method"],
     }
@@ -1292,7 +1303,7 @@ def build_experiment_index(
                         statistical_variables,
                         statistical_corners,
                         statistical_corner_summaries,
-                    ) = _statistical_metadata(manifest, None, parameters)
+                    ) = _statistical_metadata(root, manifest, None, parameters)
                     record.update(statistical_metadata)
                 except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
                     issues.append(
@@ -1341,7 +1352,7 @@ def build_experiment_index(
                                 _,
                                 _,
                                 statistical_corner_summaries,
-                            ) = _statistical_metadata(manifest, results, parameters)
+                            ) = _statistical_metadata(root, manifest, results, parameters)
                             record.update(statistical_metadata)
                         except (
                             OSError,

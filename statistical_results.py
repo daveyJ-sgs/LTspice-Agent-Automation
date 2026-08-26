@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import math
@@ -14,10 +15,12 @@ from pathlib import Path
 from typing import TypedDict
 
 import experiment_index
+import statistical_engine
 
 STATISTICS_SCHEMA_VERSION = 2
 CONFIDENCE_LEVEL = 0.95
 _Z_95 = 1.959963984540054
+MAX_ANALYSIS_ROWS = 2_000
 
 
 class SamplingProvenance(TypedDict):
@@ -98,6 +101,25 @@ def _sampling_provenance(source: dict[str, object]) -> SamplingProvenance:
         "definition_hash": definition_hash,
         "runs_relative_path": runs_relative_path,
     }
+
+
+def _verified_sampling_plan(
+    runs_dir: Path, source: dict[str, object]
+) -> tuple[SamplingProvenance, statistical_engine.StatisticalPlan]:
+    provenance = _sampling_provenance(source)
+    plan = statistical_engine.load_statistical_plan(runs_dir, provenance["plan_id"])
+    plan_path = runs_dir / provenance["runs_relative_path"]
+    if hashlib.sha256(plan_path.read_bytes()).hexdigest() != provenance["plan_sha256"]:
+        raise ValueError("statistical plan does not match experiment provenance")
+    definition = plan["definition"]
+    if (
+        plan["generator_version"] != provenance["generator_version"]
+        or plan["definition_hash"] != provenance["definition_hash"]
+        or str(definition.get("sampling_method", "independent"))
+        != provenance["sampling_method"]
+    ):
+        raise ValueError("statistical plan metadata does not match experiment provenance")
+    return provenance, plan
 
 
 def _percentile(values: list[float], fraction: float) -> float:
@@ -560,7 +582,7 @@ def summarize_statistical_experiment(
     source = point_plan.get("source") if isinstance(point_plan, dict) else None
     if not isinstance(source, dict) or source.get("kind") != "statistical":
         raise ValueError(f"Experiment {experiment_id} is not a statistical study")
-    provenance = _sampling_provenance(source)
+    provenance, _ = _verified_sampling_plan(runs_dir, source)
     point_metadata = source.get("point_metadata")
     corner_axes = source.get("corner_axes")
     if corner_axes and not isinstance(point_metadata, list):

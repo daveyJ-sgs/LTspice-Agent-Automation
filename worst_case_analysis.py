@@ -81,6 +81,7 @@ def build_worst_case_analysis(
     *,
     point_metadata: list[dict[str, object]] | None = None,
     sampling_provenance: statistical_results.SamplingProvenance | None = None,
+    _enforce_artifact_budget: bool = True,
 ) -> dict[str, object]:
     """Rank validated requirement results without comparing unlike checks."""
     points = results["points"]
@@ -208,6 +209,14 @@ def build_worst_case_analysis(
             group["check_id"],
         ),
     )
+    artifact_rows = len(ordered_groups) * len(corner_identities) + sum(
+        min(WORST_CASE_LIMIT, len(group["records"])) for group in ordered_groups
+    )
+    if (
+        _enforce_artifact_budget
+        and artifact_rows > statistical_results.MAX_ANALYSIS_ROWS
+    ):
+        raise ValueError("worst-case analysis exceeds artifact row budget")
     for group in ordered_groups:
         records = group.pop("records")
         assert isinstance(records, list)
@@ -219,12 +228,21 @@ def build_worst_case_analysis(
         cutoff = min(WORST_CASE_LIMIT, len(records))
         if cutoff:
             cutoff_margin = records[cutoff - 1]["margin"]
+            returned_count = sum(
+                record["margin"] <= cutoff_margin for record in records
+            )
+            if (
+                _enforce_artifact_budget
+                and artifact_rows + returned_count - cutoff
+                > statistical_results.MAX_ANALYSIS_ROWS
+            ):
+                raise ValueError("worst-case analysis exceeds artifact row budget")
             worst_cases = [
                 record for record in records if record["margin"] <= cutoff_margin
             ]
         else:
             worst_cases = []
-
+        artifact_rows += len(worst_cases) - cutoff
         by_corner: dict[str, dict[str, object]] = {
             identity: {"corners": corners, "records": []}
             for identity, corners in corner_identities.items()
@@ -414,7 +432,7 @@ def analyze_statistical_worst_cases(
     source = point_plan.get("source") if isinstance(point_plan, dict) else None
     if not isinstance(source, dict) or source.get("kind") != "statistical":
         raise ValueError(f"Experiment {experiment_id} is not a statistical study")
-    provenance = statistical_results._sampling_provenance(source)
+    provenance, _ = statistical_results._verified_sampling_plan(runs_dir, source)
     point_metadata = source.get("point_metadata")
     corner_axes = source.get("corner_axes")
     if corner_axes and not isinstance(point_metadata, list):

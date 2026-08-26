@@ -157,6 +157,25 @@ class WorstCaseAnalysisTests(unittest.TestCase):
         self.assertEqual(gain["worst_cases"][-1]["rank"], 25)
         self.assertEqual(gain["corner_rankings"], [])
 
+    def test_tie_expansion_respects_artifact_row_budget(self) -> None:
+        points = [self.point(index, 100, 1) for index in range(3)]
+
+        with (
+            patch.object(
+                worst_case_analysis.statistical_results, "MAX_ANALYSIS_ROWS", 2
+            ),
+            self.assertRaisesRegex(ValueError, "artifact row budget"),
+        ):
+            worst_case_analysis.build_worst_case_analysis(
+                {
+                    "experiment_id": (
+                        "mcp-experiment-20260825-090000-000000-a1b2c3d4"
+                    ),
+                    "point_count": len(points),
+                    "points": points,
+                }
+            )
+
     def test_all_comparison_operators_have_signed_boundary_semantics(self) -> None:
         expected = {
             "<": False,
@@ -248,6 +267,15 @@ class WorstCaseAnalysisTests(unittest.TestCase):
                     experiment_dir,
                     {"definition": {"point_plan": {"source": source}}},
                     results,
+                    {},
+                ),
+            ), patch.object(
+                worst_case_analysis.statistical_results,
+                "_verified_sampling_plan",
+                return_value=(
+                    worst_case_analysis.statistical_results._sampling_provenance(
+                        source
+                    ),
                     {},
                 ),
             ):

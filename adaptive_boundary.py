@@ -547,6 +547,9 @@ def advance_adaptive_boundary_study(
         if isinstance(active, dict):
             child = manager.snapshot(str(active["experiment_id"]))
             child_status = str(child["status"])
+            if child_status == "defined":
+                manager.start(str(active["experiment_id"]))
+                return _snapshot(manifest, path)
             if child_status not in {"completed", "failed", "cancelled"}:
                 return _snapshot(manifest, path)
             if child_status != "completed":

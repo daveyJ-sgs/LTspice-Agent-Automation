@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import io
 import json
 import math
@@ -99,7 +98,9 @@ def _correlated_inputs(definition: dict[str, object]) -> dict[str, list[str]]:
 def _requirement_observations(
     results: dict[str, object],
 ) -> tuple[dict[str, dict[int, float]], dict[str, dict[str, object]]]:
-    validated = worst_case_analysis.build_worst_case_analysis(results)
+    validated = worst_case_analysis.build_worst_case_analysis(
+        results, _enforce_artifact_budget=False
+    )
     requirements = validated["requirements"]
     assert isinstance(requirements, list)
     requirement_metadata = {
@@ -274,6 +275,9 @@ def build_sensitivity_analysis(
             requirement["check_id"],
         ),
     )
+    projected_rows = len(ordered_metadata) * len(scope_corners) * len(variables)
+    if projected_rows > statistical_results.MAX_ANALYSIS_ROWS:
+        raise ValueError("sensitivity analysis exceeds artifact row budget")
     for requirement in ordered_metadata:
         check_id = str(requirement["check_id"])
         requirement_scopes: list[dict[str, object]] = []
@@ -439,20 +443,7 @@ def analyze_statistical_sensitivity(
     source = point_plan.get("source") if isinstance(point_plan, dict) else None
     if not isinstance(source, dict) or source.get("kind") != "statistical":
         raise ValueError(f"Experiment {experiment_id} is not a statistical study")
-    provenance = statistical_results._sampling_provenance(source)
-    plan = statistical_engine.load_statistical_plan(runs_dir, provenance["plan_id"])
-    plan_path = runs_dir / provenance["runs_relative_path"]
-    if hashlib.sha256(plan_path.read_bytes()).hexdigest() != provenance["plan_sha256"]:
-        raise ValueError("statistical plan does not match experiment provenance")
-    if (
-        plan["generator_version"] != provenance["generator_version"]
-        or plan["definition_hash"] != provenance["definition_hash"]
-        or str(plan["definition"].get("sampling_method", "independent"))
-        != provenance["sampling_method"]
-    ):
-        raise ValueError(
-            "statistical plan metadata does not match experiment provenance"
-        )
+    provenance, plan = statistical_results._verified_sampling_plan(runs_dir, source)
     point_metadata = source.get("point_metadata")
     corner_axes = source.get("corner_axes")
     if corner_axes and not isinstance(point_metadata, list):

@@ -282,6 +282,28 @@ class SensitivityAnalysisTests(unittest.TestCase):
         )
         self.assertEqual(sensitivity_analysis._spearman([1, 1, 2], [2, 2, 3]), 1)
 
+    def test_projected_artifact_rows_fail_before_materialization(self) -> None:
+        results, plan = self.fixture()
+
+        with (
+            patch.object(
+                sensitivity_analysis.statistical_results, "MAX_ANALYSIS_ROWS", 7
+            ),
+            self.assertRaisesRegex(ValueError, "sensitivity analysis exceeds"),
+        ):
+            sensitivity_analysis.build_sensitivity_analysis(results, plan)
+
+    def test_worst_case_budget_does_not_block_smaller_sensitivity(self) -> None:
+        results, plan = self.fixture()
+
+        with patch.object(
+            sensitivity_analysis.statistical_results, "MAX_ANALYSIS_ROWS", 10
+        ):
+            analysis = sensitivity_analysis.build_sensitivity_analysis(results, plan)
+
+        self.assertEqual(analysis["requirement_count"], 2)
+        self.assertEqual(analysis["variable_count"], 4)
+
     def test_terminal_study_writes_json_and_csv(self) -> None:
         results, plan = self.fixture()
         artifact = b"validated plan bytes\n"

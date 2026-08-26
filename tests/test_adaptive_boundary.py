@@ -40,6 +40,18 @@ class FakeManager:
         }
 
 
+class FailFirstStartManager(FakeManager):
+    def __init__(self) -> None:
+        super().__init__()
+        self.start_calls = 0
+
+    def start(self, experiment_id: str) -> dict[str, object]:
+        self.start_calls += 1
+        if self.start_calls == 1:
+            raise RuntimeError("interrupted before queueing")
+        return super().start(experiment_id)
+
+
 class AdaptiveBoundaryTests(unittest.TestCase):
     @staticmethod
     def check_id() -> str:
@@ -189,6 +201,44 @@ class AdaptiveBoundaryTests(unittest.TestCase):
                 runs, defined["adaptive_id"]
             )
             self.assertEqual(reloaded, completed)
+
+    def test_defined_active_batch_restarts_after_interrupted_start(self) -> None:
+        source_manifest, source_results = self.source()
+        manager = FailFirstStartManager()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            runs = Path(temporary_directory) / "runs"
+            runs.mkdir()
+            with patch.object(
+                adaptive_boundary.experiment_index,
+                "load_completed_experiment",
+                return_value=(runs / "source", source_manifest, source_results, {}),
+            ):
+                defined = adaptive_boundary.define_adaptive_boundary_study(
+                    runs,
+                    "mcp-experiment-source",
+                    0,
+                    1,
+                    self.check_id(),
+                    "X",
+                    batch_size=1,
+                    max_samples=1,
+                    input_tolerance=1e-9,
+                )
+
+            with self.assertRaisesRegex(RuntimeError, "interrupted"):
+                adaptive_boundary.advance_adaptive_boundary_study(
+                    runs, defined["adaptive_id"], manager
+                )
+            child_id = str(manager.defined[0]["experiment_id"])
+            self.assertEqual(manager.statuses[child_id], "defined")
+
+            resumed = adaptive_boundary.advance_adaptive_boundary_study(
+                runs, defined["adaptive_id"], manager
+            )
+
+            self.assertEqual(resumed["status"], "running")
+            self.assertEqual(manager.statuses[child_id], "queued")
+            self.assertEqual(manager.start_calls, 2)
 
     def test_sample_budget_and_definition_are_deterministic(self) -> None:
         source_manifest, source_results = self.source()

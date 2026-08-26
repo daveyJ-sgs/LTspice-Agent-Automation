@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import experiment_index
+import statistical_engine
 
 
 class ExperimentIndexTests(unittest.TestCase):
@@ -45,7 +46,7 @@ class ExperimentIndexTests(unittest.TestCase):
                         "results": [
                             {
                                 "metric": "cutoff_frequency",
-                                "value": 1200.0,
+                                "value": 1200.0 if passed else 800.0,
                                 "unit": "Hz",
                                 "threshold": {
                                     "operator": ">=",
@@ -271,11 +272,41 @@ class ExperimentIndexTests(unittest.TestCase):
 
     def test_indexes_and_queries_statistical_definitions_and_summaries(self) -> None:
         experiment_id = "mcp-experiment-20260824-141000-000000-acde1234"
+        plan = statistical_engine.build_statistical_plan(
+            [
+                {
+                    "name": "R",
+                    "distribution": "discrete",
+                    "values": ["1k", "2k"],
+                    "weights": [1, 1],
+                    "nominal": "1k",
+                    "unit": "ohm",
+                }
+            ],
+            2,
+            20260824,
+            corner_axes=[
+                {
+                    "name": "process",
+                    "parameter": "C",
+                    "unit": "F",
+                    "values": [
+                        {"name": "fast", "value": "10n"},
+                        {"name": "slow", "value": "20n"},
+                    ],
+                }
+            ],
+            corner_aggregate=True,
+            sampling_method="halton",
+        )
+        saved_plan = statistical_engine.save_statistical_plan(self.runs, plan)
         points = [
-            self.point(0, {"R": "1k", "C": "10n"}, passed=True),
-            self.point(1, {"R": "1k", "C": "20n"}, passed=False),
-            self.point(2, {"R": "2k", "C": "10n"}, passed=True),
-            self.point(3, {"R": "2k", "C": "20n"}, passed=False),
+            self.point(
+                index,
+                dict(plan_point["parameters"]),
+                passed=plan_point["corners"] == {"process": "fast"},
+            )
+            for index, plan_point in enumerate(plan["points"])
         ]
         directory = self.write_experiment(experiment_id, points=points)
         manifest_path = directory / "experiment_manifest.json"
@@ -283,13 +314,12 @@ class ExperimentIndexTests(unittest.TestCase):
         source = {
             "kind": "statistical",
             "sampling_method": "halton",
-            "generator_version": "sha256-test-v1",
-            "plan_id": "statistical-plan-aaaaaaaaaaaaaaaa",
-            "plan_sha256": "a" * 64,
-            "definition_hash": "b" * 64,
+            "generator_version": plan["generator_version"],
+            "plan_id": saved_plan["plan_id"],
+            "plan_sha256": saved_plan["plan_sha256"],
+            "definition_hash": plan["definition_hash"],
             "runs_relative_path": (
-                "statistical-plans/statistical-plan-aaaaaaaaaaaaaaaa/"
-                "statistical_plan.json"
+                f"statistical-plans/{saved_plan['plan_id']}/statistical_plan.json"
             ),
             "corner_aggregate": True,
             "corner_axes": [
@@ -305,11 +335,11 @@ class ExperimentIndexTests(unittest.TestCase):
             ],
             "point_metadata": [
                 {
-                    "index": index,
-                    "sample_index": index // 2,
-                    "corners": {"process": "fast" if index % 2 == 0 else "slow"},
+                    "index": plan_point["index"],
+                    "sample_index": plan_point["sample_index"],
+                    "corners": plan_point["corners"],
                 }
-                for index in range(4)
+                for plan_point in plan["points"]
             ],
         }
         manifest["definition"] = {
@@ -330,7 +360,12 @@ class ExperimentIndexTests(unittest.TestCase):
         manifest["definition_hash"] = experiment_index._definition_hash(
             manifest["definition"]
         )
+        manifest["point_count"] = len(points)
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        results_path = directory / "results.json"
+        results = json.loads(results_path.read_text(encoding="utf-8"))
+        results["point_count"] = len(points)
+        results_path.write_text(json.dumps(results), encoding="utf-8")
 
         built = experiment_index.build_experiment_index(self.runs)
         all_statistical = experiment_index.query_experiments(
@@ -497,8 +532,25 @@ class ExperimentIndexTests(unittest.TestCase):
             any("manifest passed_points" in issue["message"] for issue in built["issues"])
         )
         self.assertTrue(
-            any("analysis all_passed" in issue["message"] for issue in built["issues"])
+            any("passed state" in issue["message"] for issue in built["issues"])
         )
+
+    def test_terminal_loader_rejects_invalid_requirement_operator(self) -> None:
+        experiment_id = "mcp-experiment-20260824-151200-000000-a1b2c3d4"
+        directory = self.write_experiment(
+            experiment_id,
+            points=[self.point(0, {"R": "1k", "C": "10n"})],
+            parameter_values={"R": ["1k"], "C": ["10n"]},
+        )
+        results_path = directory / "results.json"
+        results = json.loads(results_path.read_text(encoding="utf-8"))
+        results["points"][0]["analyses"][0]["analysis"]["results"][0][
+            "threshold"
+        ]["operator"] = "bogus"
+        results_path.write_text(json.dumps(results), encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "operator is invalid"):
+            experiment_index.load_terminal_experiment(self.runs, experiment_id)
 
     def test_rebuild_replaces_stale_data_and_replace_failure_preserves_old_index(
         self,

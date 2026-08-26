@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 import statistical_results
+import statistical_engine
 
 
 class StatisticalResultsTests(unittest.TestCase):
@@ -171,6 +172,58 @@ class StatisticalResultsTests(unittest.TestCase):
         source["runs_relative_path"] = "../outside.json"
         with self.assertRaisesRegex(ValueError, "artifact path"):
             statistical_results._sampling_provenance(source)
+
+    def test_verified_plan_rejects_missing_tampered_and_mismatched_evidence(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            runs = Path(temporary_directory) / "runs"
+            plan = statistical_engine.build_statistical_plan(
+                [
+                    {
+                        "name": "R",
+                        "distribution": "uniform",
+                        "minimum": 900,
+                        "maximum": 1100,
+                        "nominal": 1000,
+                    }
+                ],
+                2,
+                7,
+                sampling_method="halton",
+            )
+            saved = statistical_engine.save_statistical_plan(runs, plan)
+            source = {
+                "kind": "statistical",
+                "sampling_method": "halton",
+                "generator_version": plan["generator_version"],
+                "plan_id": saved["plan_id"],
+                "plan_sha256": saved["plan_sha256"],
+                "definition_hash": plan["definition_hash"],
+                "runs_relative_path": (
+                    f"statistical-plans/{saved['plan_id']}/statistical_plan.json"
+                ),
+            }
+
+            provenance, loaded = statistical_results._verified_sampling_plan(
+                runs, source
+            )
+            self.assertEqual(provenance["plan_id"], saved["plan_id"])
+            self.assertEqual(loaded, plan)
+
+            mismatched = {**source, "definition_hash": "f" * 64}
+            with self.assertRaisesRegex(ValueError, "metadata"):
+                statistical_results._verified_sampling_plan(runs, mismatched)
+
+            plan_path = Path(saved["plan_file"])
+            original = plan_path.read_bytes()
+            plan_path.write_bytes(original + b"tampered")
+            with self.assertRaisesRegex(ValueError, "content address"):
+                statistical_results._verified_sampling_plan(runs, source)
+
+            plan_path.unlink()
+            with self.assertRaisesRegex(ValueError, "regular file"):
+                statistical_results._verified_sampling_plan(runs, source)
 
     def test_zero_evaluated_points_has_no_yield_or_interval(self) -> None:
         summary = statistical_results.build_statistics(

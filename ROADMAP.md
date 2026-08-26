@@ -650,13 +650,28 @@ Verification gate:
   `485dabd2d7d8293de733a399719f6538efda4a54b48b181a14e07271186984d3`,
   installs it silently, explicitly selects **No** for usage-data sharing, and
   fails closed if the verified dialog does not close
-- Successful GitHub run `32923615020` completed in 1m24s on Windows Server
-  2025: real LTspice 26.0.2 simulated 501 AC points in 0.655s, reported
+- Successful GitHub run `32924033759` completed in 1m26s on Windows Server
+  2025: real LTspice 26.0.2 simulated 501 AC points in 0.599s, reported
   -35.964697 dB at 1 kHz and a 21.290309 Hz sweep-referenced cutoff, and emitted
-  an 82,843-byte hashed artifact set
+  an 82,843-byte hashed artifact set; its retained 48,904-byte RAW file matched
+  the manifest SHA-256
 - The same smoke contract passed locally on macOS LTspice 17.2.4 with identical
   cutoff and a 0.000003 dB gain difference, providing real cross-platform
   numeric evidence rather than only mocked Windows path tests
+
+##### Phase 3E-G: Final adversarial hardening — complete
+
+- Adaptive boundary studies restart the same durable child if execution is
+  interrupted after definition but before queueing
+- Canonical result validation rejects unsupported comparison operators and
+  recomputes each requirement pass state from its measured value and threshold
+- Summaries, worst-case analysis, sensitivity, comparisons, and indexing all
+  verify the referenced immutable statistical plan, complete SHA-256, generator
+  version, definition hash, and sampling method before trusting provenance
+- Sensitivity preflights its projected output and worst-case analysis bounds its
+  serialized rankings with a shared 2,000-row artifact budget; HTML rendering
+  retains an independent defense-in-depth limit
+- The final adversarial regression suite contains 240 passing tests
 
 Phase 3 completion criteria:
 

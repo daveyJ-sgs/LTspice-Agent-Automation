@@ -137,6 +137,11 @@ class ExperimentReportTests(unittest.TestCase):
             self.assertRaisesRegex(ValueError, "report budget"),
         ):
             experiment_report._distribution_panel(statistics)
+        with (
+            patch.object(experiment_report, "MAX_ANALYSIS_ROWS", 0),
+            self.assertRaisesRegex(ValueError, "report budget"),
+        ):
+            experiment_report._sensitivity_panel(sensitivity)
 
     def _analysis(self, step_index: int, value: float) -> dict[str, object]:
         return {

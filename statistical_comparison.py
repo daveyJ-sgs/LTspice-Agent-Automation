@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import TypedDict
 
 import experiment_index
-import statistical_engine
 import statistical_results
 
 STATISTICAL_COMPARISON_SCHEMA_VERSION = 1
@@ -69,11 +68,7 @@ def _source(manifest: dict[str, object], experiment_id: str) -> dict[str, object
 def _load_plan(
     runs_dir: Path, source: dict[str, object]
 ) -> dict[str, object]:
-    plan_id = str(source["plan_id"])
-    plan = statistical_engine.load_statistical_plan(runs_dir, plan_id)
-    path = runs_dir / str(source["runs_relative_path"])
-    if _sha256(path) != source["plan_sha256"]:
-        raise ValueError("statistical plan artifact does not match experiment provenance")
+    _, plan = statistical_results._verified_sampling_plan(runs_dir, source)
     return plan
 
 

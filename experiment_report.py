@@ -21,7 +21,7 @@ import worst_case_analysis
 DISPLAY_POINT_LIMIT = 400
 MAX_TRACE_COUNT = 100
 MAX_DISPLAYED_POINTS = 40_000
-MAX_ANALYSIS_ROWS = 2_000
+MAX_ANALYSIS_ROWS = statistical_results.MAX_ANALYSIS_ROWS
 REPORT_FILENAME = "report.html"
 _SVG_WIDTH = 900
 _SVG_HEIGHT = 380
@@ -626,6 +626,13 @@ def _worst_case_panel(analysis: dict[str, object] | None) -> str:
 def _sensitivity_panel(analysis: dict[str, object] | None) -> str:
     if analysis is None:
         return ""
+    projected_rows = sum(
+        len(scope["variables"])
+        for requirement in analysis["requirements"]
+        for scope in requirement["scopes"]
+    )
+    if projected_rows > MAX_ANALYSIS_ROWS:
+        raise ValueError("sensitivity rows exceed report budget")
     rows: list[str] = []
     for requirement in analysis["requirements"]:
         label = f"{requirement['analysis']} / {requirement['metric']}"
@@ -643,8 +650,6 @@ def _sensitivity_panel(analysis: dict[str, object] | None) -> str:
                     f"<td>{_text(variable['status'])}</td>"
                     f"<td>{_text(', '.join(variable['correlated_with']) or '—')}</td></tr>"
                 )
-    if len(rows) > MAX_ANALYSIS_ROWS:
-        raise ValueError("sensitivity rows exceed report budget")
     if not rows:
         return ""
     return f"""
