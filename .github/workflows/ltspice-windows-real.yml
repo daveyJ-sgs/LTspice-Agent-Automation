@@ -1,0 +1,83 @@
+name: Real LTspice Windows smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-ltspice-windows
+  cancel-in-progress: false
+
+jobs:
+  real-ltspice:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      LTSPICE_VERSION: 26.0.2
+      LTSPICE_MSI_SHA256: 485dabd2d7d8293de733a399719f6538efda4a54b48b181a14e07271186984d3
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Download and verify official LTspice installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://ltspice.analog.com/download/$env:LTSPICE_VERSION/LTspice64.msi"
+          $msi = Join-Path $env:RUNNER_TEMP "LTspice64-$env:LTSPICE_VERSION.msi"
+          Invoke-WebRequest -Uri $url -OutFile $msi
+          $actual = (Get-FileHash -Algorithm SHA256 $msi).Hash.ToLowerInvariant()
+          if ($actual -ne $env:LTSPICE_MSI_SHA256) {
+            throw "LTspice MSI SHA-256 mismatch: expected $env:LTSPICE_MSI_SHA256, got $actual"
+          }
+          "LTSPICE_MSI=$msi" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install LTspice silently
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $log = Join-Path $env:RUNNER_TEMP "ltspice-install.log"
+          $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+            "/i", "`"$env:LTSPICE_MSI`"", "/qn", "/norestart", "/L*v", "`"$log`""
+          )
+          if ($process.ExitCode -notin 0, 3010) {
+            throw "LTspice MSI failed with exit code $($process.ExitCode)"
+          }
+          $roots = @(
+            (Join-Path $env:LOCALAPPDATA "Programs"),
+            $env:ProgramFiles,
+            ${env:ProgramFiles(x86)}
+          ) | Where-Object { $_ -and (Test-Path $_) }
+          $executable = Get-ChildItem -Path $roots -Filter LTspice.exe -File -Recurse |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $executable) {
+            throw "LTspice.exe was not found after installation"
+          }
+          "LTSPICE_EXECUTABLE=$executable" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "REAL_LTSPICE_EVIDENCE_DIR=$env:RUNNER_TEMP\ltspice-real-smoke" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
+          (Get-Item $executable).VersionInfo |
+            Select-Object FileVersion, ProductVersion, FileDescription
+
+      - name: Run bounded real simulator verification
+        shell: pwsh
+        timeout-minutes: 3
+        run: python tests/real_ltspice_smoke.py
+
+      - name: Upload compact verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-ltspice-windows-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/ltspice-install.log
+            ${{ runner.temp }}/ltspice-real-smoke/run_manifest.json
+            ${{ runner.temp }}/ltspice-real-smoke/rc_lowpass.log
+            ${{ runner.temp }}/ltspice-real-smoke/smoke_summary.json
