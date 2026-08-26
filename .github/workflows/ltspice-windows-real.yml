@@ -65,6 +65,51 @@ jobs:
           (Get-Item $executable).VersionInfo |
             Select-Object FileVersion, ProductVersion, FileDescription
 
+      - name: Decline first-run usage-data sharing
+        shell: pwsh
+        timeout-minutes: 1
+        run: |
+          $ErrorActionPreference = "Stop"
+          Add-Type -AssemblyName UIAutomationClient
+          Add-Type -AssemblyName UIAutomationTypes
+          $process = Start-Process $env:LTSPICE_EXECUTABLE -PassThru
+          $deadline = (Get-Date).AddSeconds(30)
+          $declined = $false
+          while ((Get-Date) -lt $deadline -and -not $declined) {
+            Start-Sleep -Milliseconds 250
+            $process.Refresh()
+            if ($process.HasExited -or $process.MainWindowHandle -eq 0) {
+              continue
+            }
+            $window = [System.Windows.Automation.AutomationElement]::FromHandle(
+              $process.MainWindowHandle
+            )
+            $buttons = $window.FindAll(
+              [System.Windows.Automation.TreeScope]::Descendants,
+              [System.Windows.Automation.Condition]::TrueCondition
+            ) | Where-Object {
+              $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button
+            }
+            $names = @($buttons | ForEach-Object { $_.Current.Name })
+            Write-Host "LTspice first-run buttons: $($names -join ', ')"
+            $noButton = $buttons | Where-Object { $_.Current.Name -eq "No" } |
+              Select-Object -First 1
+            if ($noButton) {
+              $invoke = $noButton.GetCurrentPattern(
+                [System.Windows.Automation.InvokePattern]::Pattern
+              )
+              $invoke.Invoke()
+              $declined = $true
+            }
+          }
+          if (-not $declined) {
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+            throw "LTspice first-run usage-data dialog was not found"
+          }
+          Start-Sleep -Seconds 2
+          $process.Refresh()
+          if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+
       - name: Run bounded real simulator verification
         shell: pwsh
         timeout-minutes: 3
