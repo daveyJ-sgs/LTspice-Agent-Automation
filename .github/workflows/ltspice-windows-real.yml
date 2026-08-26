@@ -179,4 +179,5 @@ jobs:
             ${{ runner.temp }}/ltspice-first-run.png
             ${{ runner.temp }}/ltspice-real-smoke/run_manifest.json
             ${{ runner.temp }}/ltspice-real-smoke/rc_lowpass.log
+            ${{ runner.temp }}/ltspice-real-smoke/rc_lowpass.raw
             ${{ runner.temp }}/ltspice-real-smoke/smoke_summary.json

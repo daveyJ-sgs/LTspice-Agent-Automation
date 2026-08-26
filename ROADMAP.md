@@ -641,11 +641,22 @@ Verification gate:
 - The richer transient uncovered LTspice binary RAW sign-bit time encoding;
   the parser now restores physical time magnitudes before step detection
 
-##### Phase 3E-F: Real Windows LTspice CI prototype
+##### Phase 3E-F: Real Windows LTspice CI prototype — complete
 
 - As the final Phase 3 hardening step, prototype a GitHub-hosted Windows job
   that installs a pinned, checksum-verified LTspice build and runs bounded real
-  simulator smoke tests after resolving first-run consent noninteractively.
+  simulator smoke tests after resolving first-run consent noninteractively
+- The opt-in workflow pins the official 26.0.2 x64 MSI at SHA-256
+  `485dabd2d7d8293de733a399719f6538efda4a54b48b181a14e07271186984d3`,
+  installs it silently, explicitly selects **No** for usage-data sharing, and
+  fails closed if the verified dialog does not close
+- Successful GitHub run `32923615020` completed in 1m24s on Windows Server
+  2025: real LTspice 26.0.2 simulated 501 AC points in 0.655s, reported
+  -35.964697 dB at 1 kHz and a 21.290309 Hz sweep-referenced cutoff, and emitted
+  an 82,843-byte hashed artifact set
+- The same smoke contract passed locally on macOS LTspice 17.2.4 with identical
+  cutoff and a 0.000003 dB gain difference, providing real cross-platform
+  numeric evidence rather than only mocked Windows path tests
 
 Phase 3 completion criteria:
 

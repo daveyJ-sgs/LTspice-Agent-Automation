@@ -1119,6 +1119,24 @@ Then launch LTspice once from the Start menu and answer the "Anonymously Share
 LTspice Usage Data" prompt. Until it is answered, batch mode hangs with no
 output and no error; see [LEARNINGS.md](LEARNINGS.md#windows-portability).
 
+The opt-in `Real LTspice Windows smoke` GitHub workflow performs the same path
+on an ephemeral hosted runner without burdening every push. It downloads the
+[official Analog Devices Windows installer](https://www.analog.com/en/resources/design-tools-and-calculators/ltspice-simulator.html),
+pins version 26.0.2 and the complete MSI SHA-256, installs silently, explicitly
+selects **No** in the first-run usage-data dialog, and then executes
+`tests/real_ltspice_smoke.py`. The smoke requires a real 501-point RAW file,
+decoded `.meas` evidence, the expected RC cutoff and gain, and a completed run
+manifest. The RAW waveform plus compact logs, manifest, summary, and first-run
+screenshot are kept for seven days. Run it manually with:
+
+```bash
+gh workflow run ltspice-windows-real.yml --ref main
+```
+
+The dialog targeting is relative to its verified window bounds rather than
+absolute screen coordinates, but the workflow intentionally fails closed if a
+future LTspice release changes or does not close that consent window.
+
 The wrapper checks the common install locations, including winget's per-user
 default at `%LOCALAPPDATA%\Programs\ADI\LTspice\LTspice.exe`. Set
 `LTSPICE_EXECUTABLE` only when the installation is somewhere else:
