@@ -673,6 +673,30 @@ Verification gate:
   retains an independent defense-in-depth limit
 - The final adversarial regression suite contains 240 passing tests
 
+##### Phase 3E-H: Real Windows mixed-signal DAQ qualification — complete
+
+- Upgraded the opt-in real-Windows job from an RC-only smoke test to the full
+  production DAQ path while retaining the fast RC control simulation
+- Real GitHub run `32969899223` installed checksum-pinned LTspice 26.0.2 on
+  Windows Server 2025 and passed exact commit `0ed04b1` in 2m00s
+- The immutable 24-point plan `statistical-plan-3648d75d3bc11f35` produced
+  Windows AC experiment `mcp-experiment-20260826-124252-671728` and transient
+  experiment `mcp-experiment-20260826-124303-038862`
+- Both analyses completed 24/24 points with zero simulator or analysis errors,
+  zero invalid evidence, and 100% yield independently in both light and heavy
+  ADC-load corners
+- The retained 14 MiB evidence tree contains 262 files, including 48 primary
+  RAW waveforms, 48 per-point run manifests, 60 JSON files, eight CSV files,
+  the immutable plan, and two self-contained interactive HTML reports
+- macOS LTspice 17.2.4 reproduced the same point plan and electrical
+  classifications; AC requirement-margin means agreed to floating-point noise,
+  while transient margins preserved the same pass/fail conclusions
+- Added `mixed_signal_daq.asc`, a stock-symbol educational schematic with four
+  labeled functional blocks, explanatory notes, and a regression-checked
+  component/value inventory matching the transient automation netlist
+- The expanded 241-test suite passed locally and in the ordinary GitHub macOS
+  and Windows jobs for the qualification commit
+
 Phase 3 completion criteria:
 
 - Given the same normalized definition and seed, macOS and Windows generate

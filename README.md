@@ -1148,6 +1148,16 @@ days. Run it manually with:
 gh workflow run ltspice-windows-real.yml --ref main
 ```
 
+The first complete DAQ qualification, GitHub run
+[`32969899223`](https://github.com/daveyJ-sgs/LTspice-Agent-Automation/actions/runs/32969899223),
+passed on Windows Server 2025 with LTspice 26.0.2. It completed all 24 AC and
+24 transient points with zero invalid evidence and 100% yield in both ADC-load
+corners. Download the retained evidence while it is available with:
+
+```bash
+gh run download 32969899223
+```
+
 The dialog targeting is relative to its verified window bounds rather than
 absolute screen coordinates, but the workflow intentionally fails closed if a
 future LTspice release changes or does not close that consent window.
