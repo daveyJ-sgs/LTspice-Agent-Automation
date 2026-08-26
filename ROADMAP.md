@@ -697,6 +697,24 @@ Verification gate:
 - The expanded 241-test suite passed locally and in the ordinary GitHub macOS
   and Windows jobs for the qualification commit
 
+##### Phase 3E-I: Human-first engineering reports — complete
+
+- Added bounded, reusable narrative metadata for a circuit explanation,
+  simulation purpose, MCP-verification context, and an embedded repository-local
+  schematic; the metadata persists beside each experiment for deterministic
+  rebuilds
+- Reordered reports around the schematic and interactive plots, with compact
+  sample/corner labels, shared corner colors, and humanized analysis names
+- Added engineering-number formatting such as pF, kΩ, MHz, ns, and µs with
+  four significant digits while leaving authoritative JSON/CSV values unchanged
+- Summarized parameter populations as values or ranges and moved full trace
+  parameters, requirements, provenance hashes, JSON/CSV, and RAW links into
+  collapsed evidence sections
+- The mixed-signal DAQ AC and transient examples now supply distinct explanatory
+  narratives while sharing the same educational LTspice schematic
+- The expanded 243-test regression suite passes with the report, comparison,
+  MCP-schema, path-confinement, and deterministic-rebuild contracts intact
+
 Phase 3 completion criteria:
 
 - Given the same normalized definition and seed, macOS and Windows generate

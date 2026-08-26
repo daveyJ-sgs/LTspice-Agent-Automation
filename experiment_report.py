@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import html
 import json
 import math
@@ -23,6 +24,9 @@ MAX_TRACE_COUNT = 100
 MAX_DISPLAYED_POINTS = 40_000
 MAX_ANALYSIS_ROWS = statistical_results.MAX_ANALYSIS_ROWS
 REPORT_FILENAME = "report.html"
+REPORT_CONTEXT_FILENAME = "report_context.json"
+MAX_CONTEXT_TEXT = 1_200
+MAX_SCHEMATIC_BYTES = 2_000_000
 _SVG_WIDTH = 900
 _SVG_HEIGHT = 380
 _PLOT_LEFT = 76
@@ -41,6 +45,15 @@ class ExperimentReportResult(TypedDict):
     displayed_points: int
 
 
+class ReportContext(TypedDict, total=False):
+    title: str
+    circuit_summary: str
+    simulation_summary: str
+    mcp_context: str
+    schematic_path: str
+    schematic_caption: str
+
+
 def _text(value: object) -> str:
     return html.escape(str(value), quote=True)
 
@@ -51,6 +64,43 @@ def _number(value: object) -> str:
     return str(value)
 
 
+def _humanize(value: object) -> str:
+    words = str(value).replace("_", " ").replace("-", " ").split()
+    return " ".join("ADC" if word.lower() == "adc" else word.capitalize() for word in words)
+
+
+def _float(value: object) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _engineering(value: object, unit: str = "") -> str:
+    number = _float(value)
+    if number is None:
+        return str(value)
+    prefixes = {
+        "F": ((1e-12, "pF"), (1e-9, "nF"), (1e-6, "µF"), (1.0, "F")),
+        "s": ((1e-9, "ns"), (1e-6, "µs"), (1e-3, "ms"), (1.0, "s")),
+        "Hz": ((1.0, "Hz"), (1e3, "kHz"), (1e6, "MHz"), (1e9, "GHz")),
+        "ohm": ((1.0, "Ω"), (1e3, "kΩ"), (1e6, "MΩ")),
+        "V": ((1e-6, "µV"), (1e-3, "mV"), (1.0, "V")),
+    }
+    choices = prefixes.get(unit)
+    scale, label = 1.0, unit
+    if choices:
+        magnitude = abs(number)
+        for candidate_scale, candidate_label in choices:
+            if magnitude >= candidate_scale:
+                scale, label = candidate_scale, candidate_label
+    rendered = format(number / scale, ".4g")
+    if "e" in rendered.lower() and 1e-3 <= abs(number / scale) < 1e5:
+        rendered = f"{number / scale:.4f}".rstrip("0").rstrip(".")
+    return f"{rendered} {label}".strip()
+
+
 def _inside(path: Path, root: Path, message: str) -> Path:
     resolved = path.resolve(strict=False)
     try:
@@ -58,6 +108,71 @@ def _inside(path: Path, root: Path, message: str) -> Path:
     except ValueError as exc:
         raise ValueError(message) from exc
     return resolved
+
+
+def _validated_context(
+    experiment_dir: Path,
+    context: ReportContext | None,
+) -> tuple[ReportContext, str | None]:
+    context_path = experiment_dir / REPORT_CONTEXT_FILENAME
+    if context is None and context_path.is_file() and not context_path.is_symlink():
+        loaded = json.loads(context_path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            raise ValueError("report context must contain a JSON object")
+        context = loaded
+    if context is None:
+        return {}, None
+    allowed = set(ReportContext.__annotations__)
+    if set(context) - allowed:
+        raise ValueError("report context contains unsupported fields")
+    validated: ReportContext = {}
+    for name, value in context.items():
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"report context {name} must be a non-empty string")
+        if len(value) > MAX_CONTEXT_TEXT:
+            raise ValueError(f"report context {name} exceeds the text budget")
+        validated[name] = value.strip()
+    image_data = None
+    image_reference = validated.get("schematic_path")
+    if image_reference:
+        project_root = Path(__file__).resolve().parent
+        image_path = _inside(
+            project_root / image_reference,
+            project_root,
+            "report schematic must remain inside the project directory",
+        )
+        if image_path.is_symlink() or not image_path.is_file():
+            raise ValueError("report schematic must be a regular file")
+        suffixes = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+        media_type = suffixes.get(image_path.suffix.lower())
+        if media_type is None:
+            raise ValueError("report schematic must be PNG or JPEG")
+        data = image_path.read_bytes()
+        if len(data) > MAX_SCHEMATIC_BYTES:
+            raise ValueError("report schematic exceeds the image budget")
+        image_data = f"data:{media_type};base64,{base64.b64encode(data).decode('ascii')}"
+    return validated, image_data
+
+
+def _write_context(experiment_dir: Path, context: ReportContext) -> None:
+    if not context:
+        return
+    path = _inside(
+        experiment_dir / REPORT_CONTEXT_FILENAME,
+        experiment_dir,
+        "report context must remain inside the experiment directory",
+    )
+    temporary = path.with_name(f".{REPORT_CONTEXT_FILENAME}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(context, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        os.replace(temporary, path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _artifact_path(reference: object, experiment_dir: Path, experiment_id: str) -> tuple[Path, str]:
@@ -120,6 +235,8 @@ def _trace(
     data: raw_parser.RawData,
     analysis: dict[str, object],
     label: str,
+    details: str,
+    legend_label: str,
     raw_href: str,
 ) -> dict[str, object]:
     axis_name = analysis.get("axis_variable")
@@ -178,13 +295,17 @@ def _trace(
     indices = _sample_indices(y)
     return {
         "label": label,
+        "details": details,
+        "legend_label": legend_label,
         "x": [x[index] for index in indices],
         "y": [y[index] for index in indices],
         "source_points": len(x),
         "displayed_points": len(indices),
         "raw_href": raw_href,
         "axis_label": axis_name.title(),
+        "axis_unit": "Hz" if axis_name.lower() == "frequency" else "s" if axis_name.lower() == "time" else "",
         "y_label": y_label,
+        "y_unit": "dB" if complex_trace else "V" if variable.lower().startswith("v(") else "",
         "log_x": axis_name.lower() == "frequency" and all(value > 0 for value in x),
         "variable": variable,
         "secondary_variable": secondary,
@@ -192,16 +313,53 @@ def _trace(
     }
 
 
+def _point_metadata(manifest: dict[str, object]) -> dict[int, dict[str, object]]:
+    definition = manifest.get("definition")
+    point_plan = definition.get("point_plan") if isinstance(definition, dict) else None
+    source = point_plan.get("source") if isinstance(point_plan, dict) else None
+    entries = source.get("point_metadata") if isinstance(source, dict) else None
+    if not isinstance(entries, list):
+        return {}
+    return {
+        int(entry["index"]): entry
+        for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get("index"), int)
+    }
+
+
+def _parameter_text(parameters: dict[str, object], units: dict[str, object]) -> str:
+    return ", ".join(
+        f"{name}={_engineering(value, str(units.get(name, '')))}"
+        for name, value in sorted(parameters.items())
+    )
+
+
 def _plots(
-    experiment_dir: Path, experiment_id: str, results: dict[str, object]
+    experiment_dir: Path,
+    experiment_id: str,
+    results: dict[str, object],
+    manifest: dict[str, object],
 ) -> list[dict[str, object]]:
     groups: dict[str, dict[str, object]] = {}
     raw_cache: dict[Path, raw_parser.RawData] = {}
     points = results["points"]
     assert isinstance(points, list)
+    metadata = _point_metadata(manifest)
+    units = results.get("parameter_units", {})
+    assert isinstance(units, dict)
     for point in sorted(points, key=lambda item: item["index"]):
         parameters = point["parameters"]
-        label = ", ".join(f"{name}={value}" for name, value in sorted(parameters.items()))
+        point_index = int(point["index"])
+        point_meta = metadata.get(point_index, {})
+        corners = point_meta.get("corners", {})
+        sample_index = point_meta.get("sample_index")
+        corner_label = ", ".join(
+            f"{_humanize(name)}: {_humanize(value)}" for name, value in corners.items()
+        ) if isinstance(corners, dict) else ""
+        sample_label = f"Sample {int(sample_index) + 1}" if isinstance(sample_index, int) else f"Point {point_index + 1}"
+        label = " · ".join(value for value in (sample_label, corner_label) if value)
+        legend_label = corner_label or label
+        details = _parameter_text(parameters, units)
         execution_mode = results.get("execution_mode", "independent")
         if execution_mode == "native":
             native_step_index = point.get("native_step_index")
@@ -231,7 +389,9 @@ def _plots(
                 raise ValueError("waveform artifact does not match its experiment point")
             if raw_path not in raw_cache:
                 raw_cache[raw_path] = raw_parser.parse_raw(raw_path)
-            trace = _trace(raw_cache[raw_path], analysis, label, raw_href)
+            trace = _trace(
+                raw_cache[raw_path], analysis, label, details, legend_label, raw_href
+            )
             signature = (
                 trace["axis_label"],
                 trace["y_label"],
@@ -269,6 +429,8 @@ def _svg(plot: dict[str, object], plot_index: int) -> str:
     traces = plot["traces"]
     assert isinstance(traces, list)
     log_x = bool(traces[0]["log_x"])
+    axis_unit = str(traces[0]["axis_unit"])
+    y_unit = str(traces[0]["y_unit"])
     all_x = [math.log10(value) if log_x else value for trace in traces for value in trace["x"]]
     all_y = [value for trace in traces for value in trace["y"]]
     x_min, x_max = _extent(all_x)
@@ -295,16 +457,23 @@ def _svg(plot: dict[str, object], plot_index: int) -> str:
         grid.extend(
             [
                 f'<line class="grid-line" x1="{x_pixel:.2f}" y1="{_PLOT_TOP}" x2="{x_pixel:.2f}" y2="{_PLOT_TOP + height}"/>',
-                f'<text class="tick" x="{x_pixel:.2f}" y="{_PLOT_TOP + height + 22}" text-anchor="middle">{_text(format(x_value, ".4g"))}</text>',
+                f'<text class="tick" x="{x_pixel:.2f}" y="{_PLOT_TOP + height + 22}" text-anchor="middle">{_text(_engineering(x_value, axis_unit))}</text>',
                 f'<line class="grid-line" x1="{_PLOT_LEFT}" y1="{y_pixel:.2f}" x2="{_PLOT_LEFT + width}" y2="{y_pixel:.2f}"/>',
-                f'<text class="tick" x="{_PLOT_LEFT - 10}" y="{y_pixel + 4:.2f}" text-anchor="end">{_text(format(y_value, ".4g"))}</text>',
+                f'<text class="tick" x="{_PLOT_LEFT - 10}" y="{y_pixel + 4:.2f}" text-anchor="end">{_text(_engineering(y_value, y_unit))}</text>',
             ]
         )
     paths: list[str] = []
     legend: list[str] = []
+    legend_colors: dict[str, str] = {}
     payload_traces: list[dict[str, object]] = []
     for index, trace in enumerate(traces):
-        color = _COLORS[index % len(_COLORS)]
+        legend_label = str(trace["legend_label"])
+        if legend_label not in legend_colors:
+            legend_colors[legend_label] = _COLORS[len(legend_colors) % len(_COLORS)]
+            legend.append(
+                f'<span><i style="background:{legend_colors[legend_label]}"></i>{_text(legend_label)}</span>'
+            )
+        color = legend_colors[legend_label]
         screen = [[px(x), py(y)] for x, y in zip(trace["x"], trace["y"])]
         path_data = " ".join(
             ("M" if point_index == 0 else "L") + f"{point[0]:.2f},{point[1]:.2f}"
@@ -313,12 +482,10 @@ def _svg(plot: dict[str, object], plot_index: int) -> str:
         paths.append(
             f'<path class="trace" d="{path_data}" stroke="{color}" data-trace-index="{index}"/>'
         )
-        legend.append(
-            f'<span><i style="background:{color}"></i>{_text(trace["label"])}</span>'
-        )
         payload_traces.append(
             {
                 "label": trace["label"],
+                "details": trace["details"],
                 "x": trace["x"],
                 "y": trace["y"],
                 "screen": screen,
@@ -326,13 +493,11 @@ def _svg(plot: dict[str, object], plot_index: int) -> str:
         )
     plot["payload"] = {
         "axis_label": traces[0]["axis_label"],
+        "axis_unit": axis_unit,
         "y_label": traces[0]["y_label"],
+        "y_unit": y_unit,
         "traces": payload_traces,
     }
-    raw_links = sorted({str(trace["raw_href"]) for trace in traces})
-    source_links = ", ".join(
-        f'<a href="{quote(path, safe="/")}">{_text(path)}</a>' for path in raw_links
-    )
     source_counts = sorted({int(trace["source_points"]) for trace in traces})
     source_count = (
         f"{source_counts[0]} points per trace"
@@ -344,10 +509,14 @@ def _svg(plot: dict[str, object], plot_index: int) -> str:
         if traces[0]["display_floor_db"] is not None
         else ""
     )
+    trace_key = "".join(
+        f"<li><strong>{_text(trace['label'])}</strong><br><span class=\"muted\">{_text(trace['details'])}</span></li>"
+        for trace in traces
+    )
     return f"""
 <section class="panel plot-panel">
-  <h2>{_text(plot['name'])}</h2>
-  <p class="muted">Full-resolution source: {source_count} · {source_links}.{floor_note}</p>
+  <h2>{_text(_humanize(plot['name']))}</h2>
+  <p class="muted">{len(traces)} full-resolution traces · {source_count}.{floor_note}</p>
   <div class="legend">{''.join(legend)}</div>
   <div class="plot-wrap">
     <svg class="plot" data-plot-index="{plot_index}" viewBox="0 0 {_SVG_WIDTH} {_SVG_HEIGHT}" role="img" aria-label="{_text(plot['name'])} waveform overlay">
@@ -361,6 +530,7 @@ def _svg(plot: dict[str, object], plot_index: int) -> str:
     </svg>
     <div class="plot-tooltip" hidden></div>
   </div>
+  <details class="trace-key"><summary>Trace key and exact sample parameters ({len(traces)})</summary><ol>{trace_key}</ol></details>
 </section>"""
 
 
@@ -369,10 +539,10 @@ def _table_rows(results: dict[str, object]) -> tuple[str, str]:
     requirement_rows: list[str] = []
     points = results["points"]
     assert isinstance(points, list)
+    units = results.get("parameter_units", {})
+    assert isinstance(units, dict)
     for point in sorted(points, key=lambda item: item["index"]):
-        parameters = ", ".join(
-            f"{name}={value}" for name, value in sorted(point["parameters"].items())
-        )
+        parameters = _parameter_text(point["parameters"], units)
         measurements = ", ".join(
             f"{name}={_number(value)}" for name, value in sorted(point["measurements"].items())
         ) or "—"
@@ -397,12 +567,79 @@ def _table_rows(results: dict[str, object]) -> tuple[str, str]:
                 state = "pass" if result["passed"] else "fail"
                 requirement_rows.append(
                     f'<tr><td>{point["index"]}</td><td>{_text(parameters)}</td>'
-                    f'<td>{_text(entry["name"])}</td><td>{_text(result["metric"])}</td>'
-                    f'<td>{_text(_number(result["value"]))} {_text(result["unit"])}</td>'
-                    f'<td>{_text(threshold["operator"])} {_text(_number(threshold["target"]))} {_text(threshold["unit"])}</td>'
+                    f'<td>{_text(_humanize(entry["name"]))}</td><td>{_text(_humanize(result["metric"]))}</td>'
+                    f'<td>{_text(_engineering(result["value"], result["unit"]))}</td>'
+                    f'<td>{_text(threshold["operator"])} {_text(_engineering(threshold["target"], threshold["unit"]))}</td>'
                     f'<td><span class="badge {state}">{state}</span></td></tr>'
                 )
     return "".join(point_rows), "".join(requirement_rows)
+
+
+def _parameter_summary(results: dict[str, object]) -> str:
+    points = results["points"]
+    assert isinstance(points, list)
+    units = results.get("parameter_units", {})
+    assert isinstance(units, dict)
+    rows: list[str] = []
+    names = sorted({name for point in points for name in point["parameters"]})
+    for name in names:
+        values = [point["parameters"][name] for point in points]
+        numbers = [_float(value) for value in values]
+        unit = str(units.get(name, ""))
+        if all(value is not None for value in numbers):
+            numeric = [float(value) for value in numbers if value is not None]
+            unique = sorted(set(numeric))
+            if len(unique) <= 4:
+                summary = ", ".join(_engineering(value, unit) for value in unique)
+            else:
+                summary = f"{_engineering(min(numeric), unit)}–{_engineering(max(numeric), unit)}"
+        else:
+            unique_text = sorted(set(map(str, values)))
+            summary = ", ".join(unique_text[:4])
+            if len(unique_text) > 4:
+                summary += f" + {len(unique_text) - 4} more"
+        rows.append(f"<tr><td>{_text(name)}</td><td>{_text(summary)}</td></tr>")
+    return "".join(rows)
+
+
+def _narrative_panel(
+    context: ReportContext,
+    image_data: str | None,
+    results: dict[str, object],
+) -> str:
+    title = context.get("title", "Structured LTspice experiment")
+    circuit = context.get(
+        "circuit_summary",
+        "This report captures the circuit behavior and the requirements evaluated by the structured experiment.",
+    )
+    simulation = context.get(
+        "simulation_summary",
+        f"The run evaluated {results['point_count']} circuit points and retained traceable simulator evidence.",
+    )
+    mcp_context = context.get(
+        "mcp_context",
+        "The MCP turns the simulator run into repeatable plots, requirement decisions, and portable evidence for agent and human review.",
+    )
+    image = ""
+    if image_data:
+        caption = context.get(
+            "schematic_caption",
+            "Human-readable schematic view of the circuit represented by the automated netlist.",
+        )
+        image = (
+            f'<figure><img src="{image_data}" alt="Circuit schematic for {_text(title)}">'
+            f"<figcaption>{_text(caption)}</figcaption></figure>"
+        )
+    return f"""
+<section class="panel narrative">
+  <h2>{_text(title)}</h2>
+  {image}
+  <div class="story-grid">
+    <div><h3>Circuit function</h3><p>{_text(circuit)}</p></div>
+    <div><h3>Simulation performed</h3><p>{_text(simulation)}</p></div>
+    <div><h3>Why this matters to the MCP</h3><p>{_text(mcp_context)}</p></div>
+  </div>
+</section>"""
 
 
 def _statistical_panel(summary: dict[str, object] | None) -> str:
@@ -461,19 +698,15 @@ def _statistical_panel(summary: dict[str, object] | None) -> str:
             metadata_cells = (
                 f'<td>{sample["sample_index"]}</td><td>{_text(corner_label)}</td>'
             )
-        parameters = ", ".join(
-            f"{name}={value}" for name, value in sorted(sample["parameters"].items())
-        )
         failed_row_items.append(
             f'<tr><td>{sample["index"]}</td>{metadata_cells}'
-            f'<td>{_text(parameters)}</td>'
             f'<td><a href="point-{sample["index"]:04d}/">'
             f'point-{sample["index"]:04d}</a></td></tr>'
         )
     failed_rows = "".join(failed_row_items)
     if not failed_rows:
         failed_rows = (
-            f'<tr><td colspan="{5 if corner_results else 3}" class="muted">'
+            f'<tr><td colspan="{4 if corner_results else 2}" class="muted">'
             "No electrical failures.</td></tr>"
         )
     if corner_results:
@@ -502,7 +735,7 @@ def _statistical_panel(summary: dict[str, object] | None) -> str:
   <div class="card"><span class="muted">Named corners</span><strong>{len(corner_results)}</strong></div>
 </div>
 <div class="table-wrap"><table><thead><tr><th>Corner</th><th>Yield</th><th>Wilson 95% interval</th><th>Evaluated</th><th>Invalid</th><th>Status</th></tr></thead><tbody>{corner_rows}</tbody></table></div>
-<h2>Failed samples</h2><div class="table-wrap"><table><thead><tr><th>Point</th><th>Sample</th><th>Corner</th><th>Parameters</th><th>Evidence</th></tr></thead><tbody>{failed_rows}</tbody></table></div>
+<h2>Failed samples</h2><div class="table-wrap"><table><thead><tr><th>Point</th><th>Sample</th><th>Corner</th><th>Evidence</th></tr></thead><tbody>{failed_rows}</tbody></table></div>
 </section>"""
     return f"""
 <section class="panel"><h2>Statistical yield</h2>
@@ -513,7 +746,7 @@ def _statistical_panel(summary: dict[str, object] | None) -> str:
   <div class="card"><span class="muted">Invalid / cancelled</span><strong>{summary['invalid_points']}</strong></div>
 </div>
 <p class="muted">Electrical pass {classifications['electrical_pass']} · electrical failure {classifications['electrical_failure']} · simulation error {classifications['simulation_error']} · analysis error {classifications['analysis_error']} · cancelled {classifications['cancelled']} · unfinished {classifications['unfinished']}</p>
-<h2>Failed samples</h2><div class="table-wrap"><table><thead><tr><th>Point</th><th>Parameters</th><th>Evidence</th></tr></thead><tbody>{failed_rows}</tbody></table></div>
+<h2>Failed samples</h2><div class="table-wrap"><table><thead><tr><th>Point</th><th>Evidence</th></tr></thead><tbody>{failed_rows}</tbody></table></div>
 </section>"""
 
 
@@ -694,6 +927,8 @@ def _document(
     record: dict[str, object],
     plots: list[dict[str, object]],
     artifacts: list[str],
+    context: ReportContext,
+    image_data: str | None,
     statistical_summary: dict[str, object] | None = None,
     worst_cases: dict[str, object] | None = None,
     sensitivity: dict[str, object] | None = None,
@@ -711,6 +946,13 @@ def _document(
     links = " · ".join(
         f'<a href="{quote(name, safe="/")}">{_text(name)}</a>' for name in artifacts
     )
+    raw_links = sorted(
+        {str(trace["raw_href"]) for plot in plots for trace in plot["traces"]}
+    )
+    raw_link_html = " · ".join(
+        f'<a href="{quote(name, safe="/")}">{_text(name)}</a>' for name in raw_links
+    )
+    parameter_rows = _parameter_summary(results)
     state = "pass" if results["all_passed"] else "fail"
     no_requirements = (
         '<tr><td colspan="7" class="muted">No waveform requirements were recorded.</td></tr>'
@@ -722,28 +964,30 @@ def _document(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Experiment {_text(experiment_id)}</title>
+<title>{_text(context.get('title', experiment_id))}</title>
 <style>
 :root{{--bg:#0d1117;--panel:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--blue:#58a6ff;--green:#3fb950;--red:#f85149}}
 *{{box-sizing:border-box}} body{{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}}
-main{{max-width:1280px;margin:auto;padding:32px 24px 64px}} h1{{font-size:clamp(24px,4vw,38px);margin:.2rem 0;overflow-wrap:anywhere}} h2{{margin:0 0 10px;font-size:20px}}
+main{{max-width:1280px;margin:auto;padding:32px 24px 64px}} h1{{font-size:clamp(24px,4vw,38px);margin:.2rem 0;overflow-wrap:anywhere}} h2{{margin:0 0 10px;font-size:22px}} h3{{margin:0 0 6px;font-size:16px}}
 a{{color:var(--blue)}} .eyebrow{{color:var(--blue);font-weight:700;text-transform:uppercase;letter-spacing:.09em}} .muted{{color:var(--muted)}}
 .cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:24px 0}} .card,.panel{{background:var(--panel);border:1px solid var(--border);border-radius:10px}}
 .card{{padding:16px}} .card strong{{display:block;font-size:25px}} .card code{{display:block;margin-top:6px}} .panel{{padding:20px;margin:18px 0;overflow:hidden}} code{{overflow-wrap:anywhere}}
+.narrative figure{{margin:18px 0}} .narrative img{{display:block;width:100%;height:auto;border:1px solid var(--border);border-radius:8px;background:#c8c8c8}} figcaption{{margin-top:8px;color:var(--muted);font-size:13px}} .story-grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}} .story-grid p{{margin:0}}
 .badge{{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:700;text-transform:uppercase}} .badge.pass{{color:#aff5b4;background:#1b4721}} .badge.fail{{color:#ffdcd7;background:#5a1e1e}}
 .table-wrap{{overflow:auto}} table{{border-collapse:collapse;width:100%;min-width:720px}} th,td{{border-bottom:1px solid var(--border);padding:10px;text-align:left;vertical-align:top}} th{{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em}}
 .plot-wrap{{position:relative}} .plot{{display:block;width:100%;min-height:260px;background:#0b0f14;border:1px solid var(--border);border-radius:8px}}
 .grid-line{{stroke:#242b35;stroke-width:1}} .axis{{stroke:#768390;stroke-width:1.25}} .tick{{fill:var(--muted);font-size:11px}} .axis-label{{fill:var(--text);font-size:12px}} .trace{{fill:none;stroke-width:2.2;vector-effect:non-scaling-stroke}}
 .legend{{display:flex;gap:16px;flex-wrap:wrap;margin:10px 0}} .legend span{{display:flex;align-items:center;gap:6px}} .legend i{{display:inline-block;width:18px;height:3px}}
+.trace-key{{margin-top:12px}} .trace-key ol{{columns:2;column-gap:32px;padding-left:22px}} .trace-key li{{break-inside:avoid;margin:0 0 9px}} details>summary{{cursor:pointer;font-weight:650;color:var(--blue)}} .evidence-appendix>details>summary{{font-size:18px}}
 .cursor{{stroke:#c9d1d9;stroke-width:1;stroke-dasharray:4 4}} .plot-tooltip{{position:absolute;pointer-events:none;z-index:2;background:#010409;border:1px solid var(--border);border-radius:6px;padding:8px 10px;white-space:pre;font:12px/1.45 ui-monospace,monospace;box-shadow:0 8px 24px #0008}}
-@media(max-width:640px){{main{{padding:20px 12px}}.panel{{padding:12px}}}}
+@media(max-width:760px){{main{{padding:20px 12px}}.panel{{padding:12px}}.story-grid{{grid-template-columns:1fr}}.trace-key ol{{columns:1}}}}
 </style>
 </head>
 <body><main>
 <div class="eyebrow">LTspice structured experiment</div>
-<h1>{_text(experiment_id)}</h1>
+<h1>{_text(context.get('title', experiment_id))}</h1>
 <p><span class="badge {state}">{state}</span> · {_text(record['execution_mode'])} execution · Recorded {_text(record['recorded_at'])}</p>
-<p class="muted">Portable evidence: {links}</p>
+{_narrative_panel(context, image_data, results)}
 <div class="cards">
   <div class="card"><span class="muted">Points</span><strong>{results['point_count']}</strong></div>
   <div class="card"><span class="muted">Passed</span><strong>{results['passed_points']}</strong></div>
@@ -751,14 +995,21 @@ a{{color:var(--blue)}} .eyebrow{{color:var(--blue);font-weight:700;text-transfor
   <div class="card"><span class="muted">Plots</span><strong>{len(plots)}</strong></div>
 </div>
 {plot_html}
-{_sampling_provenance_panel(statistical_summary)}
 {_statistical_panel(statistical_summary)}
+<section class="panel"><h2>Design-space summary</h2><p class="muted">Compact ranges across all {results['point_count']} simulated points. Exact values remain in the evidence appendix.</p><div class="table-wrap"><table><thead><tr><th>Parameter</th><th>Values / range</th></tr></thead><tbody>{parameter_rows}</tbody></table></div></section>
+<section class="panel"><details><summary>Engineering analysis details</summary>
 {_distribution_panel(statistical_summary)}
 {_worst_case_panel(worst_cases)}
 {_sensitivity_panel(sensitivity)}
 {_tornado_panel(tornado)}
-<section class="panel"><h2>Requirement results</h2><div class="table-wrap"><table><thead><tr><th>Point</th><th>Parameters</th><th>Analysis</th><th>Metric</th><th>Value</th><th>Requirement</th><th>Status</th></tr></thead><tbody>{requirement_rows}{no_requirements}</tbody></table></div></section>
-<section class="panel"><h2>Experiment points</h2><div class="table-wrap"><table><thead><tr><th>Point</th><th>Parameters</th><th>Measurements</th><th>Errors</th><th>Status</th></tr></thead><tbody>{point_rows}</tbody></table></div></section>
+</details></section>
+<section class="panel evidence-appendix"><details><summary>Evidence and complete run data</summary>
+<p class="muted">Structured artifacts: {links}</p>
+<p class="muted">Full-resolution LTspice RAW waveforms: {raw_link_html}</p>
+{_sampling_provenance_panel(statistical_summary)}
+<section><h2>Requirement results</h2><div class="table-wrap"><table><thead><tr><th>Point</th><th>Parameters</th><th>Analysis</th><th>Metric</th><th>Value</th><th>Requirement</th><th>Status</th></tr></thead><tbody>{requirement_rows}{no_requirements}</tbody></table></div></section>
+<section><h2>Experiment points</h2><div class="table-wrap"><table><thead><tr><th>Point</th><th>Parameters</th><th>Measurements</th><th>Errors</th><th>Status</th></tr></thead><tbody>{point_rows}</tbody></table></div></section>
+</details></section>
 </main>
 <script id="report-data" type="application/json">{payload}</script>
 <script>
@@ -770,7 +1021,12 @@ document.querySelectorAll("svg.plot").forEach(svg=>{{
     const local=point.matrixTransform(svg.getScreenCTM().inverse()); let nearest=null;
     plot.traces.forEach(trace=>trace.screen.forEach((screen,index)=>{{const distance=Math.abs(screen[0]-local.x);if(!nearest||distance<nearest.distance)nearest={{distance,trace,index,screen}}}}));
     if(!nearest)return; cursor.hidden=false; cursor.setAttribute("x1",nearest.screen[0]); cursor.setAttribute("x2",nearest.screen[0]);
-    tip.hidden=false; tip.textContent=`${{nearest.trace.label}}\n${{plot.axis_label}}: ${{nearest.trace.x[nearest.index].toPrecision(6)}}\n${{plot.y_label}}: ${{nearest.trace.y[nearest.index].toPrecision(6)}}`;
+    const formatEngineering=(value,unit)=>{{
+      const scales={{Hz:[[1e9,"GHz"],[1e6,"MHz"],[1e3,"kHz"],[1,"Hz"]],s:[[1,"s"],[1e-3,"ms"],[1e-6,"µs"],[1e-9,"ns"]],V:[[1,"V"],[1e-3,"mV"],[1e-6,"µV"]]}};
+      let scale=1,label=unit;if(scales[unit]){{for(const candidate of scales[unit]){{if(Math.abs(value)>=candidate[0]){{[scale,label]=candidate;break;}}}}}}
+      return `${{Number((value/scale).toPrecision(4))}}${{label?" "+label:""}}`;
+    }};
+    tip.hidden=false; tip.textContent=`${{nearest.trace.label}}\n${{plot.axis_label}}: ${{formatEngineering(nearest.trace.x[nearest.index],plot.axis_unit)}}\n${{plot.y_label}}: ${{formatEngineering(nearest.trace.y[nearest.index],plot.y_unit)}}\n${{nearest.trace.details}}`;
     tip.style.left=Math.min(event.offsetX+12,svg.clientWidth-tip.offsetWidth-8)+"px"; tip.style.top=Math.max(8,event.offsetY-tip.offsetHeight-8)+"px";
   }});
   svg.addEventListener("pointerleave",()=>{{cursor.hidden=true;tip.hidden=true}});
@@ -780,11 +1036,18 @@ document.querySelectorAll("svg.plot").forEach(svg=>{{
 """
 
 
-def build_experiment_report(runs_dir: Path, experiment_id: str) -> ExperimentReportResult:
+def build_experiment_report(
+    runs_dir: Path,
+    experiment_id: str,
+    report_context: ReportContext | None = None,
+) -> ExperimentReportResult:
     """Build a deterministic, self-contained report for one completed experiment."""
     experiment_dir, manifest, results, record = _load_artifacts(runs_dir, experiment_id)
-    plots = _plots(experiment_dir, experiment_id, results)
+    context, image_data = _validated_context(experiment_dir, report_context)
+    plots = _plots(experiment_dir, experiment_id, results, manifest)
     artifacts = ["experiment_manifest.json", "results.json"]
+    if context:
+        artifacts.append(REPORT_CONTEXT_FILENAME)
     results_csv = _inside(
         experiment_dir / "results.csv",
         experiment_dir,
@@ -826,6 +1089,8 @@ def build_experiment_report(runs_dir: Path, experiment_id: str) -> ExperimentRep
         record,
         plots,
         artifacts,
+        context,
+        image_data,
         statistical_summary,
         worst_cases,
         sensitivity,
@@ -840,6 +1105,7 @@ def build_experiment_report(runs_dir: Path, experiment_id: str) -> ExperimentRep
     try:
         temporary.write_text(document, encoding="utf-8", newline="\n")
         os.replace(temporary, report_path)
+        _write_context(experiment_dir, context)
     except Exception:
         temporary.unlink(missing_ok=True)
         raise

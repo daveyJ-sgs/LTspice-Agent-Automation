@@ -291,7 +291,10 @@ class ExperimentReportTests(unittest.TestCase):
         self.assertNotIn("http://", document)
         self.assertIn('href="native-batch/circuit.raw"', document)
         self.assertIn('href="results.json"', document)
-        self.assertIn("Full-resolution source: 4 points", document)
+        self.assertIn("2 full-resolution traces · 4 points", document)
+        self.assertIn("Evidence and complete run data", document)
+        self.assertIn("Design-space summary", document)
+        self.assertIn("100 kHz", document)
         payload_text = document.split(
             '<script id="report-data" type="application/json">', 1
         )[1].split("</script>", 1)[0]
@@ -306,6 +309,51 @@ class ExperimentReportTests(unittest.TestCase):
                 self.runs, self.experiment_id
             )
         self.assertEqual(Path(repeated["report_html"]).read_bytes(), first)
+
+    def test_persists_bounded_human_report_context(self) -> None:
+        context = {
+            "title": "Human-first RC report",
+            "circuit_summary": "A simple low-pass network.",
+            "simulation_summary": "An AC sweep checks attenuation.",
+            "mcp_context": "This validates structured reporting.",
+        }
+        with patch.object(
+            experiment_report.raw_parser, "parse_raw", return_value=self._raw_data()
+        ):
+            result = experiment_report.build_experiment_report(
+                self.runs, self.experiment_id, context
+            )
+            repeated = experiment_report.build_experiment_report(
+                self.runs, self.experiment_id
+            )
+
+        document = Path(result["report_html"]).read_text(encoding="utf-8")
+        self.assertIn("Human-first RC report", document)
+        self.assertIn("Circuit function", document)
+        self.assertIn("report_context.json", document)
+        self.assertEqual(
+            json.loads(
+                (self.experiment_dir / "report_context.json").read_text(
+                    encoding="utf-8"
+                )
+            ),
+            context,
+        )
+        self.assertEqual(Path(repeated["report_html"]).read_text(), document)
+
+    def test_rejects_unbounded_or_escaped_report_context(self) -> None:
+        with self.assertRaisesRegex(ValueError, "text budget"):
+            experiment_report.build_experiment_report(
+                self.runs,
+                self.experiment_id,
+                {"title": "x" * (experiment_report.MAX_CONTEXT_TEXT + 1)},
+            )
+        with self.assertRaisesRegex(ValueError, "inside the project"):
+            experiment_report.build_experiment_report(
+                self.runs,
+                self.experiment_id,
+                {"schematic_path": "../outside.png"},
+            )
 
     def test_resolves_portable_windows_artifact_paths(self) -> None:
         results_path = self.experiment_dir / "results.json"

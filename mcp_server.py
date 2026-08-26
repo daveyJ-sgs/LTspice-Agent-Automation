@@ -68,6 +68,7 @@ ExperimentComparisonResult = experiment_engine.ExperimentComparisonResult
 ExperimentIndexBuildResult = experiment_index.ExperimentIndexBuildResult
 ExperimentQueryResult = experiment_index.ExperimentQueryResult
 ExperimentReportResult = experiment_report.ExperimentReportResult
+ReportContext = experiment_report.ReportContext
 ComparisonReportResult = experiment_visualization.ComparisonReportResult
 ExperimentDashboardResult = experiment_visualization.ExperimentDashboardResult
 StatisticalVariable = statistical_engine.StatisticalVariable
@@ -1357,9 +1358,14 @@ def query_experiments(
 
 
 @mcp.tool()
-def build_experiment_report(experiment_id: str) -> ExperimentReportResult:
+def build_experiment_report(
+    experiment_id: str,
+    report_context: ReportContext | None = None,
+) -> ExperimentReportResult:
     """Build a portable offline HTML report from completed experiment artifacts."""
-    return experiment_report.build_experiment_report(RUNS_DIR, experiment_id)
+    if report_context is None:
+        return experiment_report.build_experiment_report(RUNS_DIR, experiment_id)
+    return experiment_report.build_experiment_report(RUNS_DIR, experiment_id, report_context)
 
 
 @mcp.tool()

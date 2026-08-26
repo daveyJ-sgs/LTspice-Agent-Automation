@@ -75,11 +75,17 @@ def _comparison_plots(
 ) -> list[dict[str, object]]:
     collections: list[tuple[str, str, list[dict[str, object]]]] = []
     for role, experiment_id in (("Baseline", baseline_id), ("Candidate", candidate_id)):
-        experiment_dir, _, results, _ = experiment_report._load_artifacts(
+        experiment_dir, manifest, results, _ = experiment_report._load_artifacts(
             runs_dir, experiment_id
         )
         collections.append(
-            (role, experiment_id, experiment_report._plots(experiment_dir, experiment_id, results))
+            (
+                role,
+                experiment_id,
+                experiment_report._plots(
+                    experiment_dir, experiment_id, results, manifest
+                ),
+            )
         )
 
     groups: dict[str, dict[str, object]] = {}
@@ -98,7 +104,8 @@ def _comparison_plots(
             assert isinstance(traces, list)
             for original in plot["traces"]:
                 trace = dict(original)
-                trace["label"] = f"{role}: {trace['label']}"
+                trace["label"] = f"{role}: {trace['details']}"
+                trace["legend_label"] = role
                 trace["raw_href"] = f"../../{experiment_id}/{trace['raw_href']}"
                 traces.append(trace)
 
@@ -200,6 +207,10 @@ def _comparison_document(
         evidence_links.append((f"../../{baseline_id}/report.html", "baseline report"))
     if candidate_id in available_reports:
         evidence_links.append((f"../../{candidate_id}/report.html", "candidate report"))
+    for raw_href in sorted(
+        {str(trace["raw_href"]) for plot in plots for trace in plot["traces"]}
+    ):
+        evidence_links.append((raw_href, raw_href))
     evidence = " · ".join(
         f'<a href="{quote(name, safe="/")}">{_text(label)}</a>'
         for name, label in evidence_links

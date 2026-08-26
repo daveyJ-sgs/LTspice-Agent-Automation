@@ -293,7 +293,10 @@ make mixed-signal-daq
 The AC contract checks passband gain, cutoff, and peaking. The transient
 contract checks front-end settling, full-resolution track error, and hold
 droop. Each run emits yield, Wilson intervals, worst evidenced cases, global
-sensitivity, and interactive offline HTML. The companion
+sensitivity, and interactive offline HTML. The DAQ reports place the schematic,
+plain-language circuit and simulation context, and interactive plots first;
+compact engineering units replace raw scientific notation, while complete
+parameters and evidence remain in a collapsed appendix. The companion
 `mixed_signal_daq_boundary.cir` isolates track duration so an adaptive study
 can resolve the real pass/fail acquisition-time boundary without conflating
 other tolerances.
@@ -907,9 +910,14 @@ per-corner yield.
 
 Call `build_experiment_report` with a completed experiment ID to write a
 self-contained `report.html` beside that experiment's structured artifacts.
-The report opens directly from disk without a web server or CDN. It includes
-the experiment summary, point parameters and measurements, requirement
-outcomes, and an interactive SVG overlay for each completed waveform analysis.
+The report opens directly from disk without a web server or CDN. Its default
+layout leads with a brief experiment explanation and interactive SVG waveform
+overlays, summarizes parameter ranges in engineering units, and keeps complete
+point, requirement, provenance, JSON, CSV, and RAW evidence in a collapsed
+appendix. Callers may supply bounded `report_context` text plus a repository-
+local PNG/JPEG schematic; that context is persisted as `report_context.json`
+so later report rebuilds remain deterministic. Existing callers receive a
+generic human-readable summary without changing their API usage.
 
 Waveforms are parsed from the existing RAW evidence without rerunning LTspice.
 Each trace is sliced to its validated native or independent step before a

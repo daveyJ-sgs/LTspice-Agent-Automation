@@ -204,11 +204,38 @@ TRANSIENT_ANALYSES = [
 ]
 
 
-def _finish(experiment_id: str) -> dict[str, object]:
+COMMON_REPORT_CONTEXT = {
+    "title": "1 MHz mixed-signal DAQ front end",
+    "circuit_summary": (
+        "A two-pole anti-alias network feeds a buffered 1.6 V/V gain stage, "
+        "ADC driver, and clocked sample-and-hold. Light and heavy ADC input "
+        "capacitance corners exercise the acquisition load."
+    ),
+    "mcp_context": (
+        "This production example proves the MCP can generate a deterministic "
+        "statistical plan, drive real LTspice runs, map RAW waveforms back to "
+        "their samples and corners, evaluate requirements, and retain portable evidence."
+    ),
+    "schematic_path": "docs/images/mixed-signal-daq-schematic.png",
+    "schematic_caption": (
+        "The editable LTspice .asc is the educational human view. Automation "
+        "runs equivalent .cir netlists and substitutes the sampled component "
+        "values plus light/heavy ADC-load corners."
+    ),
+}
+
+
+def _finish(
+    experiment_id: str,
+    simulation_summary: str,
+) -> dict[str, object]:
     summary = summarize_statistical_experiment(experiment_id)
     analyze_statistical_worst_cases(experiment_id)
     analyze_statistical_sensitivity(experiment_id)
-    report = build_experiment_report(experiment_id)
+    report = build_experiment_report(
+        experiment_id,
+        {**COMMON_REPORT_CONTEXT, "simulation_summary": simulation_summary},
+    )
     return {"summary": summary, "report": report}
 
 
@@ -237,8 +264,18 @@ def run_study() -> dict[str, object]:
         filename="mixed_signal_daq_transient.cir",
         reuse_cache=True,
     )
-    ac_outputs = _finish(ac["experiment_id"])
-    transient_outputs = _finish(transient["experiment_id"])
+    ac_outputs = _finish(
+        ac["experiment_id"],
+        "A 1 kHz to 100 MHz AC sweep measures front-end gain, the -3 dB "
+        "bandwidth window, and passband peaking across 12 scrambled-Halton "
+        "samples at both ADC-load corners (24 circuit points).",
+    )
+    transient_outputs = _finish(
+        transient["experiment_id"],
+        "A 2 µs step-response simulation checks front-end settling, tracking "
+        "error before sampling, and held-voltage droop across 12 "
+        "scrambled-Halton samples at both ADC-load corners (24 circuit points).",
+    )
 
     return {
         "plan": plan,
