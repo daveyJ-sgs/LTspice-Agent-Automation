@@ -328,6 +328,7 @@ Model Context Protocol, in-process (no REST server needed): `run_netlist`,
 `define_local_sensitivity_study`, `analyze_local_sensitivity`,
 `define_adaptive_boundary_study`, `advance_adaptive_boundary_study`,
 `get_adaptive_boundary_study`,
+`compare_statistical_experiments`,
 `build_experiment_report`, `build_comparison_report`,
 `build_experiment_dashboard`, `list_runs`, `build_dashboard`, and
 `list_examples`.
@@ -799,6 +800,20 @@ the same deterministic UTF-8 artifacts under
 `runs/comparisons/comparison-<id>/comparison.json` and `comparison.md`.
 Malformed, unfinished, ambiguous, or non-finite inputs are rejected before an
 output directory is created.
+
+`compare_statistical_experiments` adds a statistical evidence contract. Both
+studies must share the same normalized population, corner, parameter-unit, and
+electrical-analysis definitions. A shared immutable plan enables exact
+point-by-point classification transitions. Different compatible plans are
+compared only as unpaired population summaries; if both the circuit and sample
+plan change, attribution is explicitly labeled confounded.
+
+The content-addressed comparison records circuit and plan hashes, aggregate and
+per-corner yield/interval evidence, requirement-margin distribution deltas,
+invalid counts, and paired classification transitions in JSON and CSV. Its
+offline `report.html` links both source results. Missing electrical margins due
+to simulation or analysis errors remain null rather than becoming fabricated
+deltas. The comparison never reruns LTspice.
 
 ### Build and query the experiment index
 

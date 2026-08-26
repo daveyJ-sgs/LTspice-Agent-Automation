@@ -2649,6 +2649,51 @@ class MCPServerTests(unittest.TestCase):
         tool = next(tool for tool in tools if tool.name == "compare_experiments")
         self.assertIn("requirement_regressions", tool.output_schema["properties"])
 
+    def test_statistical_comparison_works_through_mcp_protocol(self) -> None:
+        expected = {
+            "comparison_id": "0123456789abcdef",
+            "comparison_dir": str(self.runs / "statistical-comparisons"),
+            "comparison_json": str(self.runs / "comparison.json"),
+            "comparison_csv": str(self.runs / "comparison.csv"),
+            "comparison_html": str(self.runs / "report.html"),
+            "baseline_experiment_id": "mcp-experiment-baseline",
+            "candidate_experiment_id": "mcp-experiment-candidate",
+            "comparison_basis": "paired_same_plan",
+            "attribution": "paired_circuit_outcomes",
+            "sample_plan_changed": False,
+            "circuit_changed": True,
+            "aggregate_yield_delta": 0.1,
+            "corner_count": 2,
+            "requirement_count": 3,
+            "paired_points": 16,
+        }
+        with patch.object(
+            mcp_server.statistical_comparison,
+            "build_statistical_comparison",
+            return_value=expected,
+        ) as compare:
+            result = asyncio.run(
+                mcp_server.mcp.call_tool(
+                    "compare_statistical_experiments",
+                    {
+                        "baseline_experiment_id": expected[
+                            "baseline_experiment_id"
+                        ],
+                        "candidate_experiment_id": expected[
+                            "candidate_experiment_id"
+                        ],
+                    },
+                )
+            )
+
+        self.assertFalse(result.is_error)
+        self.assertEqual(result.structured_content, expected)
+        compare.assert_called_once_with(
+            self.runs,
+            expected["baseline_experiment_id"],
+            expected["candidate_experiment_id"],
+        )
+
     def test_experiment_index_tools_work_through_mcp_protocol(self) -> None:
         manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
         try:

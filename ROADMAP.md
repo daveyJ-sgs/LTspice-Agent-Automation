@@ -589,10 +589,22 @@ Verification gate:
 - Synthetic validation covers matching, misses, malformed inputs, and corner
   binding; rebuilding 48 real experiments and 1,640 points produced zero issues
 
-##### Phase 3E-C: Compatible statistical comparison
+##### Phase 3E-C: Compatible statistical comparison — complete
 
-- Add content-addressed comparison of two compatible statistical studies,
-  distinguishing changed sample plans from changed circuit outcomes.
+- Compatible studies share normalized population, corner, parameter-unit, and
+  electrical-analysis contracts while allowing circuit or sampling changes
+- Same-plan comparisons preserve exact point pairing and classification
+  transitions; changed plans use unpaired population summaries only
+- Attribution distinguishes repeat evidence, paired circuit outcomes, sample
+  plan changes, and confounded simultaneous circuit/plan changes
+- Content-addressed JSON, CSV, and offline HTML expose aggregate and per-corner
+  yield evidence, Wilson bounds, requirement-margin distribution deltas,
+  invalid evidence, and source-result links without rerunning LTspice
+- Missing requirement populations from infrastructure failures remain explicit
+  nulls and incompatible populations fail before output publication
+- Real comparison `00b0ea046f0b291b` pairs two 12-point transient Sallen-Key
+  runs from the same plan: the baseline's 12 analysis errors transition to five
+  electrical passes and seven failures in the repeat report
 
 ##### Phase 3E-D: Resource hardening and production example
 

@@ -42,6 +42,7 @@ import raw_parser
 import report_runs
 import sensitivity_analysis
 import statistical_engine
+import statistical_comparison
 import statistical_results
 import waveform_metrics
 import worst_case_analysis
@@ -75,6 +76,7 @@ StatisticalCornerAxis = statistical_engine.StatisticalCornerAxis
 StatisticalPlanResult = statistical_engine.StatisticalPlanResult
 StatisticalSamplingMethod = Literal["independent", "latin_hypercube", "halton"]
 StatisticalSummaryResult = statistical_results.StatisticalSummaryResult
+StatisticalComparisonResult = statistical_comparison.StatisticalComparisonResult
 SensitivityAnalysisResult = sensitivity_analysis.SensitivityAnalysisResult
 LocalSensitivityAnalysisResult = local_sensitivity.LocalSensitivityAnalysisResult
 AdaptiveBoundaryStudyResult = adaptive_boundary.AdaptiveBoundaryStudyResult
@@ -1299,6 +1301,17 @@ def compare_experiments(
         RUNS_DIR,
         baseline_experiment_id,
         candidate_experiment_id,
+    )
+
+
+@mcp.tool()
+def compare_statistical_experiments(
+    baseline_experiment_id: str,
+    candidate_experiment_id: str,
+) -> StatisticalComparisonResult:
+    """Compare compatible statistical evidence without rerunning LTspice."""
+    return statistical_comparison.build_statistical_comparison(
+        RUNS_DIR, baseline_experiment_id, candidate_experiment_id
     )
 
 
