@@ -42,6 +42,14 @@ class MCPServerTests(unittest.TestCase):
         self.runs_patch.stop()
         self.temporary_directory.cleanup()
 
+    def test_experiment_timeout_has_a_finite_upper_bound(self) -> None:
+        mcp_server._validate_timeout(mcp_server.experiment_engine.MAX_TIMEOUT_SECONDS)
+        for value in (0, True, mcp_server.experiment_engine.MAX_TIMEOUT_SECONDS + 1):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ValueError, "timeout_seconds must be between"
+            ):
+                mcp_server._validate_timeout(value)
+
     def make_run(self, name: str = "run-001") -> Path:
         run_dir = self.runs / name
         run_dir.mkdir(parents=True)

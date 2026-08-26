@@ -26,6 +26,7 @@ MAX_EXPERIMENT_POINTS = 1000
 MAX_EXPERIMENT_WORKERS = 4
 MAX_WAVEFORM_ANALYSES = 32
 MAX_REQUIREMENTS_PER_EXPERIMENT = 256
+MAX_TIMEOUT_SECONDS = 3_600
 EXPERIMENT_ENGINE_VERSION = 1
 
 
@@ -41,9 +42,11 @@ def _validate_timeout(timeout_seconds: int) -> None:
     if (
         not isinstance(timeout_seconds, int)
         or isinstance(timeout_seconds, bool)
-        or timeout_seconds <= 0
+        or not 1 <= timeout_seconds <= MAX_TIMEOUT_SECONDS
     ):
-        raise ValueError("timeout_seconds must be a positive integer")
+        raise ValueError(
+            f"timeout_seconds must be between 1 and {MAX_TIMEOUT_SECONDS}"
+        )
 
 
 def _validate_reuse_cache(reuse_cache: bool) -> None:

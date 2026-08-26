@@ -43,7 +43,7 @@ design.
 - Cross-platform Python wrapper around LTspice batch mode
 - Binary and ASCII `.raw` waveform parsing, CSV export, and plots
 - `.meas` and native `.step` result extraction
-- Parameter sweeps, Monte Carlo analysis, and target-response search
+- Parameter sweeps, statistical yield analysis, and target-response search
 - Durable run and experiment manifests, restart recovery, and a static HTML dashboard
 - An MCP server exposing the toolkit as native agent tools
 - Local synchronous and asynchronous REST API
@@ -115,7 +115,7 @@ python3 -m pip install -r requirements.txt
 
 Common workflows are also available through `make`: `make test`, `make ac`,
 `make transient`, `make nand`, `make sallen-key`, `make sweep`,
-`make monte-carlo`, `make search`, `make step`, and `make dashboard`.
+`make statistical-yield`, `make search`, `make step`, and `make dashboard`.
 
 Each run gets its own timestamped directory under `runs/`. LTspice writes the
 simulation results there, including the `.raw` and `.log` files. Scalar `.meas`
@@ -208,15 +208,36 @@ PYTHONPATH=. python3 examples/analyze_transient.py
 python3 -m unittest discover -s tests -v
 ```
 
-## Run a Monte Carlo analysis
+## Run a production statistical yield analysis
 
-The Monte Carlo example generates 24 deterministic component samples, runs one
-LTspice simulation per sample, checks a gain window, exports CSV/SQLite data,
-and creates a distribution plot:
+The statistical RC example uses the same production API exposed over MCP. It
+creates an immutable 24-sample scrambled-Halton plan with bounded Gaussian R/C
+populations, runs one LTspice simulation per paired sample, evaluates a gain
+window, and generates statistics, worst-case, sensitivity, CSV/JSON evidence,
+and the offline HTML report. It does not maintain a second random sampler or
+private SQLite schema:
 
 ```bash
-PYTHONPATH=. python3 examples/monte_carlo_rc.py
+PYTHONPATH=. python3 examples/statistical_rc_yield.py
 ```
+
+### Resource ceilings
+
+The production path rejects oversized work before it can become trusted
+evidence: at most 1,000 statistical samples or expanded experiment points, 32
+variables, 4 workers, 32 waveform analyses, and 256 requirements are accepted.
+Each LTspice process has a 3,600-second maximum timeout. RAW parsing is limited
+to 256 MiB, log parsing to 64 MiB, and generated artifacts from one accepted
+run to 512 MiB. A successful process whose artifacts exceed that final ceiling
+is recorded as failed before hashing or cache publication; cache entries over
+the same ceiling fail integrity validation. The artifact ceiling is a
+post-process acceptance guard, not an operating-system disk quota.
+
+Offline reports embed at most 100 traces, 40,000 displayed waveform points, and
+2,000 statistical analysis rows. Empirical CSV imports are separately limited
+to 1 MB and 10,000 observations. These are validation limits, so malformed or
+oversized studies cannot prevent the rebuildable index and dashboard from
+isolating and reporting other valid experiments.
 
 ## Run the CMOS NAND experiment
 

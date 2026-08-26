@@ -11,6 +11,8 @@ from pathlib import Path
 
 from ltspice_text import text_encoding
 
+MAX_RAW_FILE_BYTES = 256 * 1024 * 1024
+
 
 @dataclass
 class RawData:
@@ -71,6 +73,8 @@ def _header_and_data_offset(raw: bytes) -> tuple[str, int, str, str]:
 
 
 def parse_raw(path: Path) -> RawData:
+    if path.stat().st_size > MAX_RAW_FILE_BYTES:
+        raise ValueError(f"RAW file exceeds {MAX_RAW_FILE_BYTES} bytes")
     raw = path.read_bytes()
     header, data_offset, data_mode, text_encoding_name = _header_and_data_offset(raw)
     lines = header.splitlines()

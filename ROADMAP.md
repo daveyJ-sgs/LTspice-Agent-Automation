@@ -606,13 +606,22 @@ Verification gate:
   runs from the same plan: the baseline's 12 analysis errors transition to five
   electrical passes and seven failures in the repeat report
 
-##### Phase 3E-D: Resource hardening and production example
+##### Phase 3E-D: Resource hardening and production example — complete
 
 - Enforce bounded sample counts, corner expansion, imported data, report
   payloads, runtime, and disk use; malformed studies must be isolated during
-  index and dashboard rebuilds.
+  index and dashboard rebuilds
+- Per-process timeouts stop at 3,600 seconds; RAW and log readers reject files
+  above 256 MiB and 64 MiB before reading, and successful or cached run
+  artifacts above 512 MiB are rejected before hashing or cache publication
+- The 512 MiB artifact check is explicitly a post-process evidence-acceptance
+  guard rather than an operating-system disk quota
 - Retire the standalone Monte Carlo example in favor of a documented example
-  built on the production statistical API.
+  built on the production statistical API
+- The real 24-point scrambled-Halton RC example completed as
+  `mcp-experiment-20260825-184130-112101`: all points produced simulator and
+  analysis evidence, observed yield was 100%, and its Wilson 95% interval was
+  86.20%–100%
 
 ##### Phase 3E-E: Real Windows LTspice CI prototype
 

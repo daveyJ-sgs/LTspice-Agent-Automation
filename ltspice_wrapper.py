@@ -56,6 +56,8 @@ PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_NETLIST = PROJECT_DIR / "examples" / "rc_lowpass.cir"
 RUNS_DIR = PROJECT_DIR / "runs"
 CACHE_SCHEMA_VERSION = 1
+MAX_LOG_FILE_BYTES = 64 * 1024 * 1024
+MAX_RUN_OUTPUT_BYTES = 512 * 1024 * 1024
 
 
 def _package_version(name: str) -> str | None:
@@ -182,6 +184,16 @@ def _result_artifacts(output_dir: Path, netlist_name: str) -> list[dict[str, obj
             }
         )
     return records
+
+
+def _result_size_bytes(output_dir: Path, netlist_name: str) -> int:
+    return sum(
+        path.stat().st_size
+        for path in output_dir.iterdir()
+        if path.is_file()
+        and not path.is_symlink()
+        and path.name not in {"run_manifest.json", netlist_name}
+    )
 
 
 _DEPENDENCY_DIRECTIVE = re.compile(
@@ -350,6 +362,7 @@ def _validated_cache_artifacts(
         ):
             return None
         artifacts: list[tuple[Path, str, str, int]] = []
+        total_size = 0
         names: set[str] = set()
         reserved_names = {
             "run_manifest.json",
@@ -379,6 +392,9 @@ def _validated_cache_artifacts(
             if name in names:
                 return None
             names.add(name)
+            total_size += size
+            if total_size > MAX_RUN_OUTPUT_BYTES:
+                return None
             artifact = cache_entry / "artifacts" / name
             if (
                 not artifact.is_file()
@@ -581,6 +597,22 @@ def run_netlist(
                 )[0]
                 == cache_key,
             ):
+                output_size_bytes = _result_size_bytes(
+                    output_dir, netlist_path.name
+                )
+                if output_size_bytes > MAX_RUN_OUTPUT_BYTES:
+                    manifest.update(
+                        status="failed",
+                        finished_at=datetime.now().astimezone().isoformat(),
+                        duration_seconds=time.monotonic() - started_clock,
+                        output_size_bytes=output_size_bytes,
+                        error=(
+                            "restored LTspice artifacts exceed "
+                            f"{MAX_RUN_OUTPUT_BYTES} bytes"
+                        ),
+                    )
+                    _write_manifest(manifest_path, manifest)
+                    raise RuntimeError(manifest["error"])
                 manifest.update(
                     status="completed",
                     finished_at=datetime.now().astimezone().isoformat(),
@@ -603,6 +635,7 @@ def run_netlist(
                         | {"run_manifest.json"}
                     ),
                     result_artifacts=_result_artifacts(output_dir, netlist_path.name),
+                    output_size_bytes=output_size_bytes,
                 )
                 _write_manifest(manifest_path, manifest)
                 return output_dir
@@ -659,6 +692,21 @@ def run_netlist(
             f"LTspice failed with exit code {completed.returncode}\n{details}"
         )
 
+    output_size_bytes = _result_size_bytes(output_dir, netlist_path.name)
+    if output_size_bytes > MAX_RUN_OUTPUT_BYTES:
+        manifest.update(
+            status="failed",
+            finished_at=datetime.now().astimezone().isoformat(),
+            duration_seconds=time.monotonic() - started_clock,
+            returncode=completed.returncode,
+            stdout=completed.stdout[-4000:],
+            stderr=completed.stderr[-4000:],
+            output_size_bytes=output_size_bytes,
+            error=f"LTspice artifacts exceed {MAX_RUN_OUTPUT_BYTES} bytes",
+        )
+        _write_manifest(manifest_path, manifest)
+        raise RuntimeError(manifest["error"])
+
     manifest.update(
         status="completed",
         finished_at=datetime.now().astimezone().isoformat(),
@@ -668,6 +716,7 @@ def run_netlist(
         stderr=completed.stderr[-4000:],
         result_files=sorted(item.name for item in output_dir.iterdir()),
         result_artifacts=_result_artifacts(output_dir, netlist_path.name),
+        output_size_bytes=output_size_bytes,
         execution_source="simulator",
     )
     if reuse_cache and cache_key is not None and cache_request is not None:
@@ -724,6 +773,8 @@ def parse_measurements(log_path: Path) -> dict[str, float]:
 
 
 def _decode_log(log_path: Path) -> str:
+    if log_path.stat().st_size > MAX_LOG_FILE_BYTES:
+        raise ValueError(f"LTspice log exceeds {MAX_LOG_FILE_BYTES} bytes")
     return decode_text(log_path.read_bytes())
 
 

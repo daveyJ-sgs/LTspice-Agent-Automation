@@ -602,7 +602,7 @@ def _worst_case_panel(analysis: dict[str, object] | None) -> str:
             continue
         case = cases[0]
         corner = ", ".join(
-            f"{name}={value}" for name, value in case["corners"].items()
+            f"{name}={value}" for name, value in case.get("corners", {}).items()
         ) or "—"
         state = "pass" if case["passed"] else "fail"
         evidence = quote(str(case["evidence_path"]), safe="/")

@@ -110,6 +110,92 @@ class AutomationTests(unittest.TestCase):
                 )
             self.assertFalse(cache.exists())
 
+    def test_run_rejects_oversized_output_before_hashing_or_cache_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "LTspice.exe"
+            executable.write_bytes(b"simulator")
+            source = root / "filter.cir"
+            source.write_text("R1 in out 1k\n.end\n", encoding="utf-8")
+            cache = root / "cache"
+
+            def simulate(
+                command: list[str], **kwargs: object
+            ) -> subprocess.CompletedProcess[str]:
+                run_netlist_path = Path(command[-1])
+                run_netlist_path.with_suffix(".raw").write_bytes(b"too large")
+                run_netlist_path.with_suffix(".log").write_text(
+                    "gain=1\n", encoding="utf-8"
+                )
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            ltspice_wrapper._simulator_metadata_cached.cache_clear()
+            with (
+                patch.object(ltspice_wrapper, "LTSPICE", executable),
+                patch.object(ltspice_wrapper, "MAX_RUN_OUTPUT_BYTES", 8),
+                patch.object(ltspice_wrapper.subprocess, "run", side_effect=simulate),
+                patch.object(
+                    ltspice_wrapper,
+                    "_result_artifacts",
+                    side_effect=AssertionError("oversized artifacts must not be hashed"),
+                ),
+                self.assertRaisesRegex(RuntimeError, "artifacts exceed 8 bytes"),
+            ):
+                run_netlist(
+                    source,
+                    root / "oversized",
+                    reuse_cache=True,
+                    cache_dir=cache,
+                )
+
+            manifest = json.loads(
+                (root / "oversized" / "run_manifest.json").read_text()
+            )
+            self.assertEqual(manifest["status"], "failed")
+            self.assertGreater(manifest["output_size_bytes"], 8)
+            self.assertFalse(cache.exists())
+
+    def test_cache_integrity_rejects_oversized_artifacts_before_hashing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache_entry = Path(directory) / "simulation-key"
+            artifact_dir = cache_entry / "artifacts"
+            artifact_dir.mkdir(parents=True)
+            artifact = artifact_dir / "filter.log"
+            artifact.write_bytes(b"too large")
+            request = {"netlist_filename": "filter.cir"}
+            (cache_entry / "cache_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": ltspice_wrapper.CACHE_SCHEMA_VERSION,
+                        "status": "completed",
+                        "cache_key": "key",
+                        "request": request,
+                        "artifacts": [
+                            {
+                                "name": "filter.log",
+                                "sha256": "unused",
+                                "size_bytes": artifact.stat().st_size,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(ltspice_wrapper, "MAX_RUN_OUTPUT_BYTES", 8),
+                patch.object(
+                    ltspice_wrapper,
+                    "_sha256_file",
+                    side_effect=AssertionError("oversized cache must not be hashed"),
+                ),
+            ):
+                validated = ltspice_wrapper._validated_cache_artifacts(
+                    cache_entry, "key", request
+                )
+
+            self.assertIsNone(validated)
+
     def test_simulation_cache_reuses_verified_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -370,6 +456,22 @@ Binary:
                 encoding="utf-16le",
             )
             self.assertEqual(parse_measurements(path), {"gain": -35.5, "tpd": 2.5e-9})
+
+    def test_raw_and_log_parsers_reject_oversized_artifacts_before_read(self) -> None:
+        import ltspice_wrapper
+        import raw_parser
+
+        with tempfile.TemporaryDirectory() as directory:
+            raw_path = Path(directory) / "oversized.raw"
+            log_path = Path(directory) / "oversized.log"
+            with raw_path.open("wb") as handle:
+                handle.truncate(raw_parser.MAX_RAW_FILE_BYTES + 1)
+            with log_path.open("wb") as handle:
+                handle.truncate(ltspice_wrapper.MAX_LOG_FILE_BYTES + 1)
+            with self.assertRaisesRegex(ValueError, "RAW file exceeds"):
+                parse_raw(raw_path)
+            with self.assertRaisesRegex(ValueError, "LTspice log exceeds"):
+                parse_measurements(log_path)
 
     def test_log_parsers_accept_utf8_and_utf16le_with_or_without_bom(self) -> None:
         log = ".step rval=1000\nMeasurement: gain\n step value\n 1 2.5\ngain=2.5\n"

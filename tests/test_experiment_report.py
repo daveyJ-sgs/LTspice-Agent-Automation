@@ -65,7 +65,6 @@ class ExperimentReportTests(unittest.TestCase):
                     "unit": "dB",
                     "worst_cases": [
                         {
-                            "corners": {"load": "weak"},
                             "evidence_path": "point-0001/",
                             "margin": -0.1,
                             "passed": False,
