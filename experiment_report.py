@@ -425,7 +425,11 @@ def _extent(values: list[float]) -> tuple[float, float]:
     return low, high
 
 
-def _svg(plot: dict[str, object], plot_index: int) -> str:
+def _svg(
+    plot: dict[str, object],
+    plot_index: int,
+    interactive: bool = True,
+) -> str:
     traces = plot["traces"]
     assert isinstance(traces, list)
     log_x = bool(traces[0]["log_x"])
@@ -456,9 +460,9 @@ def _svg(plot: dict[str, object], plot_index: int) -> str:
         y_value = y_max - fraction * (y_max - y_min)
         grid.extend(
             [
-                f'<line class="grid-line" x1="{x_pixel:.2f}" y1="{_PLOT_TOP}" x2="{x_pixel:.2f}" y2="{_PLOT_TOP + height}"/>',
-                f'<text class="tick" x="{x_pixel:.2f}" y="{_PLOT_TOP + height + 22}" text-anchor="middle">{_text(_engineering(x_value, axis_unit))}</text>',
-                f'<line class="grid-line" x1="{_PLOT_LEFT}" y1="{y_pixel:.2f}" x2="{_PLOT_LEFT + width}" y2="{y_pixel:.2f}"/>',
+                f'<line class="grid-line grid-x" x1="{x_pixel:.2f}" y1="{_PLOT_TOP}" x2="{x_pixel:.2f}" y2="{_PLOT_TOP + height}"/>',
+                f'<text class="tick tick-x" data-tick-index="{tick}" x="{x_pixel:.2f}" y="{_PLOT_TOP + height + 22}" text-anchor="middle">{_text(_engineering(x_value, axis_unit))}</text>',
+                f'<line class="grid-line grid-y" x1="{_PLOT_LEFT}" y1="{y_pixel:.2f}" x2="{_PLOT_LEFT + width}" y2="{y_pixel:.2f}"/>',
                 f'<text class="tick" x="{_PLOT_LEFT - 10}" y="{y_pixel + 4:.2f}" text-anchor="end">{_text(_engineering(y_value, y_unit))}</text>',
             ]
         )
@@ -480,12 +484,13 @@ def _svg(plot: dict[str, object], plot_index: int) -> str:
             for point_index, point in enumerate(screen)
         )
         paths.append(
-            f'<path class="trace" d="{path_data}" stroke="{color}" data-trace-index="{index}"/>'
+            f'<path class="trace" d="{path_data}" stroke="{color}" data-trace-index="{index}" clip-path="url(#plot-clip-{plot_index})"/>'
         )
         payload_traces.append(
             {
                 "label": trace["label"],
                 "details": trace["details"],
+                "color": color,
                 "x": trace["x"],
                 "y": trace["y"],
                 "screen": screen,
@@ -496,6 +501,15 @@ def _svg(plot: dict[str, object], plot_index: int) -> str:
         "axis_unit": axis_unit,
         "y_label": traces[0]["y_label"],
         "y_unit": y_unit,
+        "log_x": log_x,
+        "x_domain": [x_min, x_max],
+        "y_domain": [y_min, y_max],
+        "bounds": {
+            "left": _PLOT_LEFT,
+            "top": _PLOT_TOP,
+            "width": width,
+            "height": height,
+        },
         "traces": payload_traces,
     }
     source_counts = sorted({int(trace["source_points"]) for trace in traces})
@@ -513,13 +527,15 @@ def _svg(plot: dict[str, object], plot_index: int) -> str:
         f"<li><strong>{_text(trace['label'])}</strong><br><span class=\"muted\">{_text(trace['details'])}</span></li>"
         for trace in traces
     )
-    return f"""
+    if not interactive:
+        return f"""
 <section class="panel plot-panel">
   <h2>{_text(_humanize(plot['name']))}</h2>
   <p class="muted">{len(traces)} full-resolution traces · {source_count}.{floor_note}</p>
   <div class="legend">{''.join(legend)}</div>
   <div class="plot-wrap">
     <svg class="plot" data-plot-index="{plot_index}" viewBox="0 0 {_SVG_WIDTH} {_SVG_HEIGHT}" role="img" aria-label="{_text(plot['name'])} waveform overlay">
+      <defs><clipPath id="plot-clip-{plot_index}"><rect x="{_PLOT_LEFT}" y="{_PLOT_TOP}" width="{width}" height="{height}"/></clipPath></defs>
       {''.join(grid)}
       <line class="axis" x1="{_PLOT_LEFT}" y1="{_PLOT_TOP + height}" x2="{_PLOT_LEFT + width}" y2="{_PLOT_TOP + height}"/>
       <line class="axis" x1="{_PLOT_LEFT}" y1="{_PLOT_TOP}" x2="{_PLOT_LEFT}" y2="{_PLOT_TOP + height}"/>
@@ -529,6 +545,36 @@ def _svg(plot: dict[str, object], plot_index: int) -> str:
       <text class="axis-label" transform="translate(18 {_PLOT_TOP + height / 2:.2f}) rotate(-90)" text-anchor="middle">{_text(traces[0]['y_label'])}</text>
     </svg>
     <div class="plot-tooltip" hidden></div>
+  </div>
+</section>"""
+    return f"""
+<section class="panel plot-panel">
+  <h2>{_text(_humanize(plot['name']))}</h2>
+  <p class="muted">{len(traces)} full-resolution traces · {source_count}.{floor_note}</p>
+  <div class="legend">{''.join(legend)}</div>
+  <div class="plot-toolbar"><span class="muted">Drag horizontally to zoom · double-click to reset</span><button class="zoom-reset" type="button" disabled>Reset zoom</button></div>
+  <div class="plot-layout">
+    <div class="plot-wrap">
+    <svg class="plot" data-plot-index="{plot_index}" viewBox="0 0 {_SVG_WIDTH} {_SVG_HEIGHT}" role="img" aria-label="{_text(plot['name'])} interactive waveform overlay">
+      <defs><clipPath id="plot-clip-{plot_index}"><rect x="{_PLOT_LEFT}" y="{_PLOT_TOP}" width="{width}" height="{height}"/></clipPath></defs>
+      {''.join(grid)}
+      <line class="axis" x1="{_PLOT_LEFT}" y1="{_PLOT_TOP + height}" x2="{_PLOT_LEFT + width}" y2="{_PLOT_TOP + height}"/>
+      <line class="axis" x1="{_PLOT_LEFT}" y1="{_PLOT_TOP}" x2="{_PLOT_LEFT}" y2="{_PLOT_TOP + height}"/>
+      {''.join(paths)}
+      <rect class="zoom-selection" x="0" y="{_PLOT_TOP}" width="0" height="{height}" hidden/>
+      <line class="cursor cursor-x" x1="0" y1="{_PLOT_TOP}" x2="0" y2="{_PLOT_TOP + height}" hidden/>
+      <line class="cursor cursor-y" x1="{_PLOT_LEFT}" y1="0" x2="{_PLOT_LEFT + width}" y2="0" hidden/>
+      <circle class="cursor-point" cx="0" cy="0" r="5" hidden/>
+      <text class="axis-label" x="{_PLOT_LEFT + width / 2:.2f}" y="{_SVG_HEIGHT - 10}" text-anchor="middle">{_text(traces[0]['axis_label'])}</text>
+      <text class="axis-label" transform="translate(18 {_PLOT_TOP + height / 2:.2f}) rotate(-90)" text-anchor="middle">{_text(traces[0]['y_label'])}</text>
+    </svg>
+    </div>
+    <aside class="plot-inspector" aria-live="polite">
+      <div class="inspector-kicker">Cursor inspector</div>
+      <strong class="inspector-trace">Move over a trace</strong>
+      <dl><div><dt>{_text(traces[0]['axis_label'])}</dt><dd class="inspector-x">—</dd></div><div><dt>{_text(traces[0]['y_label'])}</dt><dd class="inspector-y">—</dd></div></dl>
+      <div class="inspector-parameters muted">Hover near a waveform to inspect its nearest simulated point.</div>
+    </aside>
   </div>
   <details class="trace-key"><summary>Trace key and exact sample parameters ({len(traces)})</summary><ol>{trace_key}</ol></details>
 </section>"""
@@ -975,12 +1021,15 @@ a{{color:var(--blue)}} .eyebrow{{color:var(--blue);font-weight:700;text-transfor
 .narrative figure{{margin:18px 0}} .narrative img{{display:block;width:100%;height:auto;border:1px solid var(--border);border-radius:8px;background:#c8c8c8}} figcaption{{margin-top:8px;color:var(--muted);font-size:13px}} .story-grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}} .story-grid p{{margin:0}}
 .badge{{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:700;text-transform:uppercase}} .badge.pass{{color:#aff5b4;background:#1b4721}} .badge.fail{{color:#ffdcd7;background:#5a1e1e}}
 .table-wrap{{overflow:auto}} table{{border-collapse:collapse;width:100%;min-width:720px}} th,td{{border-bottom:1px solid var(--border);padding:10px;text-align:left;vertical-align:top}} th{{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em}}
-.plot-wrap{{position:relative}} .plot{{display:block;width:100%;min-height:260px;background:#0b0f14;border:1px solid var(--border);border-radius:8px}}
+.plot-layout{{display:grid;grid-template-columns:minmax(0,4fr) minmax(220px,1fr);gap:14px;align-items:stretch}} .plot-wrap{{position:relative;min-width:0}} .plot{{display:block;width:100%;min-height:260px;background:#0b0f14;border:1px solid var(--border);border-radius:8px;cursor:crosshair;touch-action:none;user-select:none}}
+.plot-toolbar{{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0}} button{{appearance:none;border:1px solid var(--border);border-radius:6px;background:#21262d;color:var(--text);padding:6px 10px;font:inherit;cursor:pointer}} button:hover:not(:disabled){{border-color:var(--blue)}} button:disabled{{opacity:.45;cursor:default}}
+.plot-inspector{{border:1px solid var(--border);border-radius:8px;background:#0b0f14;padding:16px;min-width:0;overflow-wrap:anywhere}} .inspector-kicker{{color:var(--blue);font-size:11px;font-weight:750;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px}} .inspector-trace{{display:block;font-size:16px;margin-bottom:14px}} .plot-inspector dl{{margin:0 0 14px}} .plot-inspector dl div{{display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid var(--border);padding:7px 0}} .plot-inspector dt{{color:var(--muted)}} .plot-inspector dd{{margin:0;font:600 13px ui-monospace,monospace;text-align:right}} .inspector-parameters{{font:12px/1.5 ui-monospace,monospace}}
 .grid-line{{stroke:#242b35;stroke-width:1}} .axis{{stroke:#768390;stroke-width:1.25}} .tick{{fill:var(--muted);font-size:11px}} .axis-label{{fill:var(--text);font-size:12px}} .trace{{fill:none;stroke-width:2.2;vector-effect:non-scaling-stroke}}
 .legend{{display:flex;gap:16px;flex-wrap:wrap;margin:10px 0}} .legend span{{display:flex;align-items:center;gap:6px}} .legend i{{display:inline-block;width:18px;height:3px}}
 .trace-key{{margin-top:12px}} .trace-key ol{{columns:2;column-gap:32px;padding-left:22px}} .trace-key li{{break-inside:avoid;margin:0 0 9px}} details>summary{{cursor:pointer;font-weight:650;color:var(--blue)}} .evidence-appendix>details>summary{{font-size:18px}}
-.cursor{{stroke:#c9d1d9;stroke-width:1;stroke-dasharray:4 4}} .plot-tooltip{{position:absolute;pointer-events:none;z-index:2;background:#010409;border:1px solid var(--border);border-radius:6px;padding:8px 10px;white-space:pre;font:12px/1.45 ui-monospace,monospace;box-shadow:0 8px 24px #0008}}
-@media(max-width:760px){{main{{padding:20px 12px}}.panel{{padding:12px}}.story-grid{{grid-template-columns:1fr}}.trace-key ol{{columns:1}}}}
+.cursor{{stroke:#c9d1d9;stroke-width:1;stroke-dasharray:4 4;pointer-events:none}} .cursor-point{{stroke:#fff;stroke-width:1.5;pointer-events:none}} .zoom-selection{{fill:#58a6ff33;stroke:var(--blue);stroke-width:1;pointer-events:none}} .cursor[hidden],.cursor-point[hidden],.zoom-selection[hidden]{{display:none}}
+@media(max-width:900px){{.plot-layout{{grid-template-columns:1fr}}.plot-inspector{{min-height:150px}}}}
+@media(max-width:760px){{main{{padding:20px 12px}}.panel{{padding:12px}}.story-grid{{grid-template-columns:1fr}}.trace-key ol{{columns:1}}.plot-toolbar{{align-items:flex-start;flex-direction:column}}}}
 </style>
 </head>
 <body><main>
@@ -1014,22 +1063,73 @@ a{{color:var(--blue)}} .eyebrow{{color:var(--blue);font-weight:700;text-transfor
 <script id="report-data" type="application/json">{payload}</script>
 <script>
 const plots=JSON.parse(document.getElementById("report-data").textContent);
+const formatEngineering=(value,unit)=>{{
+  const scales={{Hz:[[1e9,"GHz"],[1e6,"MHz"],[1e3,"kHz"],[1,"Hz"]],s:[[1,"s"],[1e-3,"ms"],[1e-6,"µs"],[1e-9,"ns"]],V:[[1,"V"],[1e-3,"mV"],[1e-6,"µV"]]}};
+  let scale=1,label=unit;if(scales[unit]){{for(const candidate of scales[unit]){{if(Math.abs(value)>=candidate[0]){{[scale,label]=candidate;break;}}}}}}
+  return `${{Number((value/scale).toPrecision(4))}}${{label?" "+label:""}}`;
+}};
 document.querySelectorAll("svg.plot").forEach(svg=>{{
-  const plot=plots[Number(svg.dataset.plotIndex)], tip=svg.parentElement.querySelector(".plot-tooltip"), cursor=svg.querySelector(".cursor");
-  svg.addEventListener("pointermove", event=>{{
-    const point=svg.createSVGPoint(); point.x=event.clientX; point.y=event.clientY;
-    const local=point.matrixTransform(svg.getScreenCTM().inverse()); let nearest=null;
-    plot.traces.forEach(trace=>trace.screen.forEach((screen,index)=>{{const distance=Math.abs(screen[0]-local.x);if(!nearest||distance<nearest.distance)nearest={{distance,trace,index,screen}}}}));
-    if(!nearest)return; cursor.hidden=false; cursor.setAttribute("x1",nearest.screen[0]); cursor.setAttribute("x2",nearest.screen[0]);
-    const formatEngineering=(value,unit)=>{{
-      const scales={{Hz:[[1e9,"GHz"],[1e6,"MHz"],[1e3,"kHz"],[1,"Hz"]],s:[[1,"s"],[1e-3,"ms"],[1e-6,"µs"],[1e-9,"ns"]],V:[[1,"V"],[1e-3,"mV"],[1e-6,"µV"]]}};
-      let scale=1,label=unit;if(scales[unit]){{for(const candidate of scales[unit]){{if(Math.abs(value)>=candidate[0]){{[scale,label]=candidate;break;}}}}}}
-      return `${{Number((value/scale).toPrecision(4))}}${{label?" "+label:""}}`;
-    }};
-    tip.hidden=false; tip.textContent=`${{nearest.trace.label}}\n${{plot.axis_label}}: ${{formatEngineering(nearest.trace.x[nearest.index],plot.axis_unit)}}\n${{plot.y_label}}: ${{formatEngineering(nearest.trace.y[nearest.index],plot.y_unit)}}\n${{nearest.trace.details}}`;
-    tip.style.left=Math.min(event.offsetX+12,svg.clientWidth-tip.offsetWidth-8)+"px"; tip.style.top=Math.max(8,event.offsetY-tip.offsetHeight-8)+"px";
+  const plot=plots[Number(svg.dataset.plotIndex)];
+  const panel=svg.closest(".plot-panel"), inspector=panel.querySelector(".plot-inspector"), reset=panel.querySelector(".zoom-reset");
+  const cursorX=svg.querySelector(".cursor-x"), cursorY=svg.querySelector(".cursor-y"), marker=svg.querySelector(".cursor-point"), selection=svg.querySelector(".zoom-selection");
+  const traceName=inspector.querySelector(".inspector-trace"), inspectorX=inspector.querySelector(".inspector-x"), inspectorY=inspector.querySelector(".inspector-y"), parameters=inspector.querySelector(".inspector-parameters");
+  const bounds=plot.bounds, original=[...plot.x_domain], state={{min:plot.x_domain[0],max:plot.x_domain[1],dragStart:null}};
+  const transform=value=>plot.log_x?Math.log10(value):value, inverse=value=>plot.log_x?10**value:value;
+  const clamp=value=>Math.max(bounds.left,Math.min(bounds.left+bounds.width,value));
+  const localPoint=event=>{{const point=svg.createSVGPoint();point.x=event.clientX;point.y=event.clientY;return point.matrixTransform(svg.getScreenCTM().inverse());}};
+  const mapX=value=>bounds.left+(transform(value)-state.min)*bounds.width/(state.max-state.min);
+  const mapY=value=>bounds.top+(plot.y_domain[1]-value)*bounds.height/(plot.y_domain[1]-plot.y_domain[0]);
+  const render=()=>{{
+    plot.traces.forEach((trace,index)=>{{
+      trace.screen=trace.x.map((value,pointIndex)=>[mapX(value),mapY(trace.y[pointIndex])]);
+      const path=trace.screen.map((point,pointIndex)=>`${{pointIndex?"L":"M"}}${{point[0].toFixed(2)}},${{point[1].toFixed(2)}}`).join(" ");
+      svg.querySelector(`path[data-trace-index="${{index}}"]`).setAttribute("d",path);
+    }});
+    svg.querySelectorAll(".tick-x").forEach((tick,index)=>{{
+      const transformed=state.min+index*(state.max-state.min)/5;
+      tick.textContent=formatEngineering(inverse(transformed),plot.axis_unit);
+    }});
+    reset.disabled=Math.abs(state.min-original[0])<1e-12&&Math.abs(state.max-original[1])<1e-12;
+  }};
+  const hideCursor=()=>{{cursorX.setAttribute("hidden","");cursorY.setAttribute("hidden","");marker.setAttribute("hidden","");}};
+  const inspect=local=>{{
+    if(local.x<bounds.left||local.x>bounds.left+bounds.width||local.y<bounds.top||local.y>bounds.top+bounds.height){{hideCursor();return;}}
+    let nearest=null;
+    plot.traces.forEach(trace=>trace.screen.forEach((screen,index)=>{{
+      if(screen[0]<bounds.left||screen[0]>bounds.left+bounds.width)return;
+      const distance=Math.hypot(screen[0]-local.x,screen[1]-local.y);
+      if(!nearest||distance<nearest.distance)nearest={{distance,trace,index,screen}};
+    }}));
+    if(!nearest)return;
+    cursorX.removeAttribute("hidden");cursorY.removeAttribute("hidden");marker.removeAttribute("hidden");
+    cursorX.setAttribute("x1",nearest.screen[0]);cursorX.setAttribute("x2",nearest.screen[0]);
+    cursorY.setAttribute("y1",nearest.screen[1]);cursorY.setAttribute("y2",nearest.screen[1]);
+    marker.setAttribute("cx",nearest.screen[0]);marker.setAttribute("cy",nearest.screen[1]);marker.setAttribute("fill",nearest.trace.color);
+    traceName.textContent=nearest.trace.label;traceName.style.color=nearest.trace.color;
+    inspectorX.textContent=formatEngineering(nearest.trace.x[nearest.index],plot.axis_unit);
+    inspectorY.textContent=formatEngineering(nearest.trace.y[nearest.index],plot.y_unit);
+    parameters.textContent=nearest.trace.details;
+  }};
+  svg.addEventListener("pointerdown",event=>{{
+    if(event.button!==0)return;const local=localPoint(event);
+    if(local.x<bounds.left||local.x>bounds.left+bounds.width||local.y<bounds.top||local.y>bounds.top+bounds.height)return;
+    state.dragStart=clamp(local.x);selection.removeAttribute("hidden");selection.setAttribute("x",state.dragStart);selection.setAttribute("width",0);svg.setPointerCapture(event.pointerId);event.preventDefault();
   }});
-  svg.addEventListener("pointerleave",()=>{{cursor.hidden=true;tip.hidden=true}});
+  svg.addEventListener("pointermove",event=>{{
+    const local=localPoint(event);
+    if(state.dragStart!==null){{const current=clamp(local.x);selection.setAttribute("x",Math.min(state.dragStart,current));selection.setAttribute("width",Math.abs(current-state.dragStart));return;}}
+    inspect(local);
+  }});
+  svg.addEventListener("pointerup",event=>{{
+    if(state.dragStart===null)return;const finish=clamp(localPoint(event).x), start=state.dragStart;state.dragStart=null;selection.setAttribute("hidden","");
+    if(Math.abs(finish-start)>=8){{const span=state.max-state.min,newMin=state.min+(Math.min(start,finish)-bounds.left)*span/bounds.width,newMax=state.min+(Math.max(start,finish)-bounds.left)*span/bounds.width;state.min=newMin;state.max=newMax;render();hideCursor();}}
+    if(svg.hasPointerCapture(event.pointerId))svg.releasePointerCapture(event.pointerId);
+  }});
+  svg.addEventListener("pointercancel",event=>{{state.dragStart=null;selection.setAttribute("hidden","");if(svg.hasPointerCapture(event.pointerId))svg.releasePointerCapture(event.pointerId);}});
+  svg.addEventListener("pointerleave",()=>{{if(state.dragStart===null)hideCursor();}});
+  const resetZoom=()=>{{state.min=original[0];state.max=original[1];render();hideCursor();}};
+  reset.addEventListener("click",resetZoom);svg.addEventListener("dblclick",event=>{{event.preventDefault();resetZoom();}});
+  render();
 }});
 </script>
 </body></html>

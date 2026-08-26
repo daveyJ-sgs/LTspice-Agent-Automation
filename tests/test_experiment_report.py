@@ -281,8 +281,17 @@ class ExperimentReportTests(unittest.TestCase):
         self.assertEqual(result["displayed_points"], 6)
         self.assertIn('<svg class="plot"', document)
         self.assertIn('<path class="trace"', document)
-        self.assertIn('class="grid-line"', document)
+        self.assertIn('class="grid-line grid-x"', document)
         self.assertIn("pointermove", document)
+        self.assertIn('class="plot-inspector"', document)
+        self.assertIn('class="cursor cursor-y"', document)
+        self.assertIn('class="cursor-point"', document)
+        self.assertIn('class="zoom-reset"', document)
+        self.assertIn("setPointerCapture", document)
+        self.assertIn("const plot=plots[Number(svg.dataset.plotIndex)]", document)
+        self.assertIn('cursorX.removeAttribute("hidden")', document)
+        self.assertIn('.zoom-selection[hidden]{display:none}', document)
+        self.assertNotIn('class="plot-tooltip"', document)
         self.assertIn(
             "gain &lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;", document
         )

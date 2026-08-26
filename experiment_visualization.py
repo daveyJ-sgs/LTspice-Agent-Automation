@@ -190,7 +190,8 @@ def _comparison_document(
     candidate_id = comparison["candidate_experiment_id"]
     point_rows, measurement_rows, requirement_rows = _comparison_rows(comparison)
     plot_html = "".join(
-        experiment_report._svg(plot, index) for index, plot in enumerate(plots)
+        experiment_report._svg(plot, index, interactive=False)
+        for index, plot in enumerate(plots)
     )
     payload = json.dumps(
         [plot["payload"] for plot in plots],

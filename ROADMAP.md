@@ -712,6 +712,9 @@ Verification gate:
   collapsed evidence sections
 - The mixed-signal DAQ AC and transient examples now supply distinct explanatory
   narratives while sharing the same educational LTspice schematic
+- Moved cursor details into a responsive side inspector, added two-axis
+  crosshairs with a selected-trace marker, and added horizontal drag zoom with
+  button and double-click reset while preserving fully offline reports
 - The expanded 243-test regression suite passes with the report, comparison,
   MCP-schema, path-confinement, and deterministic-rebuild contracts intact
 

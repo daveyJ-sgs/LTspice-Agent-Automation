@@ -914,7 +914,10 @@ The report opens directly from disk without a web server or CDN. Its default
 layout leads with a brief experiment explanation and interactive SVG waveform
 overlays, summarizes parameter ranges in engineering units, and keeps complete
 point, requirement, provenance, JSON, CSV, and RAW evidence in a collapsed
-appendix. Callers may supply bounded `report_context` text plus a repository-
+appendix. The waveform cursor uses a separate responsive inspector with
+two-axis crosshairs and a selected-trace marker. Drag horizontally to zoom;
+use Reset zoom or double-click the plot to restore its full domain. Callers may
+supply bounded `report_context` text plus a repository-
 local PNG/JPEG schematic; that context is persisted as `report_context.json`
 so later report rebuilds remain deterministic. Existing callers receive a
 generic human-readable summary without changing their API usage.
