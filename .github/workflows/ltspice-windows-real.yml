@@ -17,6 +17,7 @@ jobs:
     env:
       LTSPICE_VERSION: 26.0.2
       LTSPICE_MSI_SHA256: 485dabd2d7d8293de733a399719f6538efda4a54b48b181a14e07271186984d3
+      PYTHONPATH: .
     steps:
       - uses: actions/checkout@v7
 
@@ -71,7 +72,7 @@ jobs:
 
       - name: Upload compact verification evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: real-ltspice-windows-${{ github.run_id }}
           if-no-files-found: warn
