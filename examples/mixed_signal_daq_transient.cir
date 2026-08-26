@@ -1,0 +1,21 @@
+* 1 MHz-class portable DAQ analog front end -- acquisition/hold template
+Vsig in 0 PULSE(0.2 2 0.5u 5n 5n 10u 20u)
+Rsrc in aa1 50
+Raa1 aa1 n1 {RAA1}
+Caa1 n1 0 {CAA1}
+Eiso n1buf 0 n1 0 1
+Raa2 n1buf n2 {RAA2}
+Caa2 n2 0 {CAA2}
+Egain drive 0 n2 0 {GAIN}
+Rout drive afe {ROUT}
+Cload afe 0 {CLOAD}
+Rload afe 0 1Meg
+Vclk clk 0 PULSE(0 3.3 0.6u 2n 2n 0.6u 10u)
+Ssample afe hold clk 0 SAMPLE
+.model SAMPLE SW(Ron={RSW} Roff=1G Vt=1.65 Vh=0.1)
+Chold hold 0 {CHOLD}
+Cadc hold 0 {CADC}
+Rleak hold 0 20Meg
+Berror sample_error 0 V=V(hold)-V(afe)
+.tran 0 2u 0 2n
+.end

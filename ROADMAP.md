@@ -623,7 +623,25 @@ Verification gate:
   analysis evidence, observed yield was 100%, and its Wilson 95% interval was
   86.20%–100%
 
-##### Phase 3E-E: Real Windows LTspice CI prototype
+##### Phase 3E-E: Mixed-signal DAQ validation circuit — complete
+
+- Added a portable 1 MHz-class DAQ acquisition channel with two-pole
+  anti-alias filtering, gain/output loading, clocked sampling switch, hold
+  capacitor, ADC capacitance, and leakage
+- A shared 12-sample correlated scrambled-Halton population expands over light
+  and heavy ADC-load corners into 24 AC and 24 transient LTspice points
+- Final AC experiment `mcp-experiment-20260825-190609-038703` and transient
+  experiment `mcp-experiment-20260825-190610-370539` each produced 100% yield
+  separately in both named corners with no invalid evidence
+- Local experiment `mcp-experiment-20260825-190623-810704-b04fd1b5` completed
+  all 19 baseline/OAT points and all 36 requirement effects
+- Adaptive study `adaptive-study-d94f3ff5a0cced71` narrowed the 5 mV
+  acquisition-error boundary to 584.375 ns failing and 586.328 ns passing, a
+  1.953 ns bracket, after 12 real LTspice samples
+- The richer transient uncovered LTspice binary RAW sign-bit time encoding;
+  the parser now restores physical time magnitudes before step detection
+
+##### Phase 3E-F: Real Windows LTspice CI prototype
 
 - As the final Phase 3 hardening step, prototype a GitHub-hosted Windows job
   that installs a pinned, checksum-verified LTspice build and runs bounded real

@@ -114,8 +114,9 @@ python3 -m pip install -r requirements.txt
 ```
 
 Common workflows are also available through `make`: `make test`, `make ac`,
-`make transient`, `make nand`, `make sallen-key`, `make sweep`,
-`make statistical-yield`, `make search`, `make step`, and `make dashboard`.
+`make transient`, `make nand`, `make sallen-key`, `make mixed-signal-daq`,
+`make sweep`, `make statistical-yield`, `make search`, `make step`, and
+`make dashboard`.
 
 Each run gets its own timestamped directory under `runs/`. LTspice writes the
 simulation results there, including the `.raw` and `.log` files. Scalar `.meas`
@@ -274,6 +275,28 @@ why `.asc` files aren't batched directly.
 
 *`examples/sallen_key_lowpass.asc` open in the actual LTspice editor — hand-authored
 from LTspice's own symbol library and pin geometry, not a drawing.*
+
+## Run the mixed-signal DAQ acquisition study
+
+The portable-DAQ reference is a materially richer validation circuit than the
+Sallen-Key filter. It combines a two-pole 1 MHz-class anti-alias path, gain and
+output loading, a clocked analog switch, hold capacitor, ADC input capacitance,
+and leakage. One immutable correlated scrambled-Halton plan drives both AC and
+transient studies across named light/heavy ADC-load corners:
+
+```bash
+PYTHONPATH=. python3 examples/mixed_signal_daq_study.py
+# or
+make mixed-signal-daq
+```
+
+The AC contract checks passband gain, cutoff, and peaking. The transient
+contract checks front-end settling, full-resolution track error, and hold
+droop. Each run emits yield, Wilson intervals, worst evidenced cases, global
+sensitivity, and interactive offline HTML. The companion
+`mixed_signal_daq_boundary.cir` isolates track duration so an adaptive study
+can resolve the real pass/fail acquisition-time boundary without conflating
+other tolerances.
 
 ## Search for a target response
 

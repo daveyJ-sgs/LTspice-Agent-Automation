@@ -1,7 +1,7 @@
 PYTHON ?= python3
 export PYTHONPATH := .
 
-.PHONY: test ac transient nand sallen-key sweep statistical-yield search step dashboard api-help
+.PHONY: test ac transient nand sallen-key mixed-signal-daq sweep statistical-yield search step dashboard api-help
 
 test:
 	$(PYTHON) -m unittest discover -s tests -v
@@ -17,6 +17,9 @@ nand:
 
 sallen-key:
 	$(PYTHON) examples/analyze_sallen_key.py
+
+mixed-signal-daq:
+	$(PYTHON) examples/mixed_signal_daq_study.py
 
 sweep:
 	$(PYTHON) examples/sweep_rc.py

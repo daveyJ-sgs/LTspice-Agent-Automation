@@ -1,0 +1,21 @@
+* Portable DAQ acquisition-time boundary template
+Vsig in 0 PULSE(0.2 2 0.5u 5n 5n 10u 20u)
+Rsrc in aa1 50
+Raa1 aa1 n1 1k
+Caa1 n1 0 100p
+Eiso n1buf 0 n1 0 1
+Raa2 n1buf n2 1k
+Caa2 n2 0 100p
+Egain drive 0 n2 0 1.6
+Rout drive afe 50
+Cload afe 0 50p
+Rload afe 0 1Meg
+Vclk clk 0 PULSE(0 3.3 0.6u 2n 2n {TTRACK} 10u)
+Ssample afe hold clk 0 SAMPLE
+.model SAMPLE SW(Ron=25 Roff=1G Vt=1.65 Vh=0.1)
+Chold hold 0 47p
+Cadc hold 0 80p
+Rleak hold 0 20Meg
+Berror sample_error 0 V=V(hold)-V(afe)
+.tran 0 2u 0 2n
+.end

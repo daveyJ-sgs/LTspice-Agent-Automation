@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import io
+import re
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-from examples import statistical_rc_yield
+from examples import mixed_signal_daq_study, statistical_rc_yield
 
 
 class StatisticalYieldExampleTests(unittest.TestCase):
@@ -74,6 +75,75 @@ class StatisticalYieldExampleTests(unittest.TestCase):
         report.assert_called_once_with(experiment["experiment_id"])
         self.assertIn("Yield: 75.00%", output.getvalue())
         self.assertIn("Offline report: /runs/report.html", output.getvalue())
+
+    def test_mixed_signal_daq_templates_and_production_pipeline(self) -> None:
+        expected = {
+            *(variable["name"] for variable in mixed_signal_daq_study.VARIABLES),
+            "CADC",
+        }
+        for filename in ("mixed_signal_daq_ac.cir", "mixed_signal_daq_transient.cir"):
+            text = (mixed_signal_daq_study.EXAMPLES_DIR / filename).read_text(
+                encoding="utf-8"
+            )
+            self.assertEqual(
+                set(re.findall(r"\{([A-Z][A-Z0-9_]*)\}", text)), expected
+            )
+        boundary = (
+            mixed_signal_daq_study.EXAMPLES_DIR / "mixed_signal_daq_boundary.cir"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(set(re.findall(r"\{([A-Z][A-Z0-9_]*)\}", boundary)), {"TTRACK"})
+
+        plan = {"plan_id": "statistical-plan-daq", "point_count": 24}
+        experiments = [
+            {"experiment_id": "mcp-experiment-ac"},
+            {"experiment_id": "mcp-experiment-transient"},
+        ]
+        outputs = {
+            "summary": {
+                "observed_yield": None,
+                "corner_results": [
+                    {"corners": {"adc_load": "light"}, "observed_yield": 1.0},
+                    {"corners": {"adc_load": "heavy"}, "observed_yield": 0.5},
+                ],
+            },
+            "report": {"report_html": "/runs/report.html"},
+        }
+        with (
+            patch.object(
+                mixed_signal_daq_study,
+                "generate_statistical_plan",
+                return_value=plan,
+            ) as generate,
+            patch.object(
+                mixed_signal_daq_study,
+                "run_statistical_experiment",
+                side_effect=experiments,
+            ) as run,
+            patch.object(
+                mixed_signal_daq_study, "_finish", return_value=outputs
+            ) as finish,
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            mixed_signal_daq_study.main()
+
+        generate.assert_called_once_with(
+            mixed_signal_daq_study.VARIABLES,
+            mixed_signal_daq_study.SAMPLE_COUNT,
+            mixed_signal_daq_study.SEED,
+            correlations=mixed_signal_daq_study.CORRELATIONS,
+            corner_axes=mixed_signal_daq_study.CORNERS,
+            sampling_method="halton",
+        )
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(
+            [call.kwargs["filename"] for call in run.call_args_list],
+            ["mixed_signal_daq_ac.cir", "mixed_signal_daq_transient.cir"],
+        )
+        self.assertEqual(
+            [call.args[0] for call in finish.call_args_list],
+            ["mcp-experiment-ac", "mcp-experiment-transient"],
+        )
+        self.assertIn("light=100.00%, heavy=50.00%", output.getvalue())
 
 
 if __name__ == "__main__":

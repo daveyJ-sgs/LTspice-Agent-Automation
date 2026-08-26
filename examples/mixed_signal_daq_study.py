@@ -1,0 +1,271 @@
+#!/usr/bin/env python3
+"""Run AC and acquisition-yield studies for a portable mixed-signal DAQ."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from mcp_server import (
+    analyze_statistical_sensitivity,
+    analyze_statistical_worst_cases,
+    build_experiment_report,
+    generate_statistical_plan,
+    run_statistical_experiment,
+    summarize_statistical_experiment,
+)
+
+EXAMPLES_DIR = Path(__file__).resolve().parent
+SAMPLE_COUNT = 12
+SEED = 20260825
+
+VARIABLES = [
+    {
+        "name": "RAA1",
+        "distribution": "gaussian",
+        "nominal": 1000,
+        "sigma": 10,
+        "minimum": 950,
+        "maximum": 1050,
+        "unit": "ohm",
+    },
+    {
+        "name": "RAA2",
+        "distribution": "gaussian",
+        "nominal": 1000,
+        "sigma": 10,
+        "minimum": 950,
+        "maximum": 1050,
+        "unit": "ohm",
+    },
+    {
+        "name": "CAA1",
+        "distribution": "gaussian",
+        "nominal": 1e-10,
+        "sigma": 5e-12,
+        "minimum": 8e-11,
+        "maximum": 1.2e-10,
+        "unit": "F",
+    },
+    {
+        "name": "CAA2",
+        "distribution": "gaussian",
+        "nominal": 1e-10,
+        "sigma": 5e-12,
+        "minimum": 8e-11,
+        "maximum": 1.2e-10,
+        "unit": "F",
+    },
+    {
+        "name": "GAIN",
+        "distribution": "gaussian",
+        "nominal": 1.6,
+        "sigma": 0.008,
+        "minimum": 1.56,
+        "maximum": 1.64,
+        "unit": "V/V",
+    },
+    {
+        "name": "ROUT",
+        "distribution": "gaussian",
+        "nominal": 50,
+        "sigma": 5,
+        "minimum": 25,
+        "maximum": 75,
+        "unit": "ohm",
+    },
+    {
+        "name": "CLOAD",
+        "distribution": "gaussian",
+        "nominal": 5e-11,
+        "sigma": 5e-12,
+        "minimum": 2.5e-11,
+        "maximum": 7.5e-11,
+        "unit": "F",
+    },
+    {
+        "name": "RSW",
+        "distribution": "gaussian",
+        "nominal": 25,
+        "sigma": 2.5,
+        "minimum": 12.5,
+        "maximum": 37.5,
+        "unit": "ohm",
+    },
+    {
+        "name": "CHOLD",
+        "distribution": "gaussian",
+        "nominal": 4.7e-11,
+        "sigma": 2.35e-12,
+        "minimum": 3.76e-11,
+        "maximum": 5.64e-11,
+        "unit": "F",
+    },
+]
+
+CORRELATIONS = [
+    {"variables": ["RAA1", "RAA2"], "matrix": [[1, 0.5], [0.5, 1]]},
+    {"variables": ["CAA1", "CAA2"], "matrix": [[1, 0.4], [0.4, 1]]},
+]
+
+CORNERS = [
+    {
+        "name": "adc_load",
+        "parameter": "CADC",
+        "unit": "F",
+        "values": [
+            {"name": "light", "value": 2e-11},
+            {"name": "heavy", "value": 8e-11},
+        ],
+    }
+]
+
+AC_ANALYSES = [
+    {
+        "name": "analog_bandwidth",
+        "variable": "V(afe)",
+        "secondary_variable": "V(in)",
+        "requirements": [
+            {
+                "metric": "ac_gain_db",
+                "operator": ">=",
+                "target": 3.5,
+                "frequency_value": 100000,
+            },
+            {
+                "metric": "cutoff_frequency",
+                "operator": ">=",
+                "target": 800000,
+                "reference_frequency": 1000,
+            },
+            {
+                "metric": "cutoff_frequency",
+                "operator": "<=",
+                "target": 1300000,
+                "reference_frequency": 1000,
+            },
+            {
+                "metric": "peaking_db",
+                "operator": "<=",
+                "target": 0.1,
+                "reference_frequency": 1000,
+            },
+        ],
+    }
+]
+
+TRANSIENT_ANALYSES = [
+    {
+        "name": "frontend_settling",
+        "variable": "V(afe)",
+        "requirements": [
+            {
+                "metric": "settling_time",
+                "operator": "<=",
+                "target": 1.5e-6,
+                "initial_value": 0.32,
+                "final_value": 3.2,
+                "settling_tolerance": 0.02,
+            }
+        ],
+    },
+    {
+        "name": "track_error",
+        "variable": "V(sample_error)",
+        "requirements": [
+            {
+                "metric": "maximum",
+                "operator": "<=",
+                "target": 0.005,
+                "window_start": 1.15e-6,
+                "window_end": 1.2e-6,
+            },
+            {
+                "metric": "minimum",
+                "operator": ">=",
+                "target": -0.005,
+                "window_start": 1.15e-6,
+                "window_end": 1.2e-6,
+            },
+        ],
+    },
+    {
+        "name": "hold_droop",
+        "variable": "V(hold)",
+        "requirements": [
+            {
+                "metric": "ripple",
+                "operator": "<=",
+                "target": 0.005,
+                "window_start": 1.22e-6,
+                "window_end": 1.8e-6,
+            }
+        ],
+    },
+]
+
+
+def _finish(experiment_id: str) -> dict[str, object]:
+    summary = summarize_statistical_experiment(experiment_id)
+    analyze_statistical_worst_cases(experiment_id)
+    analyze_statistical_sensitivity(experiment_id)
+    report = build_experiment_report(experiment_id)
+    return {"summary": summary, "report": report}
+
+
+def main() -> None:
+    plan = generate_statistical_plan(
+        VARIABLES,
+        SAMPLE_COUNT,
+        SEED,
+        correlations=CORRELATIONS,
+        corner_axes=CORNERS,
+        sampling_method="halton",
+    )
+    ac = run_statistical_experiment(
+        plan["plan_id"],
+        (EXAMPLES_DIR / "mixed_signal_daq_ac.cir").read_text(encoding="utf-8"),
+        AC_ANALYSES,
+        filename="mixed_signal_daq_ac.cir",
+        reuse_cache=True,
+    )
+    transient = run_statistical_experiment(
+        plan["plan_id"],
+        (EXAMPLES_DIR / "mixed_signal_daq_transient.cir").read_text(
+            encoding="utf-8"
+        ),
+        TRANSIENT_ANALYSES,
+        filename="mixed_signal_daq_transient.cir",
+        reuse_cache=True,
+    )
+    ac_outputs = _finish(ac["experiment_id"])
+    transient_outputs = _finish(transient["experiment_id"])
+
+    print(f"Plan: {plan['plan_id']} ({plan['point_count']} points)")
+    for label, experiment, outputs in (
+        ("AC", ac, ac_outputs),
+        ("Transient", transient, transient_outputs),
+    ):
+        summary = outputs["summary"]
+        observed = summary["observed_yield"]
+        if observed is None:
+            corner_yields = ", ".join(
+                f"{next(iter(corner['corners'].values()))}="
+                + (
+                    "n/a"
+                    if corner["observed_yield"] is None
+                    else f"{100 * corner['observed_yield']:.2f}%"
+                )
+                for corner in summary["corner_results"]
+            )
+            yield_text = f"per-corner yield {corner_yields}"
+        else:
+            yield_text = f"yield {100 * observed:.2f}%"
+        print(
+            f"{label}: {experiment['experiment_id']} -- "
+            f"{yield_text} -- "
+            f"{outputs['report']['report_html']}"
+        )
+
+
+if __name__ == "__main__":
+    main()

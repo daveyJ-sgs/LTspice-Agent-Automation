@@ -759,6 +759,26 @@ Binary:
         self.assertEqual(data.values["time"], [0.0, 0.1])
         self.assertEqual(data.values["V(out)"], [1.5, 2.5])
 
+    def test_binary_transient_time_sign_bits_do_not_create_false_steps(self) -> None:
+        header = """Title: compressed transient
+Flags: real forward
+No. Variables: 2
+No. Points: 3
+Variables:
+\t0\ttime\ttime
+\t1\tV(out)\tvoltage
+Binary:
+"""
+        binary = struct.pack("<dfdfdf", 0.0, 1.0, -0.1, 2.0, -0.2, 3.0)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "compressed.raw"
+            path.write_bytes(header.encode("utf-16le") + binary)
+            data = parse_raw(path)
+
+        self.assertEqual(data.values["time"], [0.0, 0.1, 0.2])
+        self.assertEqual(data.step_count, 1)
+        self.assertEqual(data.points_per_step, 3)
+
     def test_parse_fast_access_raw_file(self) -> None:
         header = """Title: test
 Flags: real forward FastAccess

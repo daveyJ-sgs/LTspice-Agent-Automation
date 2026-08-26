@@ -200,6 +200,12 @@ def parse_raw(path: Path) -> RawData:
             else:
                 values[name].append(struct.unpack_from("<f", data, offset)[0])
 
+    # LTspice may use the sign bit on binary transient-axis samples while
+    # compressing a RAW file. The physical time coordinate is the magnitude;
+    # leaving the sign intact creates false step boundaries.
+    if variables[0].casefold() == "time":
+        values[variables[0]] = [abs(value) for value in values[variables[0]]]
+
     step_count, points_per_step = _step_shape(values[variables[0]])
     return RawData(flags=flags, variables=variables, values=values, step_count=step_count, points_per_step=points_per_step)
 
