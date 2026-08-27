@@ -252,6 +252,192 @@ class OptimizationEngineTests(unittest.TestCase):
                         self.constraints(),
                     )
 
+    def test_refines_only_new_pareto_neighbors_with_portable_provenance(self) -> None:
+        plan = optimization_engine.build_optimization_plan(
+            [
+                {
+                    "name": "R",
+                    "kind": "continuous",
+                    "minimum": 1,
+                    "maximum": 3,
+                    "count": 2,
+                },
+                {
+                    "name": "MODEL",
+                    "kind": "categorical",
+                    "values": ["slow", "fast"],
+                },
+            ],
+            [self.objectives()[0]],
+            self.constraints(),
+        )
+        saved = optimization_engine.save_optimization_plan(self.runs, plan)
+        objective_values = [4.0, 2.0, 3.0, 1.0]
+        points = []
+        for point in plan["points"]:
+            points.append(
+                {
+                    "index": point["index"],
+                    "parameters": point["parameters"],
+                    "simulation_status": "completed",
+                    "error": None,
+                    "analyses": [
+                        self._analysis(
+                            "alias",
+                            "ac_gain_db",
+                            objective_values[point["candidate_index"]],
+                            frequency_value=10_000_000,
+                        ),
+                        self._analysis(
+                            "passband",
+                            "ac_gain_db",
+                            4.0,
+                            frequency_value=100_000,
+                        ),
+                    ],
+                }
+            )
+        experiment_dir = self.runs / "experiment-ac"
+        experiment_dir.mkdir(parents=True)
+        results = {"status": "completed", "points": points}
+        (experiment_dir / "results.json").write_text(
+            json.dumps(results), encoding="utf-8"
+        )
+        loaded = (
+            experiment_dir,
+            {"status": "completed"},
+            results,
+            {},
+        )
+        with patch.object(
+            optimization_engine.experiment_index,
+            "load_terminal_experiment",
+            return_value=loaded,
+        ):
+            study = optimization_engine.evaluate_optimization_study(
+                self.runs, saved["plan_id"], {"ac": "experiment-ac"}
+            )
+            refined = optimization_engine.generate_optimization_refinement_plan(
+                self.runs,
+                study["study_id"],
+                max_candidates=2,
+                max_points=2,
+            )
+            repeated = optimization_engine.generate_optimization_refinement_plan(
+                self.runs,
+                study["study_id"],
+                max_candidates=2,
+                max_points=2,
+            )
+            with self.assertRaisesRegex(ValueError, "exceeding budget 1"):
+                optimization_engine.generate_optimization_refinement_plan(
+                    self.runs,
+                    study["study_id"],
+                    max_candidates=1,
+                    max_points=2,
+                )
+
+        self.assertEqual(refined, repeated)
+        self.assertEqual(
+            refined["generator_version"],
+            optimization_engine.OPTIMIZATION_REFINEMENT_GENERATOR_VERSION,
+        )
+        self.assertEqual(refined["candidate_count"], 2)
+        self.assertEqual(refined["point_count"], 2)
+        refined_plan = optimization_engine.load_optimization_plan(
+            self.runs, refined["plan_id"]
+        )
+        source = refined_plan["definition"]["refinement_source"]
+        self.assertEqual(source["parent_plan_id"], saved["plan_id"])
+        self.assertEqual(source["parent_study_id"], study["study_id"])
+        self.assertEqual(source["parent_candidate_indices"], [3])
+        self.assertEqual(
+            [point["parameters"] for point in refined_plan["points"]],
+            [
+                {"MODEL": "fast", "R": "2"},
+                {"MODEL": "slow", "R": "2"},
+            ],
+        )
+        parent_keys = {
+            tuple(point["parameters"].items()) for point in plan["points"]
+        }
+        self.assertTrue(
+            all(
+                tuple(point["parameters"].items()) not in parent_keys
+                for point in refined_plan["points"]
+            )
+        )
+        tampered = json.loads(Path(study["results_json"]).read_text(encoding="utf-8"))
+        tampered["candidates"][3]["pareto"] = False
+        Path(study["results_json"]).write_text(json.dumps(tampered), encoding="utf-8")
+        with patch.object(
+            optimization_engine.experiment_index,
+            "load_terminal_experiment",
+            return_value=loaded,
+        ):
+            with self.assertRaisesRegex(ValueError, "existing artifact differs"):
+                optimization_engine.generate_optimization_refinement_plan(
+                    self.runs, study["study_id"]
+                )
+
+    def test_explicit_refinement_candidates_fail_closed(self) -> None:
+        source = {
+            "kind": "pareto_neighborhood_refinement",
+            "policy": "adjacent-domain-midpoint-v1",
+            "parent_plan_id": "optimization-plan-0123456789abcdef",
+            "parent_plan_sha256": "0" * 64,
+            "parent_study_id": "optimization-study-0123456789abcdef",
+            "parent_results_sha256": "1" * 64,
+            "parent_candidate_indices": [1],
+            "max_candidates": 2,
+            "max_points": 2,
+        }
+        parameters: list[optimization_engine.OptimizationParameter] = [
+            {
+                "name": "R",
+                "kind": "continuous",
+                "minimum": 1,
+                "maximum": 3,
+                "count": 2,
+            }
+        ]
+        for value, message in ((4, "out of domain"), (float("nan"), "finite")):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, message):
+                    optimization_engine.build_optimization_plan(
+                        parameters,
+                        self.objectives(),
+                        self.constraints(),
+                        explicit_candidates=[
+                            {
+                                "parameters": {"R": value},  # type: ignore[dict-item]
+                                "parent_candidate_indices": [1],
+                            }
+                        ],
+                        refinement_source=source,
+                    )
+        duplicate = {
+            "parameters": {"R": 2},
+            "parent_candidate_indices": [1],
+        }
+        with self.assertRaisesRegex(ValueError, "must be unique"):
+            optimization_engine.build_optimization_plan(
+                parameters,
+                self.objectives(),
+                self.constraints(),
+                explicit_candidates=[duplicate, duplicate],  # type: ignore[list-item]
+                refinement_source=source,
+            )
+        mismatched_source = {**source, "parent_candidate_indices": [2]}
+        with self.assertRaisesRegex(ValueError, "provenance does not match"):
+            optimization_engine.build_optimization_plan(
+                parameters,
+                self.objectives(),
+                self.constraints(),
+                explicit_candidates=[duplicate],  # type: ignore[list-item]
+                refinement_source=mismatched_source,
+            )
+
     def test_rejects_duplicate_and_unbounded_candidate_domains(self) -> None:
         duplicate = self.parameters()
         duplicate[0]["values"] = [1000, 1000]

@@ -22,6 +22,7 @@ import experiment_index
 OPTIMIZATION_PLAN_SCHEMA_VERSION = 1
 OPTIMIZATION_RESULT_SCHEMA_VERSION = 1
 OPTIMIZATION_GENERATOR_VERSION = "deterministic-cartesian-v1"
+OPTIMIZATION_REFINEMENT_GENERATOR_VERSION = "deterministic-pareto-refinement-v1"
 OPTIMIZATION_RESULT_GENERATOR_VERSION = "pareto-evidence-v3"
 SELECTION_POLICY = "equal-weight-normalized-regret-v1"
 TOLERANCE_SELECTION_POLICY = "tolerance-aware-normalized-regret-v2"
@@ -96,6 +97,11 @@ class OptimizationPlanPoint(TypedDict):
     candidate_index: int
     parameters: dict[str, str]
     corners: NotRequired[dict[str, str]]
+
+
+class OptimizationExplicitCandidate(TypedDict):
+    parameters: dict[str, str]
+    parent_candidate_indices: list[int]
 
 
 class OptimizationPlan(TypedDict):
@@ -598,12 +604,172 @@ def _normalized_constraints(
     return normalized
 
 
+def _normalized_refinement_source(
+    source: object,
+) -> dict[str, object]:
+    if not isinstance(source, dict):
+        raise ValueError("refinement source must be an object")
+    expected = {
+        "kind",
+        "policy",
+        "parent_plan_id",
+        "parent_plan_sha256",
+        "parent_study_id",
+        "parent_results_sha256",
+        "parent_candidate_indices",
+        "max_candidates",
+        "max_points",
+    }
+    if set(source) != expected:
+        raise ValueError("refinement source fields are invalid")
+    if source.get("kind") != "pareto_neighborhood_refinement":
+        raise ValueError("refinement source kind is invalid")
+    if source.get("policy") != "adjacent-domain-midpoint-v1":
+        raise ValueError("refinement policy is invalid")
+    parent_plan_id = source.get("parent_plan_id")
+    parent_study_id = source.get("parent_study_id")
+    if (
+        not isinstance(parent_plan_id, str)
+        or re.fullmatch(r"optimization-plan-[0-9a-f]{16}", parent_plan_id) is None
+    ):
+        raise ValueError("refinement parent plan identity is invalid")
+    if (
+        not isinstance(parent_study_id, str)
+        or re.fullmatch(r"optimization-study-[0-9a-f]{16}", parent_study_id) is None
+    ):
+        raise ValueError("refinement parent study identity is invalid")
+    for name in ("parent_plan_sha256", "parent_results_sha256"):
+        value = source.get(name)
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise ValueError(f"refinement {name} is invalid")
+    parent_indices = source.get("parent_candidate_indices")
+    if (
+        not isinstance(parent_indices, list)
+        or not parent_indices
+        or any(
+            not isinstance(index, int) or isinstance(index, bool) or index < 0
+            for index in parent_indices
+        )
+        or len(set(parent_indices)) != len(parent_indices)
+    ):
+        raise ValueError("refinement parent candidate indices are invalid")
+    max_candidates = source.get("max_candidates")
+    max_points = source.get("max_points")
+    if (
+        not isinstance(max_candidates, int)
+        or isinstance(max_candidates, bool)
+        or not 1 <= max_candidates <= MAX_OPTIMIZATION_CANDIDATES
+    ):
+        raise ValueError("refinement max_candidates is invalid")
+    if (
+        not isinstance(max_points, int)
+        or isinstance(max_points, bool)
+        or not 1 <= max_points <= MAX_OPTIMIZATION_POINTS
+    ):
+        raise ValueError("refinement max_points is invalid")
+    return {
+        "kind": "pareto_neighborhood_refinement",
+        "policy": "adjacent-domain-midpoint-v1",
+        "parent_plan_id": parent_plan_id,
+        "parent_plan_sha256": source["parent_plan_sha256"],
+        "parent_study_id": parent_study_id,
+        "parent_results_sha256": source["parent_results_sha256"],
+        "parent_candidate_indices": sorted(parent_indices),
+        "max_candidates": max_candidates,
+        "max_points": max_points,
+    }
+
+
+def _normalized_explicit_candidates(
+    candidates: object,
+    parameters: list[dict[str, object]],
+    domain_values: dict[str, list[str]],
+) -> list[OptimizationExplicitCandidate]:
+    if not isinstance(candidates, list) or not candidates:
+        raise ValueError("explicit candidates must be a non-empty list")
+    if len(candidates) > MAX_OPTIMIZATION_CANDIDATES:
+        raise ValueError(
+            f"explicit candidates exceed {MAX_OPTIMIZATION_CANDIDATES} candidates"
+        )
+    design_names = [str(parameter["name"]) for parameter in parameters]
+    parameter_by_name = {
+        str(parameter["name"]): parameter for parameter in parameters
+    }
+    normalized: list[OptimizationExplicitCandidate] = []
+    seen: set[tuple[str, ...]] = set()
+    for raw in candidates:
+        if not isinstance(raw, dict) or set(raw) != {
+            "parameters",
+            "parent_candidate_indices",
+        }:
+            raise ValueError("explicit candidate fields are invalid")
+        raw_parameters = raw.get("parameters")
+        if not isinstance(raw_parameters, dict) or set(raw_parameters) != set(
+            design_names
+        ):
+            raise ValueError("explicit candidate parameters do not match the design")
+        values: dict[str, str] = {}
+        for name in design_names:
+            parameter = parameter_by_name[name]
+            kind = parameter["kind"]
+            raw_value = raw_parameters[name]
+            if kind == "categorical":
+                value = _label(raw_value, f"explicit candidate {name}")
+            else:
+                value = _encoded(
+                    _decimal(raw_value, f"explicit candidate {name}")
+                )
+            if kind == "continuous":
+                numeric = Decimal(value)
+                if not (
+                    Decimal(str(parameter["minimum"]))
+                    <= numeric
+                    <= Decimal(str(parameter["maximum"]))
+                ):
+                    raise ValueError(f"explicit candidate {name} is out of domain")
+            elif value not in domain_values[name]:
+                raise ValueError(f"explicit candidate {name} is out of domain")
+            values[name] = value
+        key = tuple(values[name] for name in design_names)
+        if key in seen:
+            raise ValueError("explicit candidates must be unique")
+        seen.add(key)
+        parent_indices = raw.get("parent_candidate_indices")
+        if (
+            not isinstance(parent_indices, list)
+            or not parent_indices
+            or any(
+                not isinstance(index, int) or isinstance(index, bool) or index < 0
+                for index in parent_indices
+            )
+            or len(set(parent_indices)) != len(parent_indices)
+        ):
+            raise ValueError("explicit candidate parent indices are invalid")
+        normalized.append(
+            {
+                "parameters": {name: values[name] for name in design_names},
+                "parent_candidate_indices": sorted(parent_indices),
+            }
+        )
+    normalized.sort(
+        key=lambda candidate: tuple(
+            Decimal(candidate["parameters"][name])
+            if parameter_by_name[name]["kind"] == "continuous"
+            else domain_values[name].index(candidate["parameters"][name])
+            for name in design_names
+        )
+    )
+    return normalized
+
+
 def build_optimization_plan(
     parameters: list[OptimizationParameter],
     objectives: list[OptimizationObjective],
     constraints: list[OptimizationConstraint],
     fixed_parameters: dict[str, float | str] | None = None,
     corner_axes: list[OptimizationCornerAxis] | None = None,
+    explicit_candidates: list[OptimizationExplicitCandidate] | None = None,
+    refinement_source: dict[str, object] | None = None,
 ) -> OptimizationPlan:
     """Build a bounded deterministic candidate plan without running LTspice."""
     normalized_parameters, domain_values, units = _normalized_parameters(parameters)
@@ -617,7 +783,27 @@ def build_optimization_plan(
         str(item["experiment"])
         for item in [*normalized_objectives, *normalized_constraints]
     }
-    candidate_count = math.prod(len(domain_values[name]) for name in design_names)
+    if (explicit_candidates is None) != (refinement_source is None):
+        raise ValueError(
+            "explicit_candidates and refinement_source must be provided together"
+        )
+    normalized_candidates = (
+        None
+        if explicit_candidates is None
+        else _normalized_explicit_candidates(
+            explicit_candidates, normalized_parameters, domain_values
+        )
+    )
+    normalized_source = (
+        None
+        if refinement_source is None
+        else _normalized_refinement_source(refinement_source)
+    )
+    candidate_count = (
+        math.prod(len(domain_values[name]) for name in design_names)
+        if normalized_candidates is None
+        else len(normalized_candidates)
+    )
     corner_count = math.prod(
         len(axis["values"]) for axis in normalized_corners
     ) if normalized_corners else 1
@@ -642,8 +828,32 @@ def build_optimization_plan(
             TOLERANCE_SELECTION_POLICY if tolerance_aware else SELECTION_POLICY
         ),
     }
+    if normalized_candidates is not None and normalized_source is not None:
+        if candidate_count > int(normalized_source["max_candidates"]):
+            raise ValueError("refinement candidate budget exceeded")
+        if point_count > int(normalized_source["max_points"]):
+            raise ValueError("refinement point budget exceeded")
+        parent_indices = sorted(
+            {
+                index
+                for candidate in normalized_candidates
+                for index in candidate["parent_candidate_indices"]
+            }
+        )
+        if parent_indices != normalized_source["parent_candidate_indices"]:
+            raise ValueError("refinement parent provenance does not match candidates")
+        definition["candidate_mode"] = "explicit_refinement"
+        definition["candidates"] = normalized_candidates
+        definition["refinement_source"] = normalized_source
     points: list[OptimizationPlanPoint] = []
-    domain_product = itertools.product(*(domain_values[name] for name in design_names))
+    domain_product = (
+        itertools.product(*(domain_values[name] for name in design_names))
+        if normalized_candidates is None
+        else (
+            tuple(candidate["parameters"][name] for name in design_names)
+            for candidate in normalized_candidates
+        )
+    )
     corner_products = list(
         itertools.product(*(axis["values"] for axis in normalized_corners))
     ) if normalized_corners else [()]
@@ -673,7 +883,11 @@ def build_optimization_plan(
     ).hexdigest()
     return {
         "schema_version": OPTIMIZATION_PLAN_SCHEMA_VERSION,
-        "generator_version": OPTIMIZATION_GENERATOR_VERSION,
+        "generator_version": (
+            OPTIMIZATION_GENERATOR_VERSION
+            if normalized_candidates is None
+            else OPTIMIZATION_REFINEMENT_GENERATOR_VERSION
+        ),
         "definition_hash": definition_hash,
         "definition": definition,
         "parameter_order": parameter_order,
@@ -806,7 +1020,11 @@ def load_optimization_plan(runs_dir: Path, plan_id: str) -> OptimizationPlan:
         raise ValueError("optimization plan must be an object")
     if (
         value.get("schema_version") != OPTIMIZATION_PLAN_SCHEMA_VERSION
-        or value.get("generator_version") != OPTIMIZATION_GENERATOR_VERSION
+        or value.get("generator_version")
+        not in {
+            OPTIMIZATION_GENERATOR_VERSION,
+            OPTIMIZATION_REFINEMENT_GENERATOR_VERSION,
+        }
     ):
         raise ValueError("unsupported optimization plan schema or generator")
     definition = value.get("definition")
@@ -828,6 +1046,8 @@ def load_optimization_plan(runs_dir: Path, plan_id: str) -> OptimizationPlan:
         definition.get("constraints"),  # type: ignore[arg-type]
         definition.get("fixed_parameters"),  # type: ignore[arg-type]
         definition.get("corner_axes"),  # type: ignore[arg-type]
+        definition.get("candidates"),  # type: ignore[arg-type]
+        definition.get("refinement_source"),  # type: ignore[arg-type]
     )
     if value != rebuilt:
         raise ValueError("optimization plan does not match its definition")
@@ -1095,12 +1315,23 @@ def _study_html(result: dict[str, object], plan: OptimizationPlan) -> bytes:
     objectives = plan["definition"]["objectives"]
     assert isinstance(objectives, list)
     parameter_units = plan["parameter_units"]
+    parameter_definitions = plan["definition"]["parameters"]
+    assert isinstance(parameter_definitions, list)
+    parameter_kinds = {
+        str(parameter["name"]): str(parameter["kind"])
+        for parameter in parameter_definitions
+    }
 
     def parameter_text(candidate: dict[str, object]) -> str:
         parameters = candidate["parameters"]
         assert isinstance(parameters, dict)
         return ", ".join(
-            f"{name}={_engineering(float(value), parameter_units.get(name, ''))}"
+            f"{name}="
+            + (
+                str(value)
+                if parameter_kinds[name] == "categorical"
+                else _engineering(float(value), parameter_units.get(name, ""))
+            )
             for name, value in parameters.items()
         )
 
@@ -1399,3 +1630,249 @@ def evaluate_optimization_study(
         "selected_candidate_index": selected_index,
         "selection_explanation": explanation,
     }
+
+
+def _load_verified_optimization_study(
+    runs_dir: Path, study_id: str
+) -> tuple[dict[str, object], bytes]:
+    if (
+        not isinstance(study_id, str)
+        or re.fullmatch(r"optimization-study-[0-9a-f]{16}", study_id) is None
+    ):
+        raise ValueError("invalid optimization study_id")
+    root = _confined_root(runs_dir, "optimization-studies")
+    study_dir = root / study_id
+    if study_dir.is_symlink() or not study_dir.is_dir():
+        raise FileNotFoundError(f"optimization study not found: {study_id}")
+    if study_dir.resolve().parent != root:
+        raise ValueError("optimization study must remain inside runs")
+    results_file = study_dir / "optimization_results.json"
+    if results_file.is_symlink() or not results_file.is_file():
+        raise ValueError("optimization study result is not a regular file")
+    artifact = results_file.read_bytes()
+    try:
+        result = json.loads(artifact)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("optimization study result is not valid UTF-8 JSON") from exc
+    if (
+        not isinstance(result, dict)
+        or result.get("schema_version") != OPTIMIZATION_RESULT_SCHEMA_VERSION
+        or result.get("generator_version") != OPTIMIZATION_RESULT_GENERATOR_VERSION
+        or result.get("study_id") != study_id
+        or not isinstance(result.get("plan_id"), str)
+        or not isinstance(result.get("experiments"), dict)
+    ):
+        raise ValueError("optimization study result identity is invalid")
+    experiments: dict[str, str] = {}
+    for name, evidence in result["experiments"].items():  # type: ignore[union-attr]
+        if (
+            not isinstance(name, str)
+            or not isinstance(evidence, dict)
+            or not isinstance(evidence.get("experiment_id"), str)
+        ):
+            raise ValueError("optimization study experiment evidence is invalid")
+        experiments[name] = evidence["experiment_id"]
+    verified = evaluate_optimization_study(
+        runs_dir, str(result["plan_id"]), experiments
+    )
+    if verified["study_id"] != study_id:
+        raise ValueError("optimization study identity does not reproduce")
+    return result, artifact
+
+
+def _candidate_parameters(
+    plan: OptimizationPlan,
+) -> dict[int, dict[str, str]]:
+    parameters = plan["definition"]["parameters"]
+    assert isinstance(parameters, list)
+    design_names = [str(parameter["name"]) for parameter in parameters]
+    candidates: dict[int, dict[str, str]] = {}
+    for point in plan["points"]:
+        index = point["candidate_index"]
+        values = {name: point["parameters"][name] for name in design_names}
+        if index in candidates and candidates[index] != values:
+            raise ValueError("optimization plan candidate parameters are inconsistent")
+        candidates[index] = values
+    if set(candidates) != set(range(plan["candidate_count"])):
+        raise ValueError("optimization plan candidate indices are incomplete")
+    return candidates
+
+
+def _ancestor_candidate_keys(
+    runs_dir: Path,
+    plan_id: str,
+    plan: OptimizationPlan,
+    design_names: list[str],
+    seen: set[str] | None = None,
+) -> set[tuple[str, ...]]:
+    visited = set() if seen is None else seen
+    if plan_id in visited or len(visited) >= 16:
+        raise ValueError("optimization refinement provenance is cyclic or too deep")
+    visited.add(plan_id)
+    keys = {
+        tuple(parameters[name] for name in design_names)
+        for parameters in _candidate_parameters(plan).values()
+    }
+    source = plan["definition"].get("refinement_source")
+    if isinstance(source, dict):
+        parent_id = str(source["parent_plan_id"])
+        parent = load_optimization_plan(runs_dir, parent_id)
+        parent_result = inspect_optimization_plan(runs_dir, parent_id)
+        if parent_result["plan_sha256"] != source["parent_plan_sha256"]:
+            raise ValueError("optimization refinement parent plan hash does not match")
+        keys.update(
+            _ancestor_candidate_keys(
+                runs_dir, parent_id, parent, design_names, visited
+            )
+        )
+    return keys
+
+
+def _refinement_values(
+    parameter: dict[str, object],
+    parent_value: str,
+    domain_values: list[str],
+    observed_values: list[str],
+) -> list[str]:
+    if parameter["kind"] != "continuous":
+        index = domain_values.index(parent_value)
+        return domain_values[max(0, index - 1) : index + 2]
+    ordered = sorted(
+        {
+            Decimal(str(parameter["minimum"])),
+            Decimal(str(parameter["maximum"])),
+            *(Decimal(value) for value in observed_values),
+        }
+    )
+    parent = Decimal(parent_value)
+    index = ordered.index(parent)
+    values = {parent}
+    with localcontext() as context:
+        context.prec = 80
+        if index > 0:
+            values.add((ordered[index - 1] + parent) / 2)
+        if index + 1 < len(ordered):
+            values.add((parent + ordered[index + 1]) / 2)
+    return [_encoded(value) for value in sorted(values)]
+
+
+def generate_optimization_refinement_plan(
+    runs_dir: Path,
+    parent_study_id: str,
+    max_candidates: int = 64,
+    max_points: int = 256,
+) -> OptimizationPlanResult:
+    """Freeze new candidates in feasible Pareto neighborhoods without simulation."""
+    if (
+        not isinstance(max_candidates, int)
+        or isinstance(max_candidates, bool)
+        or not 1 <= max_candidates <= MAX_OPTIMIZATION_CANDIDATES
+    ):
+        raise ValueError(
+            f"max_candidates must be between 1 and {MAX_OPTIMIZATION_CANDIDATES}"
+        )
+    if (
+        not isinstance(max_points, int)
+        or isinstance(max_points, bool)
+        or not 1 <= max_points <= MAX_OPTIMIZATION_POINTS
+    ):
+        raise ValueError(f"max_points must be between 1 and {MAX_OPTIMIZATION_POINTS}")
+    result, results_artifact = _load_verified_optimization_study(
+        runs_dir, parent_study_id
+    )
+    parent_plan_id = str(result["plan_id"])
+    parent_plan = load_optimization_plan(runs_dir, parent_plan_id)
+    parent_plan_result = inspect_optimization_plan(runs_dir, parent_plan_id)
+    if result.get("plan_sha256") != parent_plan_result["plan_sha256"]:
+        raise ValueError("optimization study plan hash does not match")
+    parameters = parent_plan["definition"]["parameters"]
+    assert isinstance(parameters, list)
+    normalized_parameters, domain_values, _ = _normalized_parameters(parameters)  # type: ignore[arg-type]
+    design_names = [str(parameter["name"]) for parameter in normalized_parameters]
+    parent_parameters = _candidate_parameters(parent_plan)
+    records = result.get("candidates")
+    if not isinstance(records, list) or len(records) != parent_plan["candidate_count"]:
+        raise ValueError("optimization study candidates do not match the plan")
+    pareto_records: list[dict[str, object]] = []
+    for record in records:
+        if not isinstance(record, dict) or not isinstance(
+            record.get("candidate_index"), int
+        ):
+            raise ValueError("optimization study candidate is invalid")
+        index = int(record["candidate_index"])
+        if index not in parent_parameters or record.get("parameters") != parent_parameters[index]:
+            raise ValueError("optimization study candidate parameters do not match")
+        if record.get("status") == "feasible" and record.get("pareto") is True:
+            pareto_records.append(record)
+    if not pareto_records:
+        raise ValueError("optimization study has no feasible Pareto candidates")
+    pareto_records.sort(key=lambda record: int(record["candidate_index"]))
+    observed = {
+        name: [candidate[name] for candidate in parent_parameters.values()]
+        for name in design_names
+    }
+    existing = _ancestor_candidate_keys(
+        runs_dir, parent_plan_id, parent_plan, design_names
+    )
+    generated: dict[tuple[str, ...], set[int]] = {}
+    parameter_by_name = {
+        str(parameter["name"]): parameter for parameter in normalized_parameters
+    }
+    for record in pareto_records:
+        parent_index = int(record["candidate_index"])
+        parent = parent_parameters[parent_index]
+        neighborhood = [
+            _refinement_values(
+                parameter_by_name[name],
+                parent[name],
+                domain_values[name],
+                observed[name],
+            )
+            for name in design_names
+        ]
+        for values in itertools.product(*neighborhood):
+            key = tuple(values)
+            if key not in existing:
+                generated.setdefault(key, set()).add(parent_index)
+    if not generated:
+        raise ValueError("Pareto neighborhoods contain no new in-domain candidates")
+    corner_axes = parent_plan["definition"]["corner_axes"]
+    assert isinstance(corner_axes, list)
+    corner_count = math.prod(len(axis["values"]) for axis in corner_axes) if corner_axes else 1  # type: ignore[index]
+    if len(generated) > max_candidates:
+        raise ValueError(
+            f"refinement requires {len(generated)} candidates, exceeding budget {max_candidates}"
+        )
+    if len(generated) * corner_count > max_points:
+        raise ValueError(
+            f"refinement requires {len(generated) * corner_count} points, exceeding budget {max_points}"
+        )
+    explicit: list[OptimizationExplicitCandidate] = [
+        {
+            "parameters": dict(zip(design_names, key)),
+            "parent_candidate_indices": sorted(parent_indices),
+        }
+        for key, parent_indices in generated.items()
+    ]
+    pareto_indices = [int(record["candidate_index"]) for record in pareto_records]
+    source = {
+        "kind": "pareto_neighborhood_refinement",
+        "policy": "adjacent-domain-midpoint-v1",
+        "parent_plan_id": parent_plan_id,
+        "parent_plan_sha256": parent_plan_result["plan_sha256"],
+        "parent_study_id": parent_study_id,
+        "parent_results_sha256": hashlib.sha256(results_artifact).hexdigest(),
+        "parent_candidate_indices": pareto_indices,
+        "max_candidates": max_candidates,
+        "max_points": max_points,
+    }
+    plan = build_optimization_plan(
+        parameters,  # type: ignore[arg-type]
+        parent_plan["definition"]["objectives"],  # type: ignore[arg-type]
+        parent_plan["definition"]["constraints"],  # type: ignore[arg-type]
+        parent_plan["definition"]["fixed_parameters"],  # type: ignore[arg-type]
+        corner_axes,  # type: ignore[arg-type]
+        explicit,
+        source,
+    )
+    return save_optimization_plan(runs_dir, plan)

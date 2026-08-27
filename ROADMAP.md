@@ -844,12 +844,32 @@ Phase 4B verification gate:
   non-finite values, empty generated ranges, and domain expansions above the
   existing 64-value and global candidate/point ceilings
 
-##### Phase 4C-2: Bounded Pareto-neighborhood refinement
+##### Phase 4C-2: Bounded Pareto-neighborhood refinement — complete
 
 - Refine only feasible Pareto neighborhoods while retaining parent/child
   provenance and strict global evaluation budgets
 - Reject duplicate, out-of-domain, non-finite, or electrically invalid
   candidates before they can distort the optimizer state
+
+Phase 4C-2 verification gate:
+
+- The versioned `adjacent-domain-midpoint-v1` policy uses adjacent allowed
+  discrete choices and continuous interval midpoints, merges overlapping
+  neighborhoods, and removes candidates present in the parent or available
+  ancestor plans
+- Explicit refinement plans retain parent plan/study IDs and hashes,
+  originating Pareto indices, policy identity, and strict candidate/expanded-
+  point budgets while remaining consumable by the existing experiment runner
+- Parent evidence is reproduced from its recorded experiments before use;
+  tampered studies, duplicate or out-of-domain candidates, non-finite values,
+  provenance mismatches, empty neighborhoods, and budget overflow fail closed
+- Real Phase 4B DAQ study `optimization-study-15a3b0b178405e19` deterministically
+  produces refinement plan `optimization-plan-dff02a060a221500`: eight new
+  candidate-15 neighbors and 16 light/heavy-corner points, with no simulation
+  required during plan construction
+- Legacy plan-hash, rich-domain, explicit-candidate round-trip, tamper,
+  provenance, categorical-report, budget, and complete 267-test regression
+  checks pass
 
 ##### Phase 4C-3: MCP integration and DAQ qualification
 

@@ -603,6 +603,21 @@ selection policy uses 0.05 dB absolute tolerance for 10 MHz alias gain and
 declared resolution limits cannot create a platform-specific dominance or
 selection decision.
 
+Phase 4C can derive a bounded local plan from a completed optimization study
+with `optimization_engine.generate_optimization_refinement_plan`. It verifies
+the parent study from its experiment evidence, accepts only feasible Pareto
+parents, and forms each neighborhood from the current value plus adjacent
+discrete choices or continuous interval midpoints. Candidates already present
+in the parent or any available ancestor plan are removed before publication.
+
+The child remains an ordinary immutable optimization plan, so the existing AC,
+transient, durable-job, evaluation, and reporting paths consume it unchanged.
+Its definition records the parent plan/study IDs and hashes, originating Pareto
+candidate indices, refinement-policy version, and candidate/expanded-point
+budgets. Budget overflow, duplicate or non-finite values, out-of-domain values,
+tampered parent evidence, and neighborhoods with no new candidates fail before
+simulation. MCP exposure and real DAQ execution are completed in Phase 4C-3.
+
 ## Build a portable experiment report
 
 Call `build_experiment_report` with a completed experiment ID to write a
