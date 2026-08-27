@@ -1,0 +1,88 @@
+{
+  "portability_signature": "3fe75927e03db62e9ce1ef9d40d31b30257c9825bf8cf0159ed3b7261eeb5601",
+  "selected_finalist": "coarse-winner",
+  "finalists": [
+    {
+      "label": "coarse-winner",
+      "parameters": {
+        "CAA1": "1e-10",
+        "CAA2": "1e-10",
+        "RAA1": "1e+3",
+        "ROUT": "65"
+      },
+      "complete_evidence": true,
+      "corner_results": [
+        {
+          "corners": {"adc_load": "heavy"},
+          "evaluated": 32,
+          "passed": 32,
+          "invalid": 0,
+          "observed_yield": 1.0,
+          "confidence_low": 0.8928208017449293,
+          "confidence_high": 1.0
+        },
+        {
+          "corners": {"adc_load": "light"},
+          "evaluated": 32,
+          "passed": 32,
+          "invalid": 0,
+          "observed_yield": 1.0,
+          "confidence_low": 0.8928208017449293,
+          "confidence_high": 1.0
+        }
+      ],
+      "worst_requirements": [
+        {"experiment": "ac", "analysis": "analog_performance", "metric": "ac_gain_db", "operator": ">=", "value": 3.970181008055285},
+        {"experiment": "ac", "analysis": "analog_performance", "metric": "ac_gain_db", "operator": "<=", "value": -27.197013031190433},
+        {"experiment": "ac", "analysis": "analog_performance", "metric": "cutoff_frequency", "operator": ">=", "value": 915699.7078093749},
+        {"experiment": "ac", "analysis": "analog_performance", "metric": "cutoff_frequency", "operator": "<=", "value": 1088788.8821984492},
+        {"experiment": "ac", "analysis": "analog_performance", "metric": "peaking_db", "operator": "<=", "value": 0.0},
+        {"experiment": "transient", "analysis": "frontend_settling", "metric": "settling_time", "operator": "<=", "value": 1.202e-06},
+        {"experiment": "transient", "analysis": "hold_droop", "metric": "ripple", "operator": "<=", "value": 0.0015570298636942148},
+        {"experiment": "transient", "analysis": "track_error", "metric": "maximum", "operator": "<=", "value": -0.0002462516952944768},
+        {"experiment": "transient", "analysis": "track_error", "metric": "minimum", "operator": ">=", "value": -0.0015571327789360508}
+      ]
+    },
+    {
+      "label": "refined-finalist",
+      "parameters": {
+        "CAA1": "1e-10",
+        "CAA2": "1e-10",
+        "RAA1": "1e+3",
+        "ROUT": "5e+1"
+      },
+      "complete_evidence": true,
+      "corner_results": [
+        {
+          "corners": {"adc_load": "heavy"},
+          "evaluated": 32,
+          "passed": 32,
+          "invalid": 0,
+          "observed_yield": 1.0,
+          "confidence_low": 0.8928208017449293,
+          "confidence_high": 1.0
+        },
+        {
+          "corners": {"adc_load": "light"},
+          "evaluated": 32,
+          "passed": 32,
+          "invalid": 0,
+          "observed_yield": 1.0,
+          "confidence_low": 0.8928208017449293,
+          "confidence_high": 1.0
+        }
+      ],
+      "worst_requirements": [
+        {"experiment": "ac", "analysis": "analog_performance", "metric": "ac_gain_db", "operator": ">=", "value": 3.970325263359265},
+        {"experiment": "ac", "analysis": "analog_performance", "metric": "ac_gain_db", "operator": "<=", "value": -27.13783302230012},
+        {"experiment": "ac", "analysis": "analog_performance", "metric": "cutoff_frequency", "operator": ">=", "value": 915823.9729146613},
+        {"experiment": "ac", "analysis": "analog_performance", "metric": "cutoff_frequency", "operator": "<=", "value": 1088942.5095476506},
+        {"experiment": "ac", "analysis": "analog_performance", "metric": "peaking_db", "operator": "<=", "value": 0.0},
+        {"experiment": "transient", "analysis": "frontend_settling", "metric": "settling_time", "operator": "<=", "value": 1.202e-06},
+        {"experiment": "transient", "analysis": "hold_droop", "metric": "ripple", "operator": "<=", "value": 0.0015573236913000166},
+        {"experiment": "transient", "analysis": "track_error", "metric": "maximum", "operator": "<=", "value": -0.00024235675583311517},
+        {"experiment": "transient", "analysis": "track_error", "metric": "minimum", "operator": ">=", "value": -0.0015212877667924566}
+      ]
+    }
+  ]
+}

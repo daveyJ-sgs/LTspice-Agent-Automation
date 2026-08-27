@@ -446,6 +446,39 @@ class ExperimentReportTests(unittest.TestCase):
             experiment_report.build_experiment_report(self.runs, self.experiment_id)
         self.assertFalse((self.experiment_dir / "report.html").exists())
 
+    def test_explicit_trace_summary_retains_source_count(self) -> None:
+        manifest = json.loads(
+            (self.experiment_dir / "experiment_manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        results = json.loads(
+            (self.experiment_dir / "results.json").read_text(encoding="utf-8")
+        )
+        with patch.object(
+            experiment_report.raw_parser,
+            "parse_raw",
+            return_value=self._raw_data(),
+        ):
+            plots = experiment_report._plots(
+                self.experiment_dir,
+                self.experiment_id,
+                results,
+                manifest,
+                max_traces_per_plot=1,
+            )
+        self.assertEqual(len(plots[0]["traces"]), 1)
+        self.assertEqual(plots[0]["source_trace_count"], 2)
+        rendered = experiment_report._svg(plots[0], 0)
+        self.assertIn(
+            "1 representative traces from 2 full-resolution traces", rendered
+        )
+
+        with self.assertRaisesRegex(ValueError, "max_traces_per_plot"):
+            experiment_report.build_experiment_report(
+                self.runs, self.experiment_id, max_traces_per_plot=0
+            )
+
         with (
             patch.object(experiment_report.raw_parser, "parse_raw", return_value=self._raw_data()),
             patch.object(experiment_report, "MAX_TRACE_COUNT", 1),

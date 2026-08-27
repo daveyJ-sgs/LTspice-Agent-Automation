@@ -28,10 +28,13 @@ optimization studies, durable orchestration, and portable human-facing reports.
   `run_optimization_experiment`, `evaluate_optimization_study`,
   `define_optimization_study`, `start_optimization_study`,
   `get_optimization_study`, `cancel_optimization_study`, and
-  `compare_optimization_studies`
+  `compare_optimization_studies`, `generate_robust_selection_plan`,
+  `get_robust_selection_plan`, `evaluate_robust_selection_study`, and
+  `compare_robust_selection_studies`
 - Comparison and reporting: `compare_experiments`,
   `compare_statistical_experiments`, `build_experiment_index`,
-  `query_experiments`, `build_experiment_report`, `build_comparison_report`,
+  `query_experiments`, `query_studies`, `build_experiment_report`,
+  `build_comparison_report`,
   `build_experiment_dashboard`, `list_runs`, `build_dashboard`, and
   `list_examples`
 
@@ -634,6 +637,39 @@ child-plan-only. A new child candidate is not assumed to beat the parent; that
 comparison remains an engineering conclusion and Phase 4D supplies the final
 robust-selection proof.
 
+## Prove optimization finalists under tolerance
+
+`generate_robust_selection_plan` accepts two to eight feasible selected or
+Pareto candidates from completed optimization studies. It reproduces each
+source study before freezing its candidate parameters, source hashes, explicit
+tie-break rank, and one deterministic statistical plan per finalist. Every
+design-variable nominal must match the frozen candidate, preventing a tolerance
+study from silently testing a different circuit.
+
+Run each returned statistical plan through the ordinary AC and transient
+experiment tools. Then call `evaluate_robust_selection_study` with an exact
+`{finalist: {ac: experiment_id, transient: experiment_id}}` mapping. Point
+parameters and ordinals must match the plan. A sample is a joint electrical
+pass only when both experiments complete and every AC and transient requirement
+passes. Named corners remain separate; selection maximizes the worst-corner
+joint yield and uses the frozen source rank only for an exact statistical tie.
+
+The content-addressed result includes per-corner Wilson intervals, worst signed
+requirement margins, Phase 3 Spearman sensitivity summaries, the selection
+rationale, and direct experiment/RAW/JSON/CSV/manifest links. `query_studies`
+searches optimization and robust-selection studies by kind, selected result,
+or source study. `compare_robust_selection_studies` requires identical portable
+plans, candidate definitions, corner outcomes, and final selection while
+checking worst requirement values against explicit per-metric tolerances.
+
+The DAQ reference implementation is:
+
+```bash
+PYTHONPATH=. .venv/bin/python examples/qualify_mixed_signal_daq_finalists.py \
+  optimization-study-15a3b0b178405e19 \
+  optimization-study-322aec214a85b8df
+```
+
 ## Build a portable experiment report
 
 Call `build_experiment_report` with a completed experiment ID to write a
@@ -648,7 +684,11 @@ use Reset zoom or double-click the plot to restore its full domain. Callers may
 supply bounded `report_context` text plus a repository-
 local PNG/JPEG schematic; that context is persisted as `report_context.json`
 so later report rebuilds remain deterministic. Existing callers receive a
-generic human-readable summary without changing their API usage.
+generic human-readable summary without changing their API usage. Reports have
+a fail-closed 100-trace/40,000-display-point ceiling. Large statistical studies
+may explicitly set `max_traces_per_plot` to show an evenly spaced,
+corner-balanced representative overlay; every omitted trace remains available
+through the structured evidence and RAW links.
 
 Waveforms are parsed from the existing RAW evidence without rerunning LTspice.
 Each trace is sliced to its validated native or independent step before a

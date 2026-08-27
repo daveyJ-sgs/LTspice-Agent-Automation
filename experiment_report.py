@@ -339,6 +339,7 @@ def _plots(
     experiment_id: str,
     results: dict[str, object],
     manifest: dict[str, object],
+    max_traces_per_plot: int | None = None,
 ) -> list[dict[str, object]]:
     groups: dict[str, dict[str, object]] = {}
     raw_cache: dict[Path, raw_parser.RawData] = {}
@@ -406,14 +407,44 @@ def _plots(
             if group["signature"] != signature:
                 raise ValueError(f"waveform analysis {name} has inconsistent plot metadata")
             group["traces"].append(trace)
-            trace_count = sum(len(item["traces"]) for item in groups.values())
-            displayed_points = sum(
-                int(candidate["displayed_points"])
-                for plot_group in groups.values()
-                for candidate in plot_group["traces"]
-            )
-            if trace_count > MAX_TRACE_COUNT or displayed_points > MAX_DISPLAYED_POINTS:
-                raise ValueError("experiment report display budget exceeded")
+    for group in groups.values():
+        traces = group["traces"]
+        assert isinstance(traces, list)
+        group["source_trace_count"] = len(traces)
+        if max_traces_per_plot is not None and len(traces) > max_traces_per_plot:
+            by_legend: dict[str, list[dict[str, object]]] = {}
+            for trace in traces:
+                by_legend.setdefault(str(trace["legend_label"]), []).append(trace)
+            selected: list[dict[str, object]] = []
+            legends = sorted(by_legend)
+            base, remainder = divmod(max_traces_per_plot, len(legends))
+            for ordinal, legend in enumerate(legends):
+                candidates = by_legend[legend]
+                quota = base + int(ordinal < remainder)
+                if quota <= 0:
+                    continue
+                indexes = (
+                    list(range(len(candidates)))
+                    if len(candidates) <= quota
+                    else sorted(
+                        {
+                            round(index * (len(candidates) - 1) / (quota - 1))
+                            for index in range(quota)
+                        }
+                    )
+                    if quota > 1
+                    else [len(candidates) // 2]
+                )
+                selected.extend(candidates[index] for index in indexes)
+            group["traces"] = selected
+    trace_count = sum(len(item["traces"]) for item in groups.values())
+    displayed_points = sum(
+        int(candidate["displayed_points"])
+        for plot_group in groups.values()
+        for candidate in plot_group["traces"]
+    )
+    if trace_count > MAX_TRACE_COUNT or displayed_points > MAX_DISPLAYED_POINTS:
+        raise ValueError("experiment report display budget exceeded")
     return [groups[name] for name in sorted(groups)]
 
 
@@ -518,6 +549,12 @@ def _svg(
         if len(source_counts) == 1
         else f"{source_counts[0]}–{source_counts[-1]} points per trace"
     )
+    source_trace_count = int(plot.get("source_trace_count", len(traces)))
+    trace_summary = (
+        f"{len(traces)} full-resolution traces"
+        if source_trace_count == len(traces)
+        else f"{len(traces)} representative traces from {source_trace_count} full-resolution traces"
+    )
     floor_note = (
         " Zero magnitude is shown at the -300 dB display floor."
         if traces[0]["display_floor_db"] is not None
@@ -531,7 +568,7 @@ def _svg(
         return f"""
 <section class="panel plot-panel">
   <h2>{_text(_humanize(plot['name']))}</h2>
-  <p class="muted">{len(traces)} full-resolution traces · {source_count}.{floor_note}</p>
+  <p class="muted">{trace_summary} · {source_count}.{floor_note}</p>
   <div class="legend">{''.join(legend)}</div>
   <div class="plot-wrap">
     <svg class="plot" data-plot-index="{plot_index}" viewBox="0 0 {_SVG_WIDTH} {_SVG_HEIGHT}" role="img" aria-label="{_text(plot['name'])} waveform overlay">
@@ -550,7 +587,7 @@ def _svg(
     return f"""
 <section class="panel plot-panel">
   <h2>{_text(_humanize(plot['name']))}</h2>
-  <p class="muted">{len(traces)} full-resolution traces · {source_count}.{floor_note}</p>
+  <p class="muted">{trace_summary} · {source_count}.{floor_note}</p>
   <div class="legend">{''.join(legend)}</div>
   <div class="plot-toolbar"><span class="muted">Drag horizontally to zoom · double-click to reset</span><button class="zoom-reset" type="button" disabled>Reset zoom</button></div>
   <div class="plot-layout">
@@ -1140,11 +1177,29 @@ def build_experiment_report(
     runs_dir: Path,
     experiment_id: str,
     report_context: ReportContext | None = None,
+    max_traces_per_plot: int | None = None,
 ) -> ExperimentReportResult:
     """Build a deterministic, self-contained report for one completed experiment."""
     experiment_dir, manifest, results, record = _load_artifacts(runs_dir, experiment_id)
     context, image_data = _validated_context(experiment_dir, report_context)
-    plots = _plots(experiment_dir, experiment_id, results, manifest)
+    if (
+        max_traces_per_plot is not None
+        and (
+            not isinstance(max_traces_per_plot, int)
+            or isinstance(max_traces_per_plot, bool)
+            or not 1 <= max_traces_per_plot <= MAX_TRACE_COUNT
+        )
+    ):
+        raise ValueError(
+            f"max_traces_per_plot must be between 1 and {MAX_TRACE_COUNT}"
+        )
+    plots = _plots(
+        experiment_dir,
+        experiment_id,
+        results,
+        manifest,
+        max_traces_per_plot,
+    )
     artifacts = ["experiment_manifest.json", "results.json"]
     if context:
         artifacts.append(REPORT_CONTEXT_FILENAME)

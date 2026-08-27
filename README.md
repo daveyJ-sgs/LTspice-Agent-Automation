@@ -420,6 +420,8 @@ adding separate simulation systems. It currently supports:
 - Durable experiment jobs, cancellation, recovery, indexing, and comparison
 - Deterministic coarse and local-refinement optimization with constraints,
   Pareto ranking, bounded provenance, and a selected candidate
+- Paired finalist tolerance proof with named-corner joint yield, margins,
+  sensitivity, deterministic selection rationale, and platform comparison
 - Verified artifact caching, portable reports, dashboards, JSON, CSV, and RAW provenance
 
 The full request schemas, examples, validation rules, report behavior, and metric
@@ -446,6 +448,22 @@ PYTHONPATH=. .venv/bin/python examples/refine_mixed_signal_daq.py \
   <optimization-study-id>
 ```
 
+Close the optimization loop by applying the same deterministic manufacturing
+population and ADC-load corners to the coarse and refined finalists:
+
+```bash
+PYTHONPATH=. .venv/bin/python examples/qualify_mixed_signal_daq_finalists.py \
+  <coarse-study-id> <refined-study-id>
+```
+
+The Phase 4D evaluator pairs each AC point with the matching transient point;
+a sample passes only if both analyses pass. Its concise report explains the
+selection, compares nominal objectives and joint corner yield, summarizes
+worst constraint margins and dominant rank sensitivities, and leaves detailed
+RAW, JSON, CSV, manifest, and analysis links at the bottom. The default example
+uses 32 scrambled-Halton samples per finalist at both load corners. This is
+bounded engineering qualification evidence, not a production-yield guarantee.
+
 ## Windows
 
 Verified on Windows 11 with LTspice 26.0.2: the baseline test suite passed and
@@ -465,7 +483,8 @@ downloads the [official Analog Devices Windows installer](https://www.analog.com
 pins version 26.0.2 and the complete MSI SHA-256, installs silently, explicitly
 selects **No** in the first-run usage-data dialog, and then executes
 `tests/real_ltspice_smoke.py`, `tests/real_ltspice_daq.py`, and
-`tests/real_ltspice_optimization.py`. The RC smoke
+`tests/real_ltspice_optimization.py`, and
+`tests/real_ltspice_robust_selection.py`. The RC smoke
 requires a real 501-point RAW file, decoded `.meas` evidence, the expected
 cutoff and gain, and a completed run manifest. The DAQ qualification runs the
 complete shared 24-point AC and 24-point transient statistical studies and

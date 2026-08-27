@@ -15,8 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import TypedDict
 
-INDEX_SCHEMA_VERSION = 2
-INDEX_BUILDER_VERSION = 2
+INDEX_SCHEMA_VERSION = 3
+INDEX_BUILDER_VERSION = 3
 INDEX_FILENAME = "experiments.sqlite3"
 MAX_QUERY_LIMIT = 1000
 MAX_EXPERIMENT_POINTS = 1000
@@ -49,6 +49,8 @@ class ExperimentIndexBuildResult(TypedDict):
     indexed_experiments: int
     result_experiments: int
     indexed_points: int
+    scanned_studies: int
+    indexed_studies: int
     issue_count: int
     issues: list[ExperimentIndexIssue]
 
@@ -89,6 +91,25 @@ class ExperimentQueryResult(TypedDict):
     limit: int
     offset: int
     experiments: list[ExperimentIndexRecord]
+
+
+class StudyIndexRecord(TypedDict):
+    study_id: str
+    kind: str
+    plan_id: str
+    selected: str | None
+    candidate_count: int
+    feasible_count: int | None
+    worst_corner_yield: float | None
+    results_path: str
+    report_path: str
+    source_study_ids: list[str]
+
+
+class StudyQueryResult(TypedDict):
+    database_path: str
+    total: int
+    studies: list[StudyIndexRecord]
 
 
 def _reject_constant(value: str) -> object:
@@ -1045,6 +1066,26 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             code TEXT NOT NULL,
             message TEXT NOT NULL
         );
+        CREATE TABLE studies (
+            study_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            plan_id TEXT NOT NULL,
+            selected TEXT,
+            candidate_count INTEGER NOT NULL,
+            feasible_count INTEGER,
+            worst_corner_yield REAL,
+            results_path TEXT NOT NULL,
+            report_path TEXT NOT NULL,
+            results_sha256 TEXT NOT NULL
+        );
+        CREATE INDEX study_lookup ON studies(kind, selected, study_id);
+        CREATE TABLE study_sources (
+            study_id TEXT NOT NULL REFERENCES studies(study_id) ON DELETE CASCADE,
+            source_study_id TEXT NOT NULL,
+            PRIMARY KEY (study_id, source_study_id)
+        );
+        CREATE INDEX study_source_lookup
+            ON study_sources(source_study_id, study_id);
         """
     )
     connection.execute(
@@ -1276,6 +1317,8 @@ def build_experiment_index(
     indexed = 0
     result_experiments = 0
     indexed_points = 0
+    scanned_studies = 0
+    indexed_studies = 0
     connection: sqlite3.Connection | None = None
     with _INDEX_LOCK:
         try:
@@ -1395,6 +1438,124 @@ def build_experiment_index(
                     result_experiments += 1
                     indexed_points += len(child_rows[0])
 
+            study_patterns = (
+                ("optimization", "optimization-studies", "optimization_results.json"),
+                (
+                    "robust_selection",
+                    "robust-selection-studies",
+                    "robust_selection_results.json",
+                ),
+            )
+            for kind, directory, filename in study_patterns:
+                for results_path in sorted(root.glob(f"{directory}/*/{filename}")):
+                    scanned_studies += 1
+                    artifact_path = results_path.relative_to(root).as_posix()
+                    try:
+                        study_dir = results_path.parent
+                        study_id = study_dir.name
+                        result, results_hash = _load_json(results_path)
+                        expected_prefix = (
+                            "optimization-study-"
+                            if kind == "optimization"
+                            else "robust-selection-study-"
+                        )
+                        plan_prefix = (
+                            "optimization-plan-"
+                            if kind == "optimization"
+                            else "robust-selection-plan-"
+                        )
+                        plan_id = result.get("plan_id")
+                        candidates = (
+                            result.get("candidates")
+                            if kind == "optimization"
+                            else result.get("finalists")
+                        )
+                        if (
+                            result.get("study_id") != study_id
+                            or re.fullmatch(expected_prefix + r"[0-9a-f]{16}", study_id)
+                            is None
+                            or not isinstance(plan_id, str)
+                            or re.fullmatch(plan_prefix + r"[0-9a-f]{16}", plan_id)
+                            is None
+                            or not isinstance(candidates, list)
+                        ):
+                            raise ValueError("study identity is invalid")
+                        selected_value = (
+                            result.get("selected_candidate_index")
+                            if kind == "optimization"
+                            else result.get("selected_finalist")
+                        )
+                        selected = None if selected_value is None else str(selected_value)
+                        feasible_count = (
+                            result.get("feasible_candidates")
+                            if kind == "optimization"
+                            else sum(
+                                isinstance(item, dict)
+                                and item.get("complete_evidence") is True
+                                for item in candidates
+                            )
+                        )
+                        if not isinstance(feasible_count, int) or isinstance(
+                            feasible_count, bool
+                        ):
+                            raise ValueError("study feasible count is invalid")
+                        source_ids: list[str] = []
+                        worst_corner_yield = None
+                        if kind == "robust_selection":
+                            source_ids = sorted(
+                                {
+                                    str(item["source_study_id"])
+                                    for item in candidates
+                                    if isinstance(item, dict)
+                                    and isinstance(item.get("source_study_id"), str)
+                                }
+                            )
+                            selected_records = [
+                                item
+                                for item in candidates
+                                if isinstance(item, dict) and item.get("selected") is True
+                            ]
+                            if selected_records:
+                                value = selected_records[0].get("worst_corner_yield")
+                                worst_corner_yield = (
+                                    None if value is None else _finite_number(value, "yield")
+                                )
+                        report_path = study_dir / "report.html"
+                        if not report_path.is_file() or report_path.is_symlink():
+                            raise ValueError("study report is missing")
+                        connection.execute(
+                            """INSERT INTO studies
+                               (study_id, kind, plan_id, selected, candidate_count,
+                                feasible_count, worst_corner_yield, results_path,
+                                report_path, results_sha256)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (
+                                study_id,
+                                kind,
+                                plan_id,
+                                selected,
+                                len(candidates),
+                                feasible_count,
+                                worst_corner_yield,
+                                artifact_path,
+                                report_path.relative_to(root).as_posix(),
+                                results_hash,
+                            ),
+                        )
+                        connection.executemany(
+                            "INSERT INTO study_sources(study_id, source_study_id) VALUES (?, ?)",
+                            [(study_id, source_id) for source_id in source_ids],
+                        )
+                        indexed_studies += 1
+                    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+                        issues.append(
+                            {
+                                "artifact_path": artifact_path,
+                                "code": "invalid_study",
+                                "message": str(exc),
+                            }
+                        )
+
             issues.sort(key=lambda item: (item["artifact_path"], item["code"], item["message"]))
             connection.executemany(
                 "INSERT INTO index_issues(artifact_path, code, message) VALUES (?, ?, ?)",
@@ -1423,9 +1584,90 @@ def build_experiment_index(
         "indexed_experiments": indexed,
         "result_experiments": result_experiments,
         "indexed_points": indexed_points,
+        "scanned_studies": scanned_studies,
+        "indexed_studies": indexed_studies,
         "issue_count": len(issues),
         "issues": issues,
     }
+
+
+def query_studies(
+    root: Path,
+    *,
+    kind: str | None = None,
+    selected: str | None = None,
+    source_study_id: str | None = None,
+    database_path: Path | None = None,
+) -> StudyQueryResult:
+    """Query indexed optimization and robust-selection studies."""
+    if kind is not None and kind not in {"optimization", "robust_selection"}:
+        raise ValueError("study kind is not supported")
+    for name, value in (("selected", selected), ("source_study_id", source_study_id)):
+        if value is not None and (not isinstance(value, str) or not value):
+            raise ValueError(f"{name} must be a non-empty string or null")
+    path = _database_path(root.resolve(), database_path)
+    if not path.is_file():
+        raise FileNotFoundError("experiment index not found; build it first")
+    clauses: list[str] = []
+    arguments: list[object] = []
+    if kind is not None:
+        clauses.append("s.kind = ?")
+        arguments.append(kind)
+    if selected is not None:
+        clauses.append("s.selected = ?")
+        arguments.append(selected)
+    if source_study_id is not None:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM study_sources ss WHERE ss.study_id = s.study_id "
+            "AND ss.source_study_id = ?)"
+        )
+        arguments.append(source_study_id)
+    where = "" if not clauses else " WHERE " + " AND ".join(clauses)
+    with _INDEX_LOCK:
+        connection = sqlite3.connect(path)
+        try:
+            metadata = connection.execute(
+                "SELECT schema_version, builder_version FROM index_metadata"
+            ).fetchone()
+            if metadata != (INDEX_SCHEMA_VERSION, INDEX_BUILDER_VERSION):
+                raise ValueError("experiment index version is not supported; rebuild it")
+            rows = connection.execute(
+                "SELECT s.study_id, s.kind, s.plan_id, s.selected, "
+                "s.candidate_count, s.feasible_count, s.worst_corner_yield, "
+                "s.results_path, s.report_path FROM studies s"
+                + where
+                + " ORDER BY s.study_id",
+                arguments,
+            ).fetchall()
+            studies: list[StudyIndexRecord] = []
+            for row in rows:
+                sources = [
+                    str(item[0])
+                    for item in connection.execute(
+                        "SELECT source_study_id FROM study_sources "
+                        "WHERE study_id = ? ORDER BY source_study_id",
+                        (row[0],),
+                    )
+                ]
+                studies.append(
+                    {
+                        "study_id": str(row[0]),
+                        "kind": str(row[1]),
+                        "plan_id": str(row[2]),
+                        "selected": None if row[3] is None else str(row[3]),
+                        "candidate_count": int(row[4]),
+                        "feasible_count": None if row[5] is None else int(row[5]),
+                        "worst_corner_yield": (
+                            None if row[6] is None else float(row[6])
+                        ),
+                        "results_path": str(row[7]),
+                        "report_path": str(row[8]),
+                        "source_study_ids": sources,
+                    }
+                )
+        finally:
+            connection.close()
+    return {"database_path": str(path), "total": len(studies), "studies": studies}
 
 
 def _validate_query(

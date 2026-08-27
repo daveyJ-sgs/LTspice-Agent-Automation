@@ -43,6 +43,7 @@ import optimization_engine
 import optimization_study
 import raw_parser
 import report_runs
+import robust_selection
 import sensitivity_analysis
 import statistical_engine
 import statistical_comparison
@@ -70,6 +71,7 @@ ExperimentJobSnapshot = experiment_engine.ExperimentJobSnapshot
 ExperimentComparisonResult = experiment_engine.ExperimentComparisonResult
 ExperimentIndexBuildResult = experiment_index.ExperimentIndexBuildResult
 ExperimentQueryResult = experiment_index.ExperimentQueryResult
+StudyQueryResult = experiment_index.StudyQueryResult
 ExperimentReportResult = experiment_report.ExperimentReportResult
 ReportContext = experiment_report.ReportContext
 ComparisonReportResult = experiment_visualization.ComparisonReportResult
@@ -90,6 +92,9 @@ ObjectiveTolerance = optimization_comparison.ObjectiveTolerance
 OptimizationComparisonResult = optimization_comparison.OptimizationComparisonResult
 OptimizationExperimentDefinition = optimization_study.OptimizationExperimentDefinition
 OptimizationJobSnapshot = optimization_study.OptimizationJobSnapshot
+RobustSelectionPlanResult = robust_selection.RobustSelectionPlanResult
+RobustSelectionStudyResult = robust_selection.RobustSelectionStudyResult
+RobustSelectionComparisonResult = robust_selection.RobustSelectionComparisonResult
 StatisticalSummaryResult = statistical_results.StatisticalSummaryResult
 StatisticalComparisonResult = statistical_comparison.StatisticalComparisonResult
 SensitivityAnalysisResult = sensitivity_analysis.SensitivityAnalysisResult
@@ -1237,6 +1242,65 @@ def compare_optimization_studies(
     )
 
 
+@mcp.tool()
+def generate_robust_selection_plan(
+    finalists: list[dict[str, object]],
+    variables_by_finalist: dict[str, list[StatisticalVariable]],
+    sample_count: int,
+    seed: int,
+    correlations: list[StatisticalCorrelation] | None = None,
+    corner_axes: list[StatisticalCornerAxis] | None = None,
+    sampling_method: StatisticalSamplingMethod = "halton",
+) -> RobustSelectionPlanResult:
+    """Freeze optimization finalists and paired tolerance plans without LTspice."""
+    return robust_selection.generate_robust_selection_plan(
+        RUNS_DIR,
+        finalists,
+        variables_by_finalist,
+        sample_count,
+        seed,
+        correlations=correlations,
+        corner_axes=corner_axes,
+        sampling_method=sampling_method,
+    )
+
+
+@mcp.tool()
+def get_robust_selection_plan(plan_id: str) -> RobustSelectionPlanResult:
+    """Load and verify a content-addressed finalist qualification plan."""
+    return robust_selection.inspect_robust_selection_plan(RUNS_DIR, plan_id)
+
+
+@mcp.tool()
+def evaluate_robust_selection_study(
+    plan_id: str,
+    experiments: dict[str, dict[str, str]],
+) -> RobustSelectionStudyResult:
+    """Pair finalist AC/transient yield evidence and publish the design decision."""
+    return robust_selection.evaluate_robust_selection_study(
+        RUNS_DIR, plan_id, experiments
+    )
+
+
+@mcp.tool()
+def compare_robust_selection_studies(
+    baseline_study_id: str,
+    candidate_study_id: str,
+    metric_tolerances: dict[str, float],
+    baseline_label: str = "baseline",
+    candidate_label: str = "candidate",
+) -> RobustSelectionComparisonResult:
+    """Compare robust decisions exactly and worst metrics within tolerances."""
+    return robust_selection.compare_saved_robust_selection_studies(
+        RUNS_DIR,
+        baseline_study_id,
+        candidate_study_id,
+        metric_tolerances,
+        baseline_label=baseline_label,
+        candidate_label=candidate_label,
+    )
+
+
 _experiment_manager: ExperimentJobManager | None = None
 _experiment_manager_lock = threading.Lock()
 _optimization_study_manager: optimization_study.OptimizationStudyManager | None = None
@@ -1556,14 +1620,32 @@ def query_experiments(
 
 
 @mcp.tool()
+def query_studies(
+    kind: Literal["optimization", "robust_selection"] | None = None,
+    selected: str | None = None,
+    source_study_id: str | None = None,
+) -> StudyQueryResult:
+    """Query indexed optimization and robust finalist-selection studies."""
+    return experiment_index.query_studies(
+        RUNS_DIR,
+        kind=kind,
+        selected=selected,
+        source_study_id=source_study_id,
+    )
+
+
+@mcp.tool()
 def build_experiment_report(
     experiment_id: str,
     report_context: ReportContext | None = None,
+    max_traces_per_plot: int | None = None,
 ) -> ExperimentReportResult:
     """Build a portable offline HTML report from completed experiment artifacts."""
     if report_context is None:
         return experiment_report.build_experiment_report(RUNS_DIR, experiment_id)
-    return experiment_report.build_experiment_report(RUNS_DIR, experiment_id, report_context)
+    return experiment_report.build_experiment_report(
+        RUNS_DIR, experiment_id, report_context, max_traces_per_plot
+    )
 
 
 @mcp.tool()

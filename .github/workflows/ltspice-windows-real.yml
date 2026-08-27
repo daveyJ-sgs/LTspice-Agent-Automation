@@ -185,6 +185,13 @@ jobs:
           REAL_LTSPICE_OPTIMIZATION_EVIDENCE_DIR: ${{ runner.temp }}\ltspice-real-optimization
         run: python tests/real_ltspice_optimization.py
 
+      - name: Run DAQ finalist tolerance proof and compare macOS baseline
+        shell: pwsh
+        timeout-minutes: 20
+        env:
+          REAL_LTSPICE_OPTIMIZATION_EVIDENCE_DIR: ${{ runner.temp }}\ltspice-real-optimization
+        run: python tests/real_ltspice_robust_selection.py
+
       - name: Upload compact verification evidence
         if: always()
         uses: actions/upload-artifact@v6
