@@ -36,12 +36,11 @@ class FakeExperimentManager:
         }
 
     def snapshot(self, experiment_id: str) -> dict[str, object]:
+        manifest_path = self.runs / experiment_id / "experiment_manifest.json"
         return {
             "experiment_id": experiment_id,
             "status": self.statuses[experiment_id],
-            "manifest": str(
-                self.runs / experiment_id / "experiment_manifest.json"
-            ),
+            "manifest": str(manifest_path),
             "experiment_dir": str(self.runs / experiment_id),
             "results_json": str(self.runs / experiment_id / "results.json"),
             "results_csv": str(self.runs / experiment_id / "results.csv"),
@@ -57,6 +56,12 @@ class FakeExperimentManager:
             "error": None,
             "execution_mode": "independent",
         }
+
+    def definition_hash(self, experiment_id: str) -> str:
+        manifest_path = self.runs / experiment_id / "experiment_manifest.json"
+        return str(
+            json.loads(manifest_path.read_text(encoding="utf-8"))["definition_hash"]
+        )
 
     def start(self, experiment_id: str) -> dict[str, object]:
         if self.statuses[experiment_id] == "defined":

@@ -1789,6 +1789,12 @@ class ExperimentJobManager:
         }
         return snapshot
 
+    def definition_hash(self, experiment_id: str) -> str:
+        """Return the immutable definition identity under the manager lock."""
+        with self._lock:
+            manifest = self._load_manifest(experiment_id)
+        return str(manifest["definition_hash"])
+
     def _coordinate(self) -> None:
         while True:
             experiment_id = self._queue.get()

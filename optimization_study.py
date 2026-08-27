@@ -197,12 +197,11 @@ class OptimizationStudyManager:
                 config.get("max_concurrency", 2),
                 config.get("reuse_cache", False),
             )
-            child_manifest = json.loads(
-                Path(child["manifest"]).read_text(encoding="utf-8")
-            )
             children[name] = {
                 "experiment_id": child["experiment_id"],
-                "definition_hash": str(child_manifest["definition_hash"]),
+                "definition_hash": self.experiment_manager.definition_hash(
+                    child["experiment_id"]
+                ),
             }
 
         definition: dict[str, object] = {
@@ -269,19 +268,13 @@ class OptimizationStudyManager:
             ):
                 raise ValueError("optimization study child identity is invalid")
             experiment_id = record["experiment_id"]
-            child_manifest_path = (
-                self.runs_dir / experiment_id / "experiment_manifest.json"
-            )
-            try:
-                child_manifest = json.loads(
-                    child_manifest_path.read_text(encoding="utf-8")
-                )
-            except (OSError, json.JSONDecodeError) as exc:
-                raise ValueError("optimization study child manifest is invalid") from exc
-            if child_manifest.get("definition_hash") != record.get("definition_hash"):
+            snapshot = self.experiment_manager.snapshot(experiment_id)
+            if self.experiment_manager.definition_hash(
+                experiment_id
+            ) != record.get("definition_hash"):
                 raise ValueError("optimization study child definition hash does not match")
             ids[name] = experiment_id
-            snapshots[name] = self.experiment_manager.snapshot(experiment_id)
+            snapshots[name] = snapshot
         return snapshots, ids
 
     def start(self, optimization_job_id: str) -> OptimizationJobSnapshot:
