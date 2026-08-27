@@ -5,6 +5,7 @@ bridge. It intentionally describes validation circuits and behavior at a high
 level; generated simulation runs and private design files are not part of the
 repository.
 
+
 ## Reliable automation boundary
 
 Text netlists (`.cir` and `.net`) are the most reliable and portable LTspice

@@ -137,6 +137,121 @@ class OptimizationEngineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "content address"):
             optimization_engine.load_optimization_plan(self.runs, saved["plan_id"])
 
+    def test_richer_domains_expand_deterministically_and_round_trip(self) -> None:
+        parameters: list[optimization_engine.OptimizationParameter] = [
+            {
+                "name": "N",
+                "kind": "integer",
+                "minimum": 2,
+                "maximum": 6,
+                "step": 2,
+            },
+            {
+                "name": "MODEL",
+                "kind": "categorical",
+                "values": ["slow", "fast"],
+            },
+            {
+                "name": "R",
+                "kind": "preferred_series",
+                "series": "e12",
+                "minimum": 680,
+                "maximum": 1500,
+                "unit": "ohm",
+            },
+        ]
+        plan = optimization_engine.build_optimization_plan(
+            parameters, self.objectives(), self.constraints()
+        )
+        reordered = optimization_engine.build_optimization_plan(
+            [
+                {**parameters[2], "series": "E12"},
+                {**parameters[1], "values": ["fast", "slow"]},
+                parameters[0],
+            ],
+            self.objectives(),
+            self.constraints(),
+        )
+
+        self.assertEqual(plan, reordered)
+        self.assertEqual(plan["candidate_count"], 30)
+        self.assertEqual(plan["point_count"], 30)
+        self.assertEqual(plan["parameter_order"], ["MODEL", "N", "R"])
+        self.assertEqual(
+            [
+                float(point["parameters"]["R"])
+                for point in plan["points"][:5]
+            ],
+            [680, 820, 1000, 1200, 1500],
+        )
+        first = plan["points"][0]["parameters"]
+        last = plan["points"][-1]["parameters"]
+        self.assertEqual(
+            (first["MODEL"], first["N"], float(first["R"])),
+            ("fast", "2", 680),
+        )
+        self.assertEqual(
+            (last["MODEL"], last["N"], float(last["R"])),
+            ("slow", "6", 1500),
+        )
+        saved = optimization_engine.save_optimization_plan(self.runs, plan)
+        self.assertEqual(
+            optimization_engine.load_optimization_plan(
+                self.runs, saved["plan_id"]
+            ),
+            plan,
+        )
+
+    def test_richer_domains_fail_closed_on_invalid_definitions(self) -> None:
+        invalid_parameters = [
+            (
+                {
+                    "name": "N",
+                    "kind": "integer",
+                    "minimum": 1,
+                    "maximum": 6,
+                    "step": 2,
+                },
+                "land exactly",
+            ),
+            (
+                {
+                    "name": "MODEL",
+                    "kind": "categorical",
+                    "values": ["fast", " fast "],
+                },
+                "unique",
+            ),
+            (
+                {
+                    "name": "R",
+                    "kind": "preferred_series",
+                    "series": "E48",
+                    "minimum": 100,
+                    "maximum": 1000,
+                },
+                "E6, E12, or E24",
+            ),
+            (
+                {
+                    "name": "C",
+                    "kind": "preferred_series",
+                    "series": "E12",
+                    "minimum": 101,
+                    "maximum": 110,
+                },
+                "at least 2 values",
+            ),
+        ]
+        for parameter, message in invalid_parameters:
+            with self.subTest(parameter=parameter):
+                with self.assertRaisesRegex(ValueError, message):
+                    optimization_engine.build_optimization_plan(
+                        [parameter],  # type: ignore[list-item]
+                        self.objectives(),
+                        self.constraints(),
+                    )
+
     def test_rejects_duplicate_and_unbounded_candidate_domains(self) -> None:
         duplicate = self.parameters()
         duplicate[0]["values"] = [1000, 1000]

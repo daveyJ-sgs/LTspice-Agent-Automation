@@ -833,11 +833,31 @@ Phase 4B verification gate:
 
 #### Phase 4C: Local refinement and richer design domains
 
-- Add bounded integer and categorical domains plus generated E-series ranges
+##### Phase 4C-1: Richer design domains — complete
+
+- Add bounded integer ranges with exact step semantics, deterministic
+  string-valued categorical choices, and bounded generated E6, E12, and E24
+  component ranges
+- Preserve the Phase 4A/4B schema, generator identity, candidate ordering, and
+  content addresses for existing continuous and explicit preferred-value plans
+- Reject malformed bounds, steps, duplicate categories, unsupported series,
+  non-finite values, empty generated ranges, and domain expansions above the
+  existing 64-value and global candidate/point ceilings
+
+##### Phase 4C-2: Bounded Pareto-neighborhood refinement
+
 - Refine only feasible Pareto neighborhoods while retaining parent/child
   provenance and strict global evaluation budgets
 - Reject duplicate, out-of-domain, non-finite, or electrically invalid
   candidates before they can distort the optimizer state
+
+##### Phase 4C-3: MCP integration and DAQ qualification
+
+- Expose deterministic refinement through the existing MCP and durable
+  experiment lifecycle
+- Refine the selected DAQ neighborhood with real AC and transient LTspice,
+  retain human and structured evidence, and verify deterministic rebuilds and
+  supported-platform behavior
 
 #### Phase 4D: Robust selection proof and reporting
 

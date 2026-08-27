@@ -537,9 +537,14 @@ per-corner yield.
 ## Run a deterministic coarse optimization
 
 Phase 4A adds a circuit-independent coarse optimizer without adding another
-simulation runner. `generate_optimization_plan` freezes continuous grids,
-explicit preferred-value-series choices, fixed parameters, named corners,
-metric objectives, and hard constraints in a content-addressed JSON plan.
+simulation runner. `generate_optimization_plan` freezes design domains, fixed
+parameters, named corners, metric objectives, and hard constraints in a
+content-addressed JSON plan. Supported domains are bounded continuous grids,
+bounded integer ranges with an exact step, string-valued categorical choices,
+explicit numeric preferred values, and bounded generated E6, E12, or E24
+component values. Generated series include both bounds when they are members
+of the requested series and fail before publication if the range contains
+fewer than two or more than 64 values.
 `run_optimization_experiment` sends that plan through the existing independent
 experiment engine. Run each required analysis from the same plan, then call
 `evaluate_optimization_study` with the completed experiment IDs.

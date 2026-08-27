@@ -31,6 +31,18 @@ MAX_OPTIMIZATION_CANDIDATES = 512
 MAX_OPTIMIZATION_POINTS = 1_000
 NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 OPERATORS = {"<", "<=", ">", ">="}
+E_SERIES_VALUES = {
+    "E6": ("1", "1.5", "2.2", "3.3", "4.7", "6.8"),
+    "E12": (
+        "1", "1.2", "1.5", "1.8", "2.2", "2.7",
+        "3.3", "3.9", "4.7", "5.6", "6.8", "8.2",
+    ),
+    "E24": (
+        "1", "1.1", "1.2", "1.3", "1.5", "1.6", "1.8", "2",
+        "2.2", "2.4", "2.7", "3", "3.3", "3.6", "3.9", "4.3",
+        "4.7", "5.1", "5.6", "6.2", "6.8", "7.5", "8.2", "9.1",
+    ),
+}
 
 
 class OptimizationParameter(TypedDict):
@@ -40,7 +52,8 @@ class OptimizationParameter(TypedDict):
     minimum: NotRequired[float]
     maximum: NotRequired[float]
     count: NotRequired[int]
-    values: NotRequired[list[float]]
+    step: NotRequired[int]
+    values: NotRequired[list[float | str]]
     series: NotRequired[str]
 
 
@@ -214,6 +227,33 @@ def _metric_parameters(value: object, field: str) -> dict[str, float | str]:
     return normalized
 
 
+def _generated_e_series(
+    series: str, minimum: Decimal, maximum: Decimal, name: str
+) -> list[str]:
+    if series not in E_SERIES_VALUES:
+        raise ValueError(f"parameter {name} series must be E6, E12, or E24")
+    if minimum <= 0 or minimum >= maximum:
+        raise ValueError(
+            f"parameter {name} minimum must be positive and below maximum"
+        )
+    generated = {
+        _encoded(Decimal(base) * (Decimal(10) ** exponent))
+        for exponent in range(minimum.adjusted() - 1, maximum.adjusted() + 2)
+        for base in E_SERIES_VALUES[series]
+        if minimum <= Decimal(base) * (Decimal(10) ** exponent) <= maximum
+    }
+    values = sorted(generated, key=Decimal)
+    if len(values) < 2:
+        raise ValueError(
+            f"parameter {name} generated range must contain at least 2 values"
+        )
+    if len(values) > MAX_DOMAIN_VALUES:
+        raise ValueError(
+            f"parameter {name} generated range exceeds {MAX_DOMAIN_VALUES} values"
+        )
+    return values
+
+
 def _normalized_parameters(
     parameters: list[OptimizationParameter],
 ) -> tuple[list[dict[str, object]], dict[str, list[str]], dict[str, str]]:
@@ -269,6 +309,69 @@ def _normalized_parameters(
                     "count": count,
                 }
             )
+        elif kind == "integer":
+            minimum = raw.get("minimum")
+            maximum = raw.get("maximum")
+            step = raw.get("step", 1)
+            if any(
+                not isinstance(value, int) or isinstance(value, bool)
+                for value in (minimum, maximum, step)
+            ):
+                raise ValueError(
+                    f"parameter {name} integer bounds and step must be integers"
+                )
+            assert isinstance(minimum, int)
+            assert isinstance(maximum, int)
+            assert isinstance(step, int)
+            if minimum >= maximum:
+                raise ValueError(f"parameter {name} minimum must be below maximum")
+            if step <= 0:
+                raise ValueError(f"parameter {name} step must be positive")
+            if (maximum - minimum) % step:
+                raise ValueError(
+                    f"parameter {name} step must land exactly on maximum"
+                )
+            integer_values = list(range(minimum, maximum + 1, step))
+            if len(integer_values) > MAX_DOMAIN_VALUES:
+                raise ValueError(
+                    f"parameter {name} integer range exceeds {MAX_DOMAIN_VALUES} values"
+                )
+            values = [str(value) for value in integer_values]
+            normalized.append(
+                {
+                    "name": name,
+                    "kind": kind,
+                    "unit": unit,
+                    "minimum": minimum,
+                    "maximum": maximum,
+                    "step": step,
+                }
+            )
+        elif kind == "categorical":
+            raw_values = raw.get("values")
+            if (
+                not isinstance(raw_values, list)
+                or len(raw_values) < 2
+                or len(raw_values) > MAX_DOMAIN_VALUES
+                or any(not isinstance(value, str) for value in raw_values)
+            ):
+                raise ValueError(
+                    f"parameter {name} categorical values must contain 2 to "
+                    f"{MAX_DOMAIN_VALUES} strings"
+                )
+            values = sorted(
+                {_label(value, f"parameter {name} value") for value in raw_values}
+            )
+            if len(values) != len(raw_values):
+                raise ValueError(f"parameter {name} values must be unique")
+            normalized.append(
+                {
+                    "name": name,
+                    "kind": kind,
+                    "unit": unit,
+                    "values": values,
+                }
+            )
         elif kind == "preferred_values":
             raw_values = raw.get("values")
             series = _label(raw.get("series"), f"parameter {name} series")
@@ -298,9 +401,25 @@ def _normalized_parameters(
                     "values": values,
                 }
             )
+        elif kind == "preferred_series":
+            series = _label(raw.get("series"), f"parameter {name} series").upper()
+            minimum = _decimal(raw.get("minimum"), f"parameter {name} minimum")
+            maximum = _decimal(raw.get("maximum"), f"parameter {name} maximum")
+            values = _generated_e_series(series, minimum, maximum, name)
+            normalized.append(
+                {
+                    "name": name,
+                    "kind": kind,
+                    "unit": unit,
+                    "series": series,
+                    "minimum": _encoded(minimum),
+                    "maximum": _encoded(maximum),
+                }
+            )
         else:
             raise ValueError(
-                f"parameter {name} kind must be 'continuous' or 'preferred_values'"
+                f"parameter {name} kind must be continuous, integer, categorical, "
+                "preferred_values, or preferred_series"
             )
         values_by_name[name] = values
         units[name] = unit
