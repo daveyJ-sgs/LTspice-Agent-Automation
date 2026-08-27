@@ -38,6 +38,7 @@ import experiment_visualization
 import frequency_domain_metrics
 import local_sensitivity
 import ltspice_wrapper as wrapper
+import optimization_engine
 import raw_parser
 import report_runs
 import sensitivity_analysis
@@ -76,6 +77,12 @@ StatisticalCorrelation = statistical_engine.StatisticalCorrelation
 StatisticalCornerAxis = statistical_engine.StatisticalCornerAxis
 StatisticalPlanResult = statistical_engine.StatisticalPlanResult
 StatisticalSamplingMethod = Literal["independent", "latin_hypercube", "halton"]
+OptimizationParameter = optimization_engine.OptimizationParameter
+OptimizationObjective = optimization_engine.OptimizationObjective
+OptimizationConstraint = optimization_engine.OptimizationConstraint
+OptimizationCornerAxis = optimization_engine.OptimizationCornerAxis
+OptimizationPlanResult = optimization_engine.OptimizationPlanResult
+OptimizationStudyResult = optimization_engine.OptimizationStudyResult
 StatisticalSummaryResult = statistical_results.StatisticalSummaryResult
 StatisticalComparisonResult = statistical_comparison.StatisticalComparisonResult
 SensitivityAnalysisResult = sensitivity_analysis.SensitivityAnalysisResult
@@ -1084,6 +1091,107 @@ def run_statistical_experiment(
         explicit_parameter_order=plan["parameter_order"],
         explicit_parameter_units=plan["parameter_units"],
         source_point_plan=_statistical_plan_source(plan_id, plan, plan_result),
+    )
+
+
+@mcp.tool()
+def generate_optimization_plan(
+    parameters: list[OptimizationParameter],
+    objectives: list[OptimizationObjective],
+    constraints: list[OptimizationConstraint],
+    fixed_parameters: dict[str, float | str] | None = None,
+    corner_axes: list[OptimizationCornerAxis] | None = None,
+) -> OptimizationPlanResult:
+    """Generate a bounded deterministic coarse-search plan without LTspice.
+
+    Phase 4A supports continuous grids and explicit preferred-value-series
+    choices. Fixed circuit values and named operating corners remain separate
+    from design variables. Objectives and hard constraints select metrics from
+    named completed experiment analyses.
+    """
+    return optimization_engine.generate_optimization_plan(
+        RUNS_DIR,
+        parameters,
+        objectives,
+        constraints,
+        fixed_parameters,
+        corner_axes,
+    )
+
+
+@mcp.tool()
+def get_optimization_plan(plan_id: str) -> OptimizationPlanResult:
+    """Load and verify a content-addressed optimization candidate plan."""
+    return optimization_engine.inspect_optimization_plan(RUNS_DIR, plan_id)
+
+
+def _optimization_plan_source(
+    plan_id: str,
+    plan: optimization_engine.OptimizationPlan,
+    plan_result: OptimizationPlanResult,
+) -> dict[str, object]:
+    return {
+        "kind": "optimization",
+        "plan_id": plan_id,
+        "plan_sha256": plan_result["plan_sha256"],
+        "runs_relative_path": (
+            f"optimization-plans/{plan_id}/optimization_plan.json"
+        ),
+        "generator_version": plan["generator_version"],
+        "definition_hash": plan["definition_hash"],
+        "candidate_count": plan["candidate_count"],
+        "point_metadata": [
+            {
+                "index": point["index"],
+                "candidate_index": point["candidate_index"],
+                "corners": point.get("corners", {}),
+            }
+            for point in plan["points"]
+        ],
+    }
+
+
+@mcp.tool()
+def run_optimization_experiment(
+    plan_id: str,
+    netlist_template: str,
+    waveform_analyses: list[ExperimentWaveformAnalysis] | None = None,
+    filename: str = "circuit.cir",
+    ascii_raw: bool = False,
+    timeout_seconds: int = 120,
+    reuse_cache: bool = False,
+) -> ExperimentResult:
+    """Run every candidate/corner point through the existing experiment engine."""
+    plan = optimization_engine.load_optimization_plan(RUNS_DIR, plan_id)
+    plan_result = optimization_engine.inspect_optimization_plan(RUNS_DIR, plan_id)
+    return experiment_engine.run_experiment_sync(
+        RUNS_DIR,
+        _execute_experiment_point,
+        netlist_template,
+        [],
+        waveform_analyses,
+        filename,
+        ascii_raw,
+        timeout_seconds,
+        None,
+        reuse_cache,
+        "independent",
+        _execute_native_experiment,
+        explicit_points=[point["parameters"] for point in plan["points"]],
+        explicit_parameter_order=plan["parameter_order"],
+        explicit_parameter_units=plan["parameter_units"],
+        source_point_plan=_optimization_plan_source(plan_id, plan, plan_result),
+    )
+
+
+@mcp.tool()
+def evaluate_optimization_study(
+    plan_id: str,
+    experiments: dict[str, str],
+) -> OptimizationStudyResult:
+    """Publish Pareto JSON, CSV, and HTML from completed experiment evidence."""
+    return optimization_engine.evaluate_optimization_study(
+        RUNS_DIR, plan_id, experiments
     )
 
 

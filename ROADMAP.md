@@ -753,8 +753,74 @@ constraints. The system should support:
 - Final corner and Monte Carlo verification of selected candidates
 - An explanation of why the winning candidate was selected
 
-Initial validation will optimize the existing Sallen-Key filter for cutoff,
-Q, peaking, step response, component values, and tolerance yield.
+The mixed-signal DAQ is the primary Phase 4 qualification circuit. Its first
+optimization trades anti-alias rejection against acquisition settling while
+holding bandwidth, peaking, tracking error, droop, output range, and ADC-load
+corners as explicit constraints. Component choices and acquisition settings
+are design variables; manufacturing variation and ADC loading remain separate
+uncertainty/corner axes. A small Sallen-Key fixture remains only as a fast,
+deterministic optimizer regression.
+
+#### Phase 4A: Deterministic coarse optimization — complete
+
+- Freeze a content-addressed candidate-plan schema containing bounded design
+  domains, fixed circuit parameters, named operating corners, objectives, hard
+  constraints, generator/version metadata, and deterministic selection policy
+- Support bounded continuous grids and explicit preferred-value-series choices
+  without creating a second simulation runner
+- Evaluate the same candidate plan through the existing AC and transient
+  experiment paths, preserving simulation errors, analysis errors, and
+  electrical constraint failures as distinct outcomes
+- Produce a deterministic Pareto front, select one feasible candidate by an
+  explicit normalized-regret policy, and retain the evidence and explanation
+  needed to reproduce that decision
+- Qualify the first slice on the DAQ anti-alias/acquisition tradeoff; do not add
+  local refinement until this evidence contract is stable
+
+Phase 4A verification gate:
+
+- `optimization-plan-762b2ccc92fff6f6` freezes 16 DAQ candidates and 32
+  light/heavy ADC-load points using E12 resistor/capacitor choices plus a
+  bounded continuous output-resistance grid
+- Real local LTspice AC experiment `mcp-experiment-20260826-194300-922975` and
+  transient experiment `mcp-experiment-20260826-194302-971933` evaluate the
+  same immutable plan through the existing independent runner
+- `optimization-study-fee26beaaca4513b` classifies 14 feasible candidates and
+  two maximum-bandwidth failures, identifies nine Pareto candidates, and
+  selects candidate 8: CAA1=100 pF, CAA2=82 pF, RAA1=820 ohm, ROUT=35 ohm
+- The selected worst-corner objectives are -25.27 dB gain at 10 MHz and
+  1.003 us settling; every Phase 4A hard constraint passes at both ADC-load
+  corners, without claiming manufacturing yield
+- Content-address, reorder-stability, domain-bound, tamper, deterministic
+  rebuild, MCP-runner reuse, real-report, responsive-browser, and complete
+  251-test regression checks pass
+
+#### Phase 4B: Durable orchestration and cross-platform resume
+
+- Define, queue, cancel, resume, and inspect optimization studies through the
+  durable experiment manager while retaining one immutable candidate plan
+- Serialize all state required to evaluate or resume the same unfinished plan
+  on macOS and Windows
+- Run the frozen DAQ population with real LTspice on both platforms and compare
+  candidate classifications, objective values, Pareto membership, and selected
+  design within documented numeric tolerances
+
+#### Phase 4C: Local refinement and richer design domains
+
+- Add bounded integer and categorical domains plus generated E-series ranges
+- Refine only feasible Pareto neighborhoods while retaining parent/child
+  provenance and strict global evaluation budgets
+- Reject duplicate, out-of-domain, non-finite, or electrically invalid
+  candidates before they can distort the optimizer state
+
+#### Phase 4D: Robust selection proof and reporting
+
+- Re-run finalists through Phase 3 named corners and deterministic Monte Carlo
+  yield analysis rather than treating nominal optimization as design proof
+- Add human-first Pareto, constraint-margin, sensitivity, and selection-rationale
+  reports with direct links to candidate RAW, JSON, CSV, and manifest evidence
+- Index and compare optimization studies, document the DAQ design decision, and
+  close Phase 4 with local, macOS CI, and real Windows LTspice verification
 
 Windows acceptance criteria:
 
@@ -911,14 +977,16 @@ Begin Phase 4A with the smallest complete deterministic optimization slice:
 
 1. Freeze a versioned candidate-plan schema that records optimizer state,
    objectives, hard constraints, parameter domains, and reproducibility data.
-2. Generate a bounded coarse Sallen-Key candidate population containing
-   continuous and preferred-value-series component choices without invoking a
-   second simulation runner.
+2. Generate a bounded coarse mixed-signal DAQ candidate population containing
+   continuous and explicit preferred-value-series component choices without
+   invoking a second simulation runner. Keep Sallen-Key only as a small unit
+   fixture.
 3. Evaluate candidates through the existing experiment and requirement paths,
    keeping electrical constraint failures separate from simulation or analysis
    errors.
 4. Produce a traceable Pareto report and an explicit explanation for one
    selected candidate; do not add local refinement until the coarse-search
    evidence contract is stable.
-5. Serialize, resume, and compare the same candidate plan on macOS and Windows
-   before expanding Phase 4 to additional parameter types or the DAQ circuit.
+5. Stop Phase 4A after local real-LTspice DAQ qualification. Serialize, resume,
+   and compare the same candidate plan on macOS and Windows in Phase 4B before
+   adding refinement or richer parameter types.

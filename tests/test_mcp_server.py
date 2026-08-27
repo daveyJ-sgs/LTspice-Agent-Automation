@@ -1242,6 +1242,116 @@ class MCPServerTests(unittest.TestCase):
             "sha256-stratified-gaussian-v7",
         )
 
+    def test_optimization_plan_and_execution_tools_use_existing_runner(self) -> None:
+        tools = asyncio.run(mcp_server.mcp.list_tools())
+        by_name = {tool.name: tool for tool in tools}
+        for name in (
+            "generate_optimization_plan",
+            "get_optimization_plan",
+            "run_optimization_experiment",
+            "evaluate_optimization_study",
+        ):
+            self.assertIn(name, by_name)
+        self.assertIn(
+            "candidate_count",
+            by_name["generate_optimization_plan"].output_schema["properties"],
+        )
+        self.assertIn(
+            "selected_candidate_index",
+            by_name["evaluate_optimization_study"].output_schema["properties"],
+        )
+        generated = asyncio.run(
+            mcp_server.mcp.call_tool(
+                "generate_optimization_plan",
+                {
+                    "parameters": [
+                        {
+                            "name": "R",
+                            "kind": "preferred_values",
+                            "series": "E12",
+                            "values": [820, 1000],
+                            "unit": "ohm",
+                        }
+                    ],
+                    "objectives": [
+                        {
+                            "name": "gain",
+                            "experiment": "ac",
+                            "analysis": "response",
+                            "metric": "ac_gain_db",
+                            "goal": "maximize",
+                        }
+                    ],
+                    "constraints": [
+                        {
+                            "name": "gain_floor",
+                            "experiment": "ac",
+                            "analysis": "response",
+                            "metric": "ac_gain_db",
+                            "operator": ">=",
+                            "target": -3,
+                        }
+                    ],
+                    "fixed_parameters": {"C": 1e-9},
+                    "corner_axes": [
+                        {
+                            "name": "load",
+                            "parameter": "RLOAD",
+                            "values": [
+                                {"name": "heavy", "value": 1000},
+                                {"name": "light", "value": 100000},
+                            ],
+                        }
+                    ],
+                },
+            )
+        )
+        self.assertFalse(generated.is_error)
+        plan = generated.structured_content
+        self.assertIsNotNone(plan)
+        rendered_netlists: list[str] = []
+
+        def execute(
+            netlist: str,
+            filename: str,
+            ascii_raw: bool,
+            timeout: int,
+            dest: Path,
+        ) -> Path:
+            rendered_netlists.append(netlist)
+            dest.mkdir(parents=True)
+            return dest
+
+        with (
+            patch.object(mcp_server, "_run_netlist_text", side_effect=execute),
+            patch.object(
+                mcp_server,
+                "_summarize_run",
+                return_value={"status": "completed", "measurements": {}},
+            ),
+        ):
+            result = mcp_server.run_optimization_experiment(
+                plan["plan_id"],
+                "R1 in out {R}\nC1 out 0 {C}\nR2 out 0 {RLOAD}\n.end\n",
+            )
+
+        self.assertEqual(result["point_count"], 4)
+        self.assertEqual(
+            [point["parameters"] for point in result["points"]],
+            [point["parameters"] for point in plan["points"]],
+        )
+        self.assertEqual(len(rendered_netlists), 4)
+        manifest = json.loads(
+            Path(result["manifest"]).read_text(encoding="utf-8")
+        )
+        source = manifest["definition"]["point_plan"]["source"]
+        self.assertEqual(source["kind"], "optimization")
+        self.assertEqual(source["candidate_count"], 2)
+        self.assertEqual(
+            [item["candidate_index"] for item in source["point_metadata"]],
+            [0, 0, 1, 1],
+        )
+
     def test_durable_statistical_study_executes_frozen_plan_without_resampling(
         self,
     ) -> None:

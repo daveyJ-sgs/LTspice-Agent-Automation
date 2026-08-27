@@ -906,6 +906,36 @@ data remains in the linked structured artifacts. The searchable dashboard uses
 the same rebuilt index and shows the sampling method plus aggregate or
 per-corner yield.
 
+### Run a deterministic coarse optimization
+
+Phase 4A adds a circuit-independent coarse optimizer without adding another
+simulation runner. `generate_optimization_plan` freezes continuous grids,
+explicit preferred-value-series choices, fixed parameters, named corners,
+metric objectives, and hard constraints in a content-addressed JSON plan.
+`run_optimization_experiment` sends that plan through the existing independent
+experiment engine. Run each required analysis from the same plan, then call
+`evaluate_optimization_study` with the completed experiment IDs.
+
+The evaluator verifies every point and parameter map against the immutable
+plan, uses the worst named-corner value for each objective and constraint,
+keeps simulation/analysis errors separate from electrical failures, computes
+the feasible Pareto front, and selects one candidate with the versioned
+equal-weight normalized-regret policy. Deterministic JSON, CSV, and a portable
+human-first Pareto report are written below `runs/optimization-studies/`.
+
+Run the bounded mixed-signal DAQ qualification with:
+
+```bash
+PYTHONPATH=. .venv/bin/python examples/optimize_mixed_signal_daq.py
+```
+
+The first study evaluates 16 component/driver candidates at light and heavy
+ADC-load corners in both AC and transient LTspice runs. Its competing
+objectives are lower 10 MHz alias gain and faster acquisition settling;
+passband gain, bandwidth, peaking, tracking error, and hold droop remain hard
+constraints. A coarse nominal winner is not a manufacturing-yield proof:
+Phase 4D reuses the Phase 3 corner and Monte Carlo machinery for finalists.
+
 ### Build a portable experiment report
 
 Call `build_experiment_report` with a completed experiment ID to write a
