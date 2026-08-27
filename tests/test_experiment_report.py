@@ -348,7 +348,9 @@ class ExperimentReportTests(unittest.TestCase):
             ),
             context,
         )
-        self.assertEqual(Path(repeated["report_html"]).read_text(), document)
+        self.assertEqual(
+            Path(repeated["report_html"]).read_text(encoding="utf-8"), document
+        )
 
     def test_rejects_unbounded_or_escaped_report_context(self) -> None:
         with self.assertRaisesRegex(ValueError, "text budget"):

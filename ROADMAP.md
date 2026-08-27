@@ -815,7 +815,8 @@ Phase 4B verification gate:
 - Restart, relocation, cooperative cancellation, child-definition tamper,
   content-addressed comparison, MCP schema, and complete 263-test regression
   checks pass; Windows-safe child identity checks use the experiment-manager
-  lock rather than racing atomic manifest replacement
+  lock rather than racing atomic manifest replacement, and report tests decode
+  portable HTML explicitly as UTF-8 on every platform
 - Tolerance-aware plan `optimization-plan-2b6f2d62d7ca7c14` records 0.05 dB
   alias-gain and 50 ns settling-time decision resolution. Real macOS LTspice
   study `optimization-study-15a3b0b178405e19` evaluates 32 AC and 32 transient
