@@ -425,10 +425,10 @@ The full request schemas, examples, validation rules, report behavior, and metri
 definitions live in [docs/MCP_REFERENCE.md](docs/MCP_REFERENCE.md).
 
 The mixed-signal DAQ is the primary end-to-end qualification circuit. To run its
-bounded Phase 4A optimization across AC and transient studies:
+bounded optimization as one durable AC/transient study:
 
 ```bash
-PYTHONPATH=. .venv/bin/python examples/optimize_mixed_signal_daq.py
+PYTHONPATH=. .venv/bin/python examples/optimize_mixed_signal_daq_durable.py
 ```
 
 That study compares alias rejection against acquisition settling while enforcing

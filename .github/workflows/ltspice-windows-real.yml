@@ -178,6 +178,13 @@ jobs:
           REAL_LTSPICE_DAQ_EVIDENCE_DIR: ${{ runner.temp }}\ltspice-real-daq
         run: python tests/real_ltspice_daq.py
 
+      - name: Run durable DAQ optimization and compare macOS baseline
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          REAL_LTSPICE_OPTIMIZATION_EVIDENCE_DIR: ${{ runner.temp }}\ltspice-real-optimization
+        run: python tests/real_ltspice_optimization.py
+
       - name: Upload compact verification evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -193,3 +200,4 @@ jobs:
             ${{ runner.temp }}/ltspice-real-smoke/rc_lowpass.raw
             ${{ runner.temp }}/ltspice-real-smoke/smoke_summary.json
             ${{ runner.temp }}/ltspice-real-daq
+            ${{ runner.temp }}/ltspice-real-optimization

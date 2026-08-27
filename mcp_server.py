@@ -38,7 +38,9 @@ import experiment_visualization
 import frequency_domain_metrics
 import local_sensitivity
 import ltspice_wrapper as wrapper
+import optimization_comparison
 import optimization_engine
+import optimization_study
 import raw_parser
 import report_runs
 import sensitivity_analysis
@@ -83,6 +85,10 @@ OptimizationConstraint = optimization_engine.OptimizationConstraint
 OptimizationCornerAxis = optimization_engine.OptimizationCornerAxis
 OptimizationPlanResult = optimization_engine.OptimizationPlanResult
 OptimizationStudyResult = optimization_engine.OptimizationStudyResult
+ObjectiveTolerance = optimization_comparison.ObjectiveTolerance
+OptimizationComparisonResult = optimization_comparison.OptimizationComparisonResult
+OptimizationExperimentDefinition = optimization_study.OptimizationExperimentDefinition
+OptimizationJobSnapshot = optimization_study.OptimizationJobSnapshot
 StatisticalSummaryResult = statistical_results.StatisticalSummaryResult
 StatisticalComparisonResult = statistical_comparison.StatisticalComparisonResult
 SensitivityAnalysisResult = sensitivity_analysis.SensitivityAnalysisResult
@@ -1195,8 +1201,28 @@ def evaluate_optimization_study(
     )
 
 
+@mcp.tool()
+def compare_optimization_studies(
+    baseline_study_id: str,
+    candidate_study_id: str,
+    tolerances: dict[str, ObjectiveTolerance],
+    baseline_label: str = "baseline",
+    candidate_label: str = "candidate",
+) -> OptimizationComparisonResult:
+    """Compare platform decisions exactly and objective values within tolerances."""
+    return optimization_comparison.compare_saved_optimization_studies(
+        RUNS_DIR,
+        baseline_study_id,
+        candidate_study_id,
+        tolerances,
+        baseline_label=baseline_label,
+        candidate_label=candidate_label,
+    )
+
+
 _experiment_manager: ExperimentJobManager | None = None
 _experiment_manager_lock = threading.Lock()
+_optimization_study_manager: optimization_study.OptimizationStudyManager | None = None
 
 
 def _get_experiment_manager() -> ExperimentJobManager:
@@ -1208,6 +1234,20 @@ def _get_experiment_manager() -> ExperimentJobManager:
         if _experiment_manager is None:
             _experiment_manager = ExperimentJobManager(RUNS_DIR)
         return _experiment_manager
+
+
+def _get_optimization_study_manager() -> optimization_study.OptimizationStudyManager:
+    global _optimization_study_manager
+    experiment_manager = _get_experiment_manager()
+    if (
+        _optimization_study_manager is None
+        or _optimization_study_manager.runs_dir != RUNS_DIR
+        or _optimization_study_manager.experiment_manager is not experiment_manager
+    ):
+        _optimization_study_manager = optimization_study.OptimizationStudyManager(
+            RUNS_DIR, experiment_manager
+        )
+    return _optimization_study_manager
 
 
 @mcp.tool()
@@ -1265,6 +1305,39 @@ def define_statistical_study(
         max_concurrency,
         reuse_cache,
     )
+
+
+@mcp.tool()
+def define_optimization_study(
+    plan_id: str,
+    experiments: dict[str, OptimizationExperimentDefinition],
+) -> OptimizationJobSnapshot:
+    """Persist all required experiments for one immutable optimization plan."""
+    return _get_optimization_study_manager().define(plan_id, experiments)
+
+
+@mcp.tool()
+def start_optimization_study(
+    optimization_job_id: str,
+) -> OptimizationJobSnapshot:
+    """Queue every unfinished child experiment in a durable optimization study."""
+    return _get_optimization_study_manager().start(optimization_job_id)
+
+
+@mcp.tool()
+def get_optimization_study(
+    optimization_job_id: str,
+) -> OptimizationJobSnapshot:
+    """Inspect child progress and publish Pareto evidence once all work completes."""
+    return _get_optimization_study_manager().snapshot(optimization_job_id)
+
+
+@mcp.tool()
+def cancel_optimization_study(
+    optimization_job_id: str,
+) -> OptimizationJobSnapshot:
+    """Cooperatively cancel unfinished child experiments in an optimization study."""
+    return _get_optimization_study_manager().cancel(optimization_job_id)
 
 
 @mcp.tool()

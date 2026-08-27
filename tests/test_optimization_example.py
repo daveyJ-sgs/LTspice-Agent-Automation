@@ -4,7 +4,7 @@ import re
 import unittest
 from unittest.mock import patch
 
-from examples import optimize_mixed_signal_daq
+from examples import optimize_mixed_signal_daq, optimize_mixed_signal_daq_durable
 
 
 class OptimizationExampleTests(unittest.TestCase):
@@ -90,6 +90,56 @@ class OptimizationExampleTests(unittest.TestCase):
             },
         )
         self.assertEqual(result["optimization"], optimization)
+
+    def test_durable_daq_example_composes_and_polls_existing_jobs(self) -> None:
+        plan = {"plan_id": "optimization-plan-fixture"}
+        defined = {"optimization_job_id": "optimization-job-fixture"}
+        queued = {**defined, "status": "queued"}
+        completed = {
+            **defined,
+            "status": "completed",
+            "error": None,
+            "optimization_study_id": "optimization-study-fixture",
+            "report_html": "/runs/optimization/report.html",
+            "experiments": {
+                "ac": {"experiment_id": "mcp-experiment-ac"},
+                "transient": {"experiment_id": "mcp-experiment-transient"},
+            },
+        }
+        with (
+            patch.object(
+                optimize_mixed_signal_daq_durable.mcp_server,
+                "generate_optimization_plan",
+                return_value=plan,
+            ),
+            patch.object(
+                optimize_mixed_signal_daq_durable.mcp_server,
+                "define_optimization_study",
+                return_value=defined,
+            ) as define,
+            patch.object(
+                optimize_mixed_signal_daq_durable.mcp_server,
+                "start_optimization_study",
+                return_value=queued,
+            ),
+            patch.object(
+                optimize_mixed_signal_daq_durable.mcp_server,
+                "get_optimization_study",
+                return_value=completed,
+            ),
+            patch.object(
+                optimize_mixed_signal_daq_durable.mcp_server,
+                "build_experiment_report",
+                side_effect=[{"report_html": "ac"}, {"report_html": "transient"}],
+            ) as report,
+            patch.object(optimize_mixed_signal_daq_durable.time, "sleep"),
+        ):
+            result = optimize_mixed_signal_daq_durable.run_study()
+
+        self.assertEqual(define.call_args.args[0], plan["plan_id"])
+        self.assertEqual(set(define.call_args.args[1]), {"ac", "transient"})
+        self.assertEqual(report.call_count, 2)
+        self.assertEqual(result["job"], completed)
 
 
 if __name__ == "__main__":

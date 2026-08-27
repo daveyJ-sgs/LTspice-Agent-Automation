@@ -25,7 +25,10 @@ optimization studies, durable orchestration, and portable human-facing reports.
   `analyze_local_sensitivity`, `define_adaptive_boundary_study`,
   `advance_adaptive_boundary_study`, and `get_adaptive_boundary_study`
 - Optimization: `generate_optimization_plan`, `get_optimization_plan`,
-  `run_optimization_experiment`, and `evaluate_optimization_study`
+  `run_optimization_experiment`, `evaluate_optimization_study`,
+  `define_optimization_study`, `start_optimization_study`,
+  `get_optimization_study`, `cancel_optimization_study`, and
+  `compare_optimization_studies`
 - Comparison and reporting: `compare_experiments`,
   `compare_statistical_experiments`, `build_experiment_index`,
   `query_experiments`, `build_experiment_report`, `build_comparison_report`,
@@ -38,6 +41,7 @@ optimization studies, durable orchestration, and portable human-facing reports.
 - [Statistical planning and yield studies](#generate-a-deterministic-statistical-plan)
 - [Durable orchestration and experiment comparison](#run-a-durable-experiment-job)
 - [Deterministic coarse optimization](#run-a-deterministic-coarse-optimization)
+- [Durable optimization studies](#run-a-durable-optimization-study)
 - [Portable reports and experiment browsing](#build-a-portable-experiment-report)
 - [Verified artifact reuse](#reuse-verified-simulation-artifacts)
 - [Native LTspice stepping](#run-a-structured-experiment-as-one-native-ltspice-batch)
@@ -559,6 +563,38 @@ objectives are lower 10 MHz alias gain and faster acquisition settling;
 passband gain, bandwidth, peaking, tracking error, and hold droop remain hard
 constraints. A coarse nominal winner is not a manufacturing-yield proof:
 Phase 4D reuses the Phase 3 corner and Monte Carlo machinery for finalists.
+
+## Run a durable optimization study
+
+Phase 4B composes the required AC and transient work through the existing
+durable experiment manager. `define_optimization_study` accepts one immutable
+optimization `plan_id` and an experiment-definition object whose names must
+exactly match the plan. It creates one child experiment per named analysis but
+does not start simulation. Use `start_optimization_study`, poll
+`get_optimization_study`, and call `cancel_optimization_study` for cooperative
+cancellation.
+
+The optimization-job manifest stores only the plan ID and hash, child
+experiment IDs and definition hashes, current statuses, and relative result
+identity. It contains no machine-specific paths. Existing point checkpoints
+remain owned by the Phase 2 experiment manager, so process restart queues only
+unfinished work and completed points are not redrawn or renumbered. When every
+child completes, the next status inspection publishes the normal deterministic
+Pareto JSON, CSV, and HTML evidence.
+
+Run the complete mixed-signal DAQ example with:
+
+```bash
+PYTHONPATH=. .venv/bin/python examples/optimize_mixed_signal_daq_durable.py
+```
+
+`compare_optimization_studies` enforces the cross-platform acceptance contract:
+candidate parameters, classifications, Pareto membership, and selected design
+must match exactly, while each objective must remain within its named absolute
+plus relative tolerance. The comparison is itself content-addressed JSON and
+offline HTML evidence. The DAQ qualification uses 0.05 dB absolute tolerance
+for 10 MHz alias gain and 25 ns for settling time; both relative tolerances are
+zero.
 
 ## Build a portable experiment report
 
