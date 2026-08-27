@@ -854,6 +854,27 @@ Windows acceptance criteria:
 - Compare final candidates and constraint results across both LTspice
   installations before declaring the workflow portable.
 
+### Cross-cutting milestone: Human study builder and unattended control
+
+Add a straightforward human interface for configuring and running circuit
+studies when an agent is unavailable. The interface must remain a thin client
+over the existing MCP contracts: it produces the same validated experiment,
+statistical, and optimization definitions and consumes the same durable jobs
+and evidence rather than introducing a second execution path.
+
+- Select a circuit/netlist, analysis type, parameters, units, ranges,
+  distributions, corners, requirements, objectives, and execution target
+- Preview the resolved point or candidate plan, estimated run count, and
+  validation errors before submission
+- Start, monitor, cancel, and resume durable local or remote studies without
+  keeping the interface open
+- Open concise HTML reports first while retaining links to RAW, JSON, CSV,
+  manifests, logs, and exact generated inputs
+- Save and reload portable study definitions suitable for GUI, MCP, CLI, and
+  CI use, with identical content-address and provenance checks
+- Qualify the interface by proving that a GUI-authored DAQ study and the
+  equivalent agent-authored study generate the same plan and results
+
 ### Phase 5: Flagship portable mixed-signal DAQ/scope
 
 Develop a portable USB 3.x DAQ/scope with an initial target of approximately
