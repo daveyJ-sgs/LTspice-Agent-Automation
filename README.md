@@ -418,7 +418,8 @@ adding separate simulation systems. It currently supports:
 - Derived parameters, measurement and waveform requirements, and pass/fail evidence
 - Seeded statistical plans, named operating corners, yield, sensitivity, and boundary refinement
 - Durable experiment jobs, cancellation, recovery, indexing, and comparison
-- Deterministic coarse optimization with constraints, Pareto ranking, and a selected candidate
+- Deterministic coarse and local-refinement optimization with constraints,
+  Pareto ranking, bounded provenance, and a selected candidate
 - Verified artifact caching, portable reports, dashboards, JSON, CSV, and RAW provenance
 
 The full request schemas, examples, validation rules, report behavior, and metric
@@ -436,6 +437,14 @@ passband, bandwidth, peaking, tracking-error, and hold-droop constraints across
 light and heavy ADC-load corners. The resulting coarse nominal selection is not
 a manufacturing-yield proof; the Phase 3 statistical machinery provides that
 robustness layer for optimization finalists.
+
+Given a completed optimization study, generate and run a bounded local
+Pareto-neighborhood refinement through the same durable AC/transient pipeline:
+
+```bash
+PYTHONPATH=. .venv/bin/python examples/refine_mixed_signal_daq.py \
+  <optimization-study-id>
+```
 
 ## Windows
 

@@ -84,6 +84,7 @@ OptimizationObjective = optimization_engine.OptimizationObjective
 OptimizationConstraint = optimization_engine.OptimizationConstraint
 OptimizationCornerAxis = optimization_engine.OptimizationCornerAxis
 OptimizationPlanResult = optimization_engine.OptimizationPlanResult
+OptimizationRefinementPlanResult = optimization_engine.OptimizationRefinementPlanResult
 OptimizationStudyResult = optimization_engine.OptimizationStudyResult
 ObjectiveTolerance = optimization_comparison.ObjectiveTolerance
 OptimizationComparisonResult = optimization_comparison.OptimizationComparisonResult
@@ -1110,10 +1111,11 @@ def generate_optimization_plan(
 ) -> OptimizationPlanResult:
     """Generate a bounded deterministic coarse-search plan without LTspice.
 
-    Phase 4A supports continuous grids and explicit preferred-value-series
-    choices. Fixed circuit values and named operating corners remain separate
-    from design variables. Objectives and hard constraints select metrics from
-    named completed experiment analyses.
+    Supported domains include continuous grids, integer ranges, categorical
+    choices, explicit preferred values, and generated E6/E12/E24 ranges. Fixed
+    circuit values and named operating corners remain separate from design
+    variables. Objectives and hard constraints select metrics from named
+    completed experiment analyses.
     """
     return optimization_engine.generate_optimization_plan(
         RUNS_DIR,
@@ -1122,6 +1124,21 @@ def generate_optimization_plan(
         constraints,
         fixed_parameters,
         corner_axes,
+    )
+
+
+@mcp.tool()
+def generate_optimization_refinement_plan(
+    parent_study_id: str,
+    max_candidates: int = 64,
+    max_points: int = 256,
+) -> OptimizationRefinementPlanResult:
+    """Freeze new candidates around feasible Pareto parents without LTspice."""
+    return optimization_engine.generate_optimization_refinement_plan(
+        RUNS_DIR,
+        parent_study_id,
+        max_candidates,
+        max_points,
     )
 
 

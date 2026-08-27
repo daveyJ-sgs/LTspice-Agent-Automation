@@ -367,6 +367,58 @@ class OptimizationEngineTests(unittest.TestCase):
                 for point in refined_plan["points"]
             )
         )
+        refined_points = []
+        for point in refined_plan["points"]:
+            refined_points.append(
+                {
+                    "index": point["index"],
+                    "parameters": point["parameters"],
+                    "simulation_status": "completed",
+                    "error": None,
+                    "analyses": [
+                        self._analysis(
+                            "alias",
+                            "ac_gain_db",
+                            2.0 - point["candidate_index"],
+                            frequency_value=10_000_000,
+                        ),
+                        self._analysis(
+                            "passband",
+                            "ac_gain_db",
+                            4.0,
+                            frequency_value=100_000,
+                        ),
+                    ],
+                }
+            )
+        refined_experiment_dir = self.runs / "experiment-refined-ac"
+        refined_experiment_dir.mkdir()
+        refined_results = {"status": "completed", "points": refined_points}
+        (refined_experiment_dir / "results.json").write_text(
+            json.dumps(refined_results), encoding="utf-8"
+        )
+        with patch.object(
+            optimization_engine.experiment_index,
+            "load_terminal_experiment",
+            return_value=(
+                refined_experiment_dir,
+                {"status": "completed"},
+                refined_results,
+                {},
+            ),
+        ):
+            refined_study = optimization_engine.evaluate_optimization_study(
+                self.runs,
+                refined["plan_id"],
+                {"ac": "experiment-refined-ac"},
+            )
+        refined_report = Path(refined_study["report_html"]).read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Local multi-objective refinement", refined_report)
+        self.assertIn("Refinement provenance", refined_report)
+        self.assertIn("the parent remains part", refined_report)
+        self.assertIn("Selected refined design", refined_report)
         tampered = json.loads(Path(study["results_json"]).read_text(encoding="utf-8"))
         tampered["candidates"][3]["pareto"] = False
         Path(study["results_json"]).write_text(json.dumps(tampered), encoding="utf-8")

@@ -1247,6 +1247,7 @@ class MCPServerTests(unittest.TestCase):
         by_name = {tool.name: tool for tool in tools}
         for name in (
             "generate_optimization_plan",
+            "generate_optimization_refinement_plan",
             "get_optimization_plan",
             "run_optimization_experiment",
             "evaluate_optimization_study",
@@ -1259,6 +1260,12 @@ class MCPServerTests(unittest.TestCase):
         self.assertIn(
             "selected_candidate_index",
             by_name["evaluate_optimization_study"].output_schema["properties"],
+        )
+        self.assertIn(
+            "parent_study_id",
+            by_name["generate_optimization_refinement_plan"].output_schema[
+                "properties"
+            ],
         )
         generated = asyncio.run(
             mcp_server.mcp.call_tool(
@@ -1350,6 +1357,51 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(
             [item["candidate_index"] for item in source["point_metadata"]],
             [0, 0, 1, 1],
+        )
+
+    def test_refinement_plan_tool_returns_dedicated_provenance_schema(self) -> None:
+        expected = {
+            "plan_id": "optimization-plan-0123456789abcdef",
+            "plan_file": "/runs/optimization_plan.json",
+            "plan_sha256": "0" * 64,
+            "generator_version": "deterministic-pareto-refinement-v1",
+            "definition_hash": "1" * 64,
+            "selection_policy": "tolerance-aware-normalized-regret-v2",
+            "candidate_count": 2,
+            "point_count": 4,
+            "parameter_order": ["R"],
+            "parameter_units": {"R": "ohm"},
+            "points": [],
+            "parent_plan_id": "optimization-plan-fedcba9876543210",
+            "parent_study_id": "optimization-study-0123456789abcdef",
+            "parent_candidate_indices": [3],
+            "refinement_policy": "adjacent-domain-midpoint-v1",
+            "max_candidates": 8,
+            "max_points": 16,
+        }
+        with patch.object(
+            mcp_server.optimization_engine,
+            "generate_optimization_refinement_plan",
+            return_value=expected,
+        ) as generate:
+            result = asyncio.run(
+                mcp_server.mcp.call_tool(
+                    "generate_optimization_refinement_plan",
+                    {
+                        "parent_study_id": expected["parent_study_id"],
+                        "max_candidates": 8,
+                        "max_points": 16,
+                    },
+                )
+            )
+
+        self.assertFalse(result.is_error)
+        self.assertEqual(result.structured_content, expected)
+        generate.assert_called_once_with(
+            self.runs,
+            expected["parent_study_id"],
+            8,
+            16,
         )
 
     def test_durable_statistical_study_executes_frozen_plan_without_resampling(

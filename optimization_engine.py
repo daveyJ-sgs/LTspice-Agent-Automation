@@ -130,6 +130,15 @@ class OptimizationPlanResult(TypedDict):
     points: list[OptimizationPlanPoint]
 
 
+class OptimizationRefinementPlanResult(OptimizationPlanResult):
+    parent_plan_id: str
+    parent_study_id: str
+    parent_candidate_indices: list[int]
+    refinement_policy: str
+    max_candidates: int
+    max_points: int
+
+
 class OptimizationStudyResult(TypedDict):
     study_id: str
     plan_id: str
@@ -1321,6 +1330,18 @@ def _study_html(result: dict[str, object], plan: OptimizationPlan) -> bytes:
         str(parameter["name"]): str(parameter["kind"])
         for parameter in parameter_definitions
     }
+    refinement_source = plan["definition"].get("refinement_source")
+    is_refinement = isinstance(refinement_source, dict)
+    study_title = (
+        "Local multi-objective refinement"
+        if is_refinement
+        else "Coarse multi-objective search"
+    )
+    proof_note = (
+        "Nominal local refinement is not a tolerance-yield proof."
+        if is_refinement
+        else "Nominal coarse optimization is not a tolerance-yield proof."
+    )
 
     def parameter_text(candidate: dict[str, object]) -> str:
         parameters = candidate["parameters"]
@@ -1378,7 +1399,8 @@ def _study_html(result: dict[str, object], plan: OptimizationPlan) -> bytes:
             for name, record in selected_objectives.items()
         )
         selected_panel = (
-            '<section class="panel selected-design"><h2>Selected coarse design</h2>'
+            '<section class="panel selected-design"><h2>Selected '
+            f'{"refined" if is_refinement else "coarse"} design</h2>'
             f'<p class="selected-parameters">{html.escape(parameter_text(selected))}</p>'
             f'<p>{html.escape(objective_summary)}</p>'
             '<p class="muted">All hard constraints pass at every planned operating point. '
@@ -1388,18 +1410,36 @@ def _study_html(result: dict[str, object], plan: OptimizationPlan) -> bytes:
         f'<a href="../../{html.escape(str(item["experiment_id"]))}/results.json">{html.escape(str(name))} experiment results</a>'
         for name, item in result["experiments"].items()  # type: ignore[union-attr]
     )
+    parent_link = ""
+    refinement_panel = ""
+    if is_refinement:
+        assert isinstance(refinement_source, dict)
+        parent_id = html.escape(str(refinement_source["parent_study_id"]))
+        parent_link = f' · <a href="../{parent_id}/report.html">parent study</a>'
+        parent_indices = ", ".join(
+            str(index) for index in refinement_source["parent_candidate_indices"]  # type: ignore[union-attr]
+        )
+        refinement_panel = (
+            '\n<section class="panel"><h2>Refinement provenance</h2>'
+            f'<p>Generated around feasible Pareto candidate(s) {parent_indices} '
+            f'from <a href="../{parent_id}/report.html">{parent_id}</a> using '
+            f'{html.escape(str(refinement_source["policy"]))}.</p>'
+            '<p class="muted">This child plan contains only new candidates. Its '
+            'selected marker ranks the child candidates against each other; the '
+            'parent remains part of the final engineering comparison.</p></section>'
+        )
     document = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Optimization {html.escape(str(result['study_id']))}</title>
 <style>
 :root{{--bg:#0d1117;--panel:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--blue:#58a6ff;--green:#3fb950;--orange:#f0883e;--red:#f85149}}*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,sans-serif}}main{{max-width:1280px;margin:auto;padding:34px 24px}}h1{{font-size:34px;margin:.2em 0}}h2{{margin-top:0}}a{{color:var(--blue)}}.eyebrow{{color:var(--blue);font-weight:750;letter-spacing:.08em;text-transform:uppercase}}.muted{{color:var(--muted)}}.panel{{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:22px;margin:20px 0}}.cards{{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}}.card{{background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:16px}}.card strong{{display:block;font-size:28px}}.selected-design{{border-color:#9e6a03}}.selected-parameters{{font:600 17px ui-monospace,monospace}}table{{border-collapse:collapse;width:100%;min-width:980px}}th,td{{border-bottom:1px solid var(--border);padding:10px;text-align:left;vertical-align:top}}th{{color:var(--muted)}}.table-wrap{{overflow:auto}}.badge{{padding:2px 8px;border-radius:999px;font-size:12px;font-weight:700}}.badge.feasible{{background:#1b4721}}.badge.constraint_failed,.badge.invalid{{background:#5a1e1e}}.pareto-plot{{display:block;width:100%;background:#0b0f14;border:1px solid var(--border);border-radius:8px}}.grid{{stroke:#242b35;stroke-width:1}}.axis{{stroke:#768390;stroke-width:1.5}}.tick{{fill:var(--muted);font-size:10px}}.label{{fill:var(--text);font-size:13px}}circle.feasible{{fill:var(--muted)}}circle.pareto{{fill:var(--blue)}}circle.selected{{fill:var(--orange);stroke:#fff;stroke-width:2}}@media(max-width:760px){{main{{padding:20px 12px}}.cards{{grid-template-columns:1fr 1fr}}}}
 </style></head><body><main>
-<div class="eyebrow">LTspice constrained optimization</div><h1>Coarse multi-objective search</h1>
-<p>{html.escape(str(result['selection_explanation']))}</p>
+<div class="eyebrow">LTspice constrained optimization</div><h1>{study_title}</h1>
+<p>{html.escape(str(result['selection_explanation']))}</p>{refinement_panel}
 <div class="cards"><div class="card"><span class="muted">Candidates</span><strong>{result['candidate_count']}</strong></div><div class="card"><span class="muted">Feasible</span><strong>{result['feasible_candidates']}</strong></div><div class="card"><span class="muted">Pareto</span><strong>{result['pareto_candidates']}</strong></div><div class="card"><span class="muted">Selected</span><strong>{result['selected_candidate_index'] if result['selected_candidate_index'] is not None else '—'}</strong></div></div>
 {selected_panel}
 <section class="panel"><h2>Objective tradeoff</h2><p class="muted">Axis labels state whether each objective is minimized or maximized. Gray candidates are feasible, blue candidates are Pareto-optimal, and the orange candidate is the deterministic equal-weight selection.</p>{_pareto_svg(result['candidates'], objectives)}</section>
 <section class="panel"><h2>Candidate evidence</h2><div class="table-wrap"><table><thead><tr><th>Candidate</th><th>Status</th><th>Pareto</th><th>Design parameters</th><th>Worst-corner objectives</th><th>Hard constraints</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div></section>
-<section class="panel"><h2>Portable evidence</h2><p><a href="../../optimization-plans/{html.escape(str(result['plan_id']))}/optimization_plan.json">candidate plan</a> · <a href="optimization_results.json">results JSON</a> · <a href="optimization_results.csv">results CSV</a> · {experiment_links}</p><p class="muted">Nominal coarse optimization is not a tolerance-yield proof. Finalists remain subject to Phase 3 corner and Monte Carlo verification.</p></section>
+<section class="panel"><h2>Portable evidence</h2><p><a href="../../optimization-plans/{html.escape(str(result['plan_id']))}/optimization_plan.json">candidate plan</a>{parent_link} · <a href="optimization_results.json">results JSON</a> · <a href="optimization_results.csv">results CSV</a> · {experiment_links}</p><p class="muted">{proof_note} Finalists remain subject to Phase 3 corner and Monte Carlo verification.</p></section>
 </main></body></html>"""
     return document.encode("utf-8")
 
@@ -1563,14 +1603,16 @@ def evaluate_optimization_study(
         selected["selected"] = True
     selected_index = None if selected is None else int(selected["candidate_index"])
     selection_policy = str(definition["selection_policy"])
+    is_refinement = isinstance(definition.get("refinement_source"), dict)
     explanation = (
         "No feasible candidate satisfied every hard constraint; no design was selected."
         if selected is None
         else (
             f"Candidate {selected_index} was selected from {len(pareto)} Pareto-optimal "
             f"candidate{'s' if len(pareto) != 1 else ''} by {selection_policy}. "
-            "Each objective uses its worst named-corner value. This coarse nominal "
-            "selection still requires Phase 3 tolerance and yield verification."
+            "Each objective uses its worst named-corner value. This "
+            f"{'local refined' if is_refinement else 'coarse'} nominal selection "
+            "still requires Phase 3 tolerance and yield verification."
         )
     )
     plan_result = inspect_optimization_plan(runs_dir, plan_id)
@@ -1761,7 +1803,7 @@ def generate_optimization_refinement_plan(
     parent_study_id: str,
     max_candidates: int = 64,
     max_points: int = 256,
-) -> OptimizationPlanResult:
+) -> OptimizationRefinementPlanResult:
     """Freeze new candidates in feasible Pareto neighborhoods without simulation."""
     if (
         not isinstance(max_candidates, int)
@@ -1875,4 +1917,13 @@ def generate_optimization_refinement_plan(
         explicit,
         source,
     )
-    return save_optimization_plan(runs_dir, plan)
+    saved = save_optimization_plan(runs_dir, plan)
+    return {
+        **saved,
+        "parent_plan_id": parent_plan_id,
+        "parent_study_id": parent_study_id,
+        "parent_candidate_indices": pareto_indices,
+        "refinement_policy": "adjacent-domain-midpoint-v1",
+        "max_candidates": max_candidates,
+        "max_points": max_points,
+    }

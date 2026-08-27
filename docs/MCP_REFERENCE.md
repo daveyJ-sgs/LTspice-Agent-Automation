@@ -616,7 +616,23 @@ Its definition records the parent plan/study IDs and hashes, originating Pareto
 candidate indices, refinement-policy version, and candidate/expanded-point
 budgets. Budget overflow, duplicate or non-finite values, out-of-domain values,
 tampered parent evidence, and neighborhoods with no new candidates fail before
-simulation. MCP exposure and real DAQ execution are completed in Phase 4C-3.
+simulation. `generate_optimization_refinement_plan` exposes the transformation
+through MCP; its result includes the parent identities, originating candidate
+indices, policy, and budgets without changing the older coarse-plan response
+schema. The returned `plan_id` can be passed directly to
+`define_optimization_study` or `run_optimization_experiment`.
+
+Run the durable mixed-signal DAQ refinement with a completed parent study ID:
+
+```bash
+PYTHONPATH=. .venv/bin/python examples/refine_mixed_signal_daq.py \
+  optimization-study-15a3b0b178405e19 --max-candidates 8 --max-points 16
+```
+
+The refinement HTML links to its parent and explicitly labels its selection as
+child-plan-only. A new child candidate is not assumed to beat the parent; that
+comparison remains an engineering conclusion and Phase 4D supplies the final
+robust-selection proof.
 
 ## Build a portable experiment report
 
