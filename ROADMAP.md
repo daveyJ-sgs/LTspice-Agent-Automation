@@ -904,20 +904,69 @@ Phase 4C-3 verification gate:
   `33075735407` on macOS and Windows; final real-Windows LTspice finalist/yield
   closure remains intentionally assigned to Phase 4D
 
-#### Phase 4D: Robust selection proof and reporting
+#### Phase 4D: Robust selection proof and reporting — complete
+
+##### Phase 4D-1: Deterministic finalist yield proof — complete
 
 - Re-run finalists through Phase 3 named corners and deterministic Monte Carlo
   yield analysis rather than treating nominal optimization as design proof
+- Freeze each source study/candidate identity, candidate-centered manufacturing
+  model, common scrambled-Halton population, ADC-load corners, and nominal
+  source-rank tie break in a content-addressed portable plan
+- Pair matching AC and transient points so a sample passes only when every
+  requirement in both analyses passes
+
+##### Phase 4D-2: Human report, indexing, and comparison — complete
+
 - Add human-first Pareto, constraint-margin, sensitivity, and selection-rationale
   reports with direct links to candidate RAW, JSON, CSV, and manifest evidence
-- Index and compare optimization studies, document the DAQ design decision, and
+- Add explicit representative-trace limits for large reports without removing
+  any full-resolution RAW or structured evidence
+- Index and query optimization/finalist studies, and compare robust selections
+  with exact plan/outcome checks plus bounded per-metric numeric tolerances
+
+##### Phase 4D-3: DAQ qualification and Phase 4 closure — complete
+
+- Document the DAQ design decision and
   close Phase 4 with local, macOS CI, and real Windows LTspice verification
+
+Phase 4D verification gate:
+
+- Plan `robust-selection-plan-f4209dac05031f0a` freezes the coarse winner and
+  refined finalist with 32 paired scrambled-Halton samples at light/heavy ADC
+  load, producing 64 points per finalist and 256 total AC/transient executions
+- Local study `robust-selection-study-17c70ed0d883af28` completed all four
+  64-point real LTspice experiments with zero simulator or analysis errors;
+  each finalist passed 32/32 joint samples in both corners, giving 100% observed
+  yield and an 89.28%-100% Wilson 95% interval per corner
+- With exact statistical results tied, the frozen nominal comparison retains
+  the 65 ohm coarse winner over the 50 ohm refined finalist: its nominal alias
+  rejection is about 0.0717 dB better and settling is effectively identical
+- The report leads with the qualified DAQ schematic and decision explanation,
+  then shows nominal Pareto context, corner yield, worst signed margins, and
+  dominant rank sensitivities; detailed portable evidence remains linked last
+- The rebuilt SQLite index includes optimization and robust-selection studies,
+  while the finalist plan's portability signature excludes machine-specific
+  source identities but binds candidate values, statistical plans, corners,
+  sample count/seed, and selection policy
+- Complete 274-test regression passed locally and in GitHub Actions run
+  `33080245969` on macOS and Windows
+- Real-Windows run `33080244673` installed LTspice 26.0.2 and completed all 256
+  finalist simulations, retaining 256 primary RAW files and 256 run manifests;
+  both finalists again passed 32/32 samples in both corners
+- Comparison `robust-selection-comparison-a8327f7e16d468e3` matched the portable
+  signature, parameters, joint corner outcomes, and coarse-winner decision
+  exactly with zero numeric mismatches. The largest settling delta was 26.25 ns
+  against 50 ns allowed; all other recorded metric deltas also passed
 
 Windows acceptance criteria:
 
 - Serialize optimizer state so a search can move between macOS and Windows.
 - Compare final candidates and constraint results across both LTspice
   installations before declaring the workflow portable.
+
+Both acceptance criteria are satisfied by real-Windows run `33080244673` and
+comparison `robust-selection-comparison-a8327f7e16d468e3`.
 
 ### Cross-cutting milestone: Human study builder and unattended control
 

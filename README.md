@@ -518,6 +518,15 @@ selection, or objective mismatches. The largest settling-time difference
 between LTspice 17.2.4 on macOS and 26.0.2 on Windows was 25.72 ns, inside the
 plan's explicit 50 ns decision resolution.
 
+Phase 4D real-Windows run
+[`33080244673`](https://github.com/daveyJ-sgs/LTspice-Agent-Automation/actions/runs/33080244673)
+completed the final coarse/refined tolerance proof with 256 primary RAW files
+and 256 run manifests. Both finalists passed all 32 deterministic manufacturing
+samples at both ADC-load corners. Comparison
+`robust-selection-comparison-a8327f7e16d468e3` reported zero exact or numeric
+mismatches and retained the coarse 65 Ω design on both platforms; the largest
+settling difference was 26.25 ns against the declared 50 ns tolerance.
+
 The dialog targeting is relative to its verified window bounds rather than
 absolute screen coordinates, but the workflow intentionally fails closed if a
 future LTspice release changes or does not close that consent window.

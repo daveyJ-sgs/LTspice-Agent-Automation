@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import csv
 import hashlib
 import html
@@ -1044,10 +1045,23 @@ def _html_document(result: dict[str, object]) -> bytes:
             + "</li>"
         )
     status = "PASS" if result["selected_finalist"] is not None else "NO SELECTION"
+    schematic_path = Path(__file__).resolve().parent / "docs/images/mixed-signal-daq-schematic.png"
+    schematic = ""
+    if schematic_path.is_file() and not schematic_path.is_symlink():
+        schematic_data = base64.b64encode(schematic_path.read_bytes()).decode("ascii")
+        schematic = (
+            '<section><h2>Circuit under qualification</h2>'
+            '<p>The two-pole anti-alias filter, gain stage, ADC driver, and '
+            'sample-and-hold shown here are the same functional circuit used by '
+            'the automated AC and transient netlists.</p>'
+            f'<img src="data:image/png;base64,{schematic_data}" '
+            'alt="Mixed-signal DAQ LTspice schematic"></section>'
+        )
     document = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DAQ robust finalist selection</title><style>
-body{{font:16px/1.5 system-ui,sans-serif;max-width:1200px;margin:auto;padding:32px;background:#0d1117;color:#e6edf3}}a{{color:#58a6ff}}section{{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:22px;margin:22px 0}}table{{border-collapse:collapse;width:100%}}th,td{{padding:9px;border-bottom:1px solid #30363d;text-align:left}}.muted{{color:#8b949e}}.pass{{color:#3fb950}}
+body{{font:16px/1.5 system-ui,sans-serif;max-width:1200px;margin:auto;padding:32px;background:#0d1117;color:#e6edf3}}a{{color:#58a6ff}}section{{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:22px;margin:22px 0}}table{{border-collapse:collapse;width:100%}}th,td{{padding:9px;border-bottom:1px solid #30363d;text-align:left}}img{{display:block;max-width:100%;height:auto;margin:18px auto;border-radius:8px}}.muted{{color:#8b949e}}.pass{{color:#3fb950}}
 </style></head><body><main><p>PHASE 4D · MIXED-SIGNAL DAQ</p><h1>{status}: {html.escape(str(result['selected_finalist']))}</h1>
 <section><h2>What this proves</h2><p>The nominal optimizer finalists were re-run through identical deterministic manufacturing samples at every named ADC-load corner. A point counts as a joint pass only when both its AC anti-alias response and transient acquisition behavior pass.</p><p><strong>Decision:</strong> {html.escape(str(result['selection_explanation']))}</p><p class="muted">This bounded simulation is engineering qualification evidence, not a production yield guarantee.</p></section>
+{schematic}
 <section><h2>Nominal Pareto context</h2><p>The full source studies retain the complete Pareto fronts; this compact table shows only the finalists entering tolerance proof.</p><table><thead><tr><th>Finalist</th><th>Design</th><th>Worst-corner nominal objectives</th></tr></thead><tbody>{''.join(nominal_rows)}</tbody></table></section>
 {''.join(cards)}
 <section><h2>Portable evidence</h2><p>Detailed waveform evidence and machine-readable artifacts are retained below.</p><ul>{''.join(evidence_links)}</ul><p><a href="robust_selection_results.json">selection JSON</a> · <a href="robust_selection_results.csv">selection CSV</a> · <a href="../../robust-selection-plans/{html.escape(str(result['plan_id']))}/robust_selection_plan.json">immutable plan</a></p></section>
