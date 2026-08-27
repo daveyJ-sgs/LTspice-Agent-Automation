@@ -831,7 +831,7 @@ Phase 4B verification gate:
   Pareto membership, and candidate-15 selection. Maximum observed deltas are
   approximately 1.1e-14 dB and 25.72 ns, both within the frozen tolerances
 
-#### Phase 4C: Local refinement and richer design domains
+#### Phase 4C: Local refinement and richer design domains — complete
 
 ##### Phase 4C-1: Richer design domains — complete
 
@@ -871,13 +871,38 @@ Phase 4C-2 verification gate:
   provenance, categorical-report, budget, and complete 267-test regression
   checks pass
 
-##### Phase 4C-3: MCP integration and DAQ qualification
+##### Phase 4C-3: MCP integration and DAQ qualification — complete
 
 - Expose deterministic refinement through the existing MCP and durable
   experiment lifecycle
 - Refine the selected DAQ neighborhood with real AC and transient LTspice,
   retain human and structured evidence, and verify deterministic rebuilds and
   supported-platform behavior
+
+Phase 4C-3 verification gate:
+
+- `generate_optimization_refinement_plan` returns a dedicated provenance-rich
+  MCP schema without changing the established coarse-plan response; refined
+  plans pass unchanged through the durable optimization-study lifecycle
+- Real LTspice 17.2.4 job `optimization-job-b16858c61eb613ec` executes plan
+  `optimization-plan-dff02a060a221500` as AC child
+  `mcp-experiment-20260827-060851-453346-44bae4eb` and transient child
+  `mcp-experiment-20260827-060851-454292-d3c4ecd5`; each retains 16 primary RAW
+  files and 16 run manifests with no simulator or analysis errors
+- Refinement study `optimization-study-322aec214a85b8df` classifies seven new
+  candidates as feasible, one as a maximum-bandwidth failure, zero as invalid,
+  and selects child candidate 7: CAA1=100 pF, CAA2=100 pF, RAA1=1 kohm,
+  ROUT=50 ohm
+- The selected child reaches -28.5822 dB worst-corner alias gain and 1.11474 us
+  settling. Parent candidate 15 remains the stronger engineering choice:
+  approximately 0.0717 dB better rejection with effectively identical settling
+  (about 0.159 ns faster), so refinement does not manufacture an improvement
+- Refinement-aware HTML distinguishes child-only ranking from parent comparison
+  and links the immutable child plan, parent report, JSON, CSV, experiments,
+  manifests, and RAW evidence
+- Complete 269-test regression checks pass locally and in GitHub Actions run
+  `33075735407` on macOS and Windows; final real-Windows LTspice finalist/yield
+  closure remains intentionally assigned to Phase 4D
 
 #### Phase 4D: Robust selection proof and reporting
 
