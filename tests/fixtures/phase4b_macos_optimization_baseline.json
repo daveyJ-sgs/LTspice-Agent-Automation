@@ -1,14 +1,15 @@
 {
   "schema_version": 1,
-  "generator_version": "pareto-evidence-v2",
-  "plan_id": "optimization-plan-762b2ccc92fff6f6",
-  "study_id": "optimization-study-efba4aae1f5cdd06",
+  "generator_version": "pareto-evidence-v3",
+  "plan_id": "optimization-plan-2b6f2d62d7ca7c14",
+  "study_id": "optimization-study-15a3b0b178405e19",
   "candidate_count": 16,
-  "selected_candidate_index": 8,
+  "selected_candidate_index": 15,
   "qualification": {
     "platform": "macOS 26.3.1 Apple Silicon",
     "simulator": "LTspice 17.2.4",
-    "recorded_date": "2026-08-26"
+    "recorded_date": "2026-08-26",
+    "selection_policy": "tolerance-aware-normalized-regret-v2"
   },
   "candidates": [
     {
@@ -92,7 +93,7 @@
         "ROUT": "65"
       },
       "status": "feasible",
-      "pareto": true,
+      "pareto": false,
       "selected": false,
       "objectives": {
         "alias_gain": {
@@ -116,7 +117,7 @@
         "ROUT": "35"
       },
       "status": "feasible",
-      "pareto": true,
+      "pareto": false,
       "selected": false,
       "objectives": {
         "alias_gain": {
@@ -140,7 +141,7 @@
         "ROUT": "65"
       },
       "status": "feasible",
-      "pareto": true,
+      "pareto": false,
       "selected": false,
       "objectives": {
         "alias_gain": {
@@ -212,8 +213,8 @@
         "ROUT": "35"
       },
       "status": "feasible",
-      "pareto": true,
-      "selected": true,
+      "pareto": false,
+      "selected": false,
       "objectives": {
         "alias_gain": {
           "unit": "dB",
@@ -236,7 +237,7 @@
         "ROUT": "65"
       },
       "status": "feasible",
-      "pareto": true,
+      "pareto": false,
       "selected": false,
       "objectives": {
         "alias_gain": {
@@ -284,7 +285,7 @@
         "ROUT": "65"
       },
       "status": "feasible",
-      "pareto": true,
+      "pareto": false,
       "selected": false,
       "objectives": {
         "alias_gain": {
@@ -308,7 +309,7 @@
         "ROUT": "35"
       },
       "status": "feasible",
-      "pareto": true,
+      "pareto": false,
       "selected": false,
       "objectives": {
         "alias_gain": {
@@ -332,7 +333,7 @@
         "ROUT": "65"
       },
       "status": "feasible",
-      "pareto": true,
+      "pareto": false,
       "selected": false,
       "objectives": {
         "alias_gain": {
@@ -381,7 +382,7 @@
       },
       "status": "feasible",
       "pareto": true,
-      "selected": false,
+      "selected": true,
       "objectives": {
         "alias_gain": {
           "unit": "dB",

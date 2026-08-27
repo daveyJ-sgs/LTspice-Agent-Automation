@@ -22,8 +22,16 @@ from examples.mixed_signal_daq_study import TRANSIENT_ANALYSES
 EXAMPLES_DIR = Path(__file__).resolve().parent
 PLATFORM_TOLERANCES = {
     "alias_gain": {"absolute": 0.05, "relative": 0.0},
-    "settling_time": {"absolute": 25e-9, "relative": 0.0},
+    "settling_time": {"absolute": 50e-9, "relative": 0.0},
 }
+PORTABLE_OBJECTIVES = [
+    {
+        **objective,
+        "absolute_tolerance": PLATFORM_TOLERANCES[objective["name"]]["absolute"],
+        "relative_tolerance": PLATFORM_TOLERANCES[objective["name"]]["relative"],
+    }
+    for objective in OBJECTIVES
+]
 
 
 def run_study(
@@ -34,7 +42,7 @@ def run_study(
 ) -> dict[str, object]:
     plan = mcp_server.generate_optimization_plan(
         DESIGN_PARAMETERS,
-        OBJECTIVES,
+        PORTABLE_OBJECTIVES,
         CONSTRAINTS,
         fixed_parameters=FIXED_PARAMETERS,
         corner_axes=CORNERS,

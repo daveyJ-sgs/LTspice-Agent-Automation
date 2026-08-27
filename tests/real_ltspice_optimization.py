@@ -69,11 +69,11 @@ if __name__ == "__main__":
         job = study["job"]
         if job["status"] != "completed":
             raise AssertionError("durable optimization job did not complete")
-        if job["plan_id"] != "optimization-plan-762b2ccc92fff6f6":
+        baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
+        if job["plan_id"] != baseline["plan_id"]:
             raise AssertionError(f"unexpected frozen plan: {job['plan_id']}")
         result_path = Path(str(job["results_json"]))
         result = json.loads(result_path.read_text(encoding="utf-8"))
-        baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
         comparison = optimization_comparison.write_optimization_comparison(
             evidence_dir,
             baseline,
@@ -87,8 +87,8 @@ if __name__ == "__main__":
                 "Windows optimization differs from the macOS baseline: "
                 f"{comparison['comparison_json']}"
             )
-        if result["selected_candidate_index"] != 8:
-            raise AssertionError("Windows selected a different DAQ candidate")
+        if result["selected_candidate_index"] != baseline["selected_candidate_index"]:
+            raise AssertionError("platform selected a different DAQ candidate")
 
         qualification = {
             "platform": platform.platform(),

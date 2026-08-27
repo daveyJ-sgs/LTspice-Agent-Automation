@@ -367,6 +367,47 @@ class OptimizationEngineTests(unittest.TestCase):
         self.assertTrue(optimization_engine._dominates(better, worse, objectives))
         self.assertFalse(optimization_engine._dominates(worse, better, objectives))
 
+    def test_tolerance_aware_policy_stabilizes_equivalent_platform_values(self) -> None:
+        objectives = self.objectives()
+        objectives[0]["absolute_tolerance"] = 0.05
+        objectives[0]["relative_tolerance"] = 0.0
+        objectives[1]["absolute_tolerance"] = 50e-9
+        objectives[1]["relative_tolerance"] = 0.0
+        plan = optimization_engine.build_optimization_plan(
+            self.parameters(), objectives, self.constraints()
+        )
+        self.assertEqual(
+            plan["definition"]["selection_policy"],
+            optimization_engine.TOLERANCE_SELECTION_POLICY,
+        )
+
+        normalized = plan["definition"]["objectives"]
+        assert isinstance(normalized, list)
+        stronger_alias = {
+            "objectives": {
+                "alias_rejection": {"value": -26.0},
+                "settling_time": {"value": 1.02e-6},
+            }
+        }
+        faster_within_resolution = {
+            "objectives": {
+                "alias_rejection": {"value": -25.0},
+                "settling_time": {"value": 1.00e-6},
+            }
+        }
+        self.assertTrue(
+            optimization_engine._dominates(
+                stronger_alias, faster_within_resolution, normalized
+            )
+        )
+
+        invalid = self.objectives()
+        invalid[0]["absolute_tolerance"] = -1
+        with self.assertRaisesRegex(ValueError, "nonnegative"):
+            optimization_engine.build_optimization_plan(
+                self.parameters(), invalid, self.constraints()
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,8 +22,9 @@ import experiment_index
 OPTIMIZATION_PLAN_SCHEMA_VERSION = 1
 OPTIMIZATION_RESULT_SCHEMA_VERSION = 1
 OPTIMIZATION_GENERATOR_VERSION = "deterministic-cartesian-v1"
-OPTIMIZATION_RESULT_GENERATOR_VERSION = "pareto-evidence-v2"
+OPTIMIZATION_RESULT_GENERATOR_VERSION = "pareto-evidence-v3"
 SELECTION_POLICY = "equal-weight-normalized-regret-v1"
+TOLERANCE_SELECTION_POLICY = "tolerance-aware-normalized-regret-v2"
 MAX_OPTIMIZATION_PARAMETERS = 16
 MAX_DOMAIN_VALUES = 64
 MAX_OPTIMIZATION_CANDIDATES = 512
@@ -50,6 +51,8 @@ class OptimizationObjective(TypedDict):
     metric: str
     goal: str
     weight: NotRequired[float]
+    absolute_tolerance: NotRequired[float]
+    relative_tolerance: NotRequired[float]
     metric_parameters: NotRequired[dict[str, float | str]]
 
 
@@ -409,20 +412,34 @@ def _normalized_objectives(
         weight = _number(raw.get("weight", 1.0), f"objective {name} weight")
         if weight <= 0:
             raise ValueError(f"objective {name} weight must be positive")
-        normalized.append(
-            {
-                "name": name,
-                "experiment": _name(raw.get("experiment"), f"objective {name} experiment"),
-                "analysis": _label(raw.get("analysis"), f"objective {name} analysis"),
-                "metric": _label(raw.get("metric"), f"objective {name} metric"),
-                "goal": goal,
-                "weight": weight,
-                "metric_parameters": _metric_parameters(
-                    raw.get("metric_parameters"),
-                    f"objective {name} metric_parameters",
-                ),
-            }
-        )
+        record: dict[str, object] = {
+            "name": name,
+            "experiment": _name(raw.get("experiment"), f"objective {name} experiment"),
+            "analysis": _label(raw.get("analysis"), f"objective {name} analysis"),
+            "metric": _label(raw.get("metric"), f"objective {name} metric"),
+            "goal": goal,
+            "weight": weight,
+            "metric_parameters": _metric_parameters(
+                raw.get("metric_parameters"),
+                f"objective {name} metric_parameters",
+            ),
+        }
+        if "absolute_tolerance" in raw or "relative_tolerance" in raw:
+            absolute = _number(
+                raw.get("absolute_tolerance", 0.0),
+                f"objective {name} absolute_tolerance",
+            )
+            relative = _number(
+                raw.get("relative_tolerance", 0.0),
+                f"objective {name} relative_tolerance",
+            )
+            if absolute < 0 or relative < 0:
+                raise ValueError(f"objective {name} tolerances must be nonnegative")
+            if absolute == 0 and relative == 0:
+                raise ValueError(f"objective {name} tolerances must not both be zero")
+            record["absolute_tolerance"] = absolute
+            record["relative_tolerance"] = relative
+        normalized.append(record)
     normalized.sort(key=lambda item: str(item["name"]))
     return normalized
 
@@ -492,6 +509,9 @@ def build_optimization_plan(
         )
     if point_count > MAX_OPTIMIZATION_POINTS:
         raise ValueError(f"expanded plan exceeds {MAX_OPTIMIZATION_POINTS} points")
+    tolerance_aware = any(
+        "absolute_tolerance" in objective for objective in normalized_objectives
+    )
     definition: dict[str, object] = {
         "parameters": normalized_parameters,
         "fixed_parameters": fixed,
@@ -499,7 +519,9 @@ def build_optimization_plan(
         "objectives": normalized_objectives,
         "constraints": normalized_constraints,
         "experiments": sorted(experiment_names),
-        "selection_policy": SELECTION_POLICY,
+        "selection_policy": (
+            TOLERANCE_SELECTION_POLICY if tolerance_aware else SELECTION_POLICY
+        ),
     }
     points: list[OptimizationPlanPoint] = []
     domain_product = itertools.product(*(domain_values[name] for name in design_names))
@@ -671,7 +693,10 @@ def load_optimization_plan(runs_dir: Path, plan_id: str) -> OptimizationPlan:
     definition = value.get("definition")
     if not isinstance(definition, dict):
         raise ValueError("optimization plan definition is invalid")
-    if definition.get("selection_policy") != SELECTION_POLICY:
+    if definition.get("selection_policy") not in {
+        SELECTION_POLICY,
+        TOLERANCE_SELECTION_POLICY,
+    }:
         raise ValueError("unsupported optimization selection policy")
     expected_hash = hashlib.sha256(
         _canonical_json(definition).encode("utf-8")
@@ -778,12 +803,15 @@ def _dominates(
         name = str(objective["name"])
         left_value = float(left_values[name]["value"])  # type: ignore[index]
         right_value = float(right_values[name]["value"])  # type: ignore[index]
+        tolerance = float(objective.get("absolute_tolerance", 0.0)) + float(
+            objective.get("relative_tolerance", 0.0)
+        ) * max(abs(left_value), abs(right_value))
         if objective["goal"] == "minimize":
-            no_worse &= left_value <= right_value
-            strictly_better |= left_value < right_value
+            no_worse &= left_value <= right_value + tolerance
+            strictly_better |= left_value < right_value - tolerance
         else:
-            no_worse &= left_value >= right_value
-            strictly_better |= left_value > right_value
+            no_worse &= left_value >= right_value - tolerance
+            strictly_better |= left_value > right_value + tolerance
     return no_worse and strictly_better
 
 
@@ -798,6 +826,22 @@ def _select_candidate(
         values = [float(candidate["objectives"][name]["value"]) for candidate in feasible]  # type: ignore[index]
         ranges[name] = (min(values), max(values))
     total_weight = sum(float(objective["weight"]) for objective in objectives)
+    score_tolerance = 0.0
+    for objective in objectives:
+        name = str(objective["name"])
+        low, high = ranges[name]
+        if high != low:
+            numeric_tolerance = float(
+                objective.get("absolute_tolerance", 0.0)
+            ) + float(objective.get("relative_tolerance", 0.0)) * max(
+                abs(low), abs(high)
+            )
+            score_tolerance += (
+                numeric_tolerance
+                / (high - low)
+                * float(objective["weight"])
+                / total_weight
+            )
     for candidate in pareto:
         regrets: dict[str, float] = {}
         score = 0.0
@@ -814,13 +858,13 @@ def _select_candidate(
             score += regret * float(objective["weight"]) / total_weight
         candidate["normalized_regret"] = regrets
         candidate["selection_score"] = score
-    return min(
-        pareto,
-        key=lambda candidate: (
-            float(candidate["selection_score"]),
-            int(candidate["candidate_index"]),
-        ),
-    )
+    best_score = min(float(candidate["selection_score"]) for candidate in pareto)
+    equivalent = [
+        candidate
+        for candidate in pareto
+        if float(candidate["selection_score"]) <= best_score + score_tolerance
+    ]
+    return min(equivalent, key=lambda candidate: int(candidate["candidate_index"]))
 
 
 def _study_csv(result: dict[str, object], objectives: list[dict[str, object]]) -> bytes:
@@ -1168,12 +1212,13 @@ def evaluate_optimization_study(
         selected = _select_candidate(feasible, pareto, objectives)
         selected["selected"] = True
     selected_index = None if selected is None else int(selected["candidate_index"])
+    selection_policy = str(definition["selection_policy"])
     explanation = (
         "No feasible candidate satisfied every hard constraint; no design was selected."
         if selected is None
         else (
             f"Candidate {selected_index} was selected from {len(pareto)} Pareto-optimal "
-            f"candidate{'s' if len(pareto) != 1 else ''} by {SELECTION_POLICY}. "
+            f"candidate{'s' if len(pareto) != 1 else ''} by {selection_policy}. "
             "Each objective uses its worst named-corner value. This coarse nominal "
             "selection still requires Phase 3 tolerance and yield verification."
         )
@@ -1191,7 +1236,7 @@ def evaluate_optimization_study(
     result: dict[str, object] = {
         **identity,
         "study_id": study_id,
-        "selection_policy": SELECTION_POLICY,
+        "selection_policy": selection_policy,
         "candidate_count": plan["candidate_count"],
         "feasible_candidates": len(feasible),
         "constraint_failed_candidates": sum(

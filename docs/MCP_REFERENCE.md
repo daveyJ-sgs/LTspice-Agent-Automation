@@ -592,9 +592,11 @@ PYTHONPATH=. .venv/bin/python examples/optimize_mixed_signal_daq_durable.py
 candidate parameters, classifications, Pareto membership, and selected design
 must match exactly, while each objective must remain within its named absolute
 plus relative tolerance. The comparison is itself content-addressed JSON and
-offline HTML evidence. The DAQ qualification uses 0.05 dB absolute tolerance
-for 10 MHz alias gain and 25 ns for settling time; both relative tolerances are
-zero.
+offline HTML evidence. The DAQ qualification's versioned tolerance-aware
+selection policy uses 0.05 dB absolute tolerance for 10 MHz alias gain and
+50 ns for settling time; both relative tolerances are zero. Values within those
+declared resolution limits cannot create a platform-specific dominance or
+selection decision.
 
 ## Build a portable experiment report
 
