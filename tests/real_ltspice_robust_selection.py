@@ -30,15 +30,16 @@ def _evidence_count(experiment_id: str, evidence_dir: Path) -> dict[str, object]
         or manifest["error_points"] != 0
     ):
         raise AssertionError(f"incomplete robust experiment: {experiment_id}")
-    raw_files = len(
-        [
-            path
-            for path in experiment_dir.glob("point-*/attempt-*/*.raw")
-            if not path.name.endswith(".op.raw")
-        ]
-    )
+    raw_paths = {
+        *experiment_dir.glob("point-*/*.raw"),
+        *experiment_dir.glob("point-*/attempt-*/*.raw"),
+    }
+    raw_files = sum(not path.name.endswith(".op.raw") for path in raw_paths)
     run_manifests = len(
-        list(experiment_dir.glob("point-*/attempt-*/run_manifest.json"))
+        {
+            *experiment_dir.glob("point-*/run_manifest.json"),
+            *experiment_dir.glob("point-*/attempt-*/run_manifest.json"),
+        }
     )
     if raw_files != 64 or run_manifests != 64:
         raise AssertionError(
