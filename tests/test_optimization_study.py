@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import mcp_server
+import experiment_engine
 import optimization_engine
 import optimization_study
 
@@ -267,6 +269,93 @@ class OptimizationStudyManagerTests(unittest.TestCase):
         self.assertEqual(queued["status"], "queued")
         self.assertEqual(inspected["status"], "queued")
         self.assertEqual(cancelled["status"], "cancelled")
+
+    def test_partially_checkpointed_study_resumes_after_runs_root_move(self) -> None:
+        first_manager = experiment_engine.ExperimentJobManager(
+            self.runs,
+            workers=1,
+            execute_point=lambda *args, **kwargs: {},
+        )
+        first_study = optimization_study.OptimizationStudyManager(
+            self.runs, first_manager, self._evaluator
+        )
+        experiments = {
+            name: {**definition, "max_concurrency": 1}
+            for name, definition in self.experiments.items()
+        }
+        defined = first_study.define(self.plan["plan_id"], experiments)
+        plan = optimization_engine.load_optimization_plan(
+            self.runs, self.plan["plan_id"]
+        )
+        for child in defined["experiments"].values():
+            experiment_dir = Path(child["experiment_dir"])
+            point_dir = experiment_dir / "point-0000"
+            point_dir.mkdir()
+            (point_dir / "point_result.json").write_text(
+                json.dumps(
+                    {
+                        "index": 0,
+                        "parameters": plan["points"][0]["parameters"],
+                        "run_dir": str(point_dir),
+                        "simulation_status": "completed",
+                        "duration_seconds": 0.01,
+                        "measurements": {},
+                        "analyses": [],
+                        "all_passed": True,
+                        "error": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            manifest_path = Path(child["manifest"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["status"] = "queued"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        first_manager.shutdown()
+
+        relocated = Path(self.temporary_directory.name) / "relocated-runs"
+        shutil.copytree(self.runs, relocated)
+        executed: list[tuple[int, dict[str, str]]] = []
+
+        def execute(
+            index: int,
+            parameters: dict[str, str],
+            attempt_dir: Path,
+            *args: object,
+            **kwargs: object,
+        ) -> dict[str, object]:
+            del args, kwargs
+            executed.append((index, parameters))
+            return {
+                "index": index,
+                "parameters": parameters,
+                "run_dir": str(attempt_dir),
+                "simulation_status": "completed",
+                "duration_seconds": 0.01,
+                "measurements": {},
+                "analyses": [],
+                "all_passed": True,
+                "error": None,
+            }
+
+        resumed_manager = experiment_engine.ExperimentJobManager(
+            relocated, workers=1, execute_point=execute
+        )
+        try:
+            resumed_study = optimization_study.OptimizationStudyManager(
+                relocated, resumed_manager, self._evaluator
+            )
+            deadline = time.monotonic() + 3
+            current = resumed_study.snapshot(defined["optimization_job_id"])
+            while current["status"] != "completed" and time.monotonic() < deadline:
+                time.sleep(0.01)
+                current = resumed_study.snapshot(defined["optimization_job_id"])
+        finally:
+            resumed_manager.shutdown()
+
+        self.assertEqual(current["status"], "completed")
+        self.assertEqual(len(executed), 2)
+        self.assertEqual({index for index, _ in executed}, {1})
 
 
 if __name__ == "__main__":

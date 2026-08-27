@@ -454,8 +454,9 @@ The opt-in `Real LTspice Windows qualification` GitHub workflow performs the
 same path on an ephemeral hosted runner without burdening every push. It
 downloads the [official Analog Devices Windows installer](https://www.analog.com/en/resources/design-tools-and-calculators/ltspice-simulator.html),
 pins version 26.0.2 and the complete MSI SHA-256, installs silently, explicitly
-selects **No** in the first-run usage-data dialog, and then executes both
-`tests/real_ltspice_smoke.py` and `tests/real_ltspice_daq.py`. The RC smoke
+selects **No** in the first-run usage-data dialog, and then executes
+`tests/real_ltspice_smoke.py`, `tests/real_ltspice_daq.py`, and
+`tests/real_ltspice_optimization.py`. The RC smoke
 requires a real 501-point RAW file, decoded `.meas` evidence, the expected
 cutoff and gain, and a completed run manifest. The DAQ qualification runs the
 complete shared 24-point AC and 24-point transient statistical studies and
@@ -478,6 +479,16 @@ corners. Download the retained evidence while it is available with:
 ```bash
 gh run download 32969899223
 ```
+
+Phase 4B cross-platform run
+[`33037990442`](https://github.com/daveyJ-sgs/LTspice-Agent-Automation/actions/runs/33037990442)
+also passed on Windows Server 2025. It ran the frozen 16-candidate DAQ
+optimization as 32 AC and 32 transient points with zero errors, selected the
+same tolerance-aware Pareto design as macOS, and published comparison
+`optimization-comparison-e0df542a44aa096a` with zero classification, Pareto,
+selection, or objective mismatches. The largest settling-time difference
+between LTspice 17.2.4 on macOS and 26.0.2 on Windows was 25.72 ns, inside the
+plan's explicit 50 ns decision resolution.
 
 The dialog targeting is relative to its verified window bounds rather than
 absolute screen coordinates, but the workflow intentionally fails closed if a

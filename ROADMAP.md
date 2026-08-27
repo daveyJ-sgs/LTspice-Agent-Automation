@@ -795,7 +795,7 @@ Phase 4A verification gate:
   rebuild, MCP-runner reuse, real-report, responsive-browser, and complete
   251-test regression checks pass
 
-#### Phase 4B: Durable orchestration and cross-platform resume
+#### Phase 4B: Durable orchestration and cross-platform resume — complete
 
 - Define, queue, cancel, resume, and inspect optimization studies through the
   durable experiment manager while retaining one immutable candidate plan
@@ -804,6 +804,31 @@ Phase 4A verification gate:
 - Run the frozen DAQ population with real LTspice on both platforms and compare
   candidate classifications, objective values, Pareto membership, and selected
   design within documented numeric tolerances
+
+Phase 4B verification gate:
+
+- `define_optimization_study`, `start_optimization_study`,
+  `get_optimization_study`, and `cancel_optimization_study` compose immutable
+  optimization plans through the existing durable child-experiment manager;
+  job manifests contain relative plan, child, and result identities rather than
+  machine-specific paths
+- Restart, relocation, cooperative cancellation, child-definition tamper,
+  content-addressed comparison, MCP schema, and complete 263-test regression
+  checks pass; Windows-safe child identity checks use the experiment-manager
+  lock rather than racing atomic manifest replacement
+- Tolerance-aware plan `optimization-plan-2b6f2d62d7ca7c14` records 0.05 dB
+  alias-gain and 50 ns settling-time decision resolution. Real macOS LTspice
+  study `optimization-study-15a3b0b178405e19` evaluates 32 AC and 32 transient
+  points with zero errors, classifies 14 feasible and two bandwidth-failing
+  candidates, and selects candidate 15 as the stable Pareto design
+- GitHub Windows run `33037990442` repeats all 64 points with LTspice 26.0.2;
+  AC child `mcp-experiment-20260827-040105-732569-7cb9d4a5` and transient child
+  `mcp-experiment-20260827-040105-735334-845f9681` each retain 32 RAW files and
+  32 run manifests with zero errors
+- Cross-platform evidence `optimization-comparison-e0df542a44aa096a` reports
+  zero exact or objective mismatches, identical candidate classifications,
+  Pareto membership, and candidate-15 selection. Maximum observed deltas are
+  approximately 1.1e-14 dB and 25.72 ns, both within the frozen tolerances
 
 #### Phase 4C: Local refinement and richer design domains
 
