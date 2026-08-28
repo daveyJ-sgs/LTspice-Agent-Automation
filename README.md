@@ -126,10 +126,18 @@ Common workflows are also available through `make`: `make test`, `make ac`,
 ## Preview a study with LTspice System Builder
 
 System Builder is the browser-first human interface to the same deterministic
-study contracts used by the MCP. GUI-A1 can load or save a portable
+study contracts used by the MCP. It can load or save a portable
 `.ltstudy.json` recipe, edit the sample count/seed/method, and preview the exact
 future plan identity, corner expansion, and LTspice run count. Preview is pure:
 it does not publish a plan, create a run directory, or start LTspice.
+
+GUI-A2 adds a read-only workspace below the recipe preview. It reads current
+durable-job progress directly from experiment manifests, reports whether the
+rebuildable experiment index is current, and launches existing experiment,
+optimization, and robust-selection HTML reports. Relative links from a report
+to its JSON, CSV, RAW, manifest, and plan evidence remain available through a
+session-protected, workspace-confined evidence route. Refresh never rebuilds an
+index, resumes a job, or launches LTspice.
 
 Install the optional GUI dependencies and launch the loopback-only application:
 
@@ -140,8 +148,8 @@ make system-builder
 
 The application opens the default browser on a random `127.0.0.1` port. It
 uses a session cookie, same-origin mutation checks, a strict content-security
-policy, bounded JSON bodies, and workspace-confined regular `.cir`/`.net`
-files. Remote execution is disabled in GUI-A1. The bundled reference recipe is
+policy, bounded JSON bodies, and workspace-confined regular inputs and
+evidence. Remote execution remains disabled. The bundled reference recipe is
 [`examples/mixed_signal_daq.ltstudy.json`](examples/mixed_signal_daq.ltstudy.json).
 
 Its acceptance test proves that the human-authored DAQ recipe and the existing

@@ -21,7 +21,7 @@
   <main>
     <section class="hero">
       <div>
-        <p class="eyebrow">GUI-A1 · SAFE STUDY PREVIEW</p>
+        <p class="eyebrow">GUI-A2 · SAFE STUDY WORKSPACE</p>
         <h1>Define before<br>you simulate.</h1>
         <p class="hero-copy">Turn a circuit study into a deterministic, reviewable plan. Preview expands samples, corners, analyses, and run cost without writing artifacts or launching LTspice.</p>
       </div>
@@ -47,7 +47,7 @@
       </div>
       <div>
         <span class="label">Current action</span>
-        <strong>Preview only</strong>
+        <strong>Preview + inspect</strong>
       </div>
     </section>
 
@@ -154,6 +154,49 @@
           </div>
         </article>
       </aside>
+    </section>
+
+    <section id="history" class="history-section">
+      <div class="history-heading">
+        <div>
+          <p class="step">WORKSPACE HISTORY</p>
+          <h2>Evidence that is already yours.</h2>
+          <p>Live durable-job progress comes directly from manifests. Completed studies and reports come from the same portable evidence used by MCP and CLI workflows.</p>
+        </div>
+        <button id="refresh-history" class="secondary-button" type="button">Refresh status</button>
+      </div>
+
+      <div class="history-metrics">
+        <div><span>Durable jobs</span><strong id="history-total">—</strong></div>
+        <div><span>Active now</span><strong id="history-active">—</strong></div>
+        <div><span>Available reports</span><strong id="history-reports">—</strong></div>
+        <div><span>Index</span><strong id="history-index">Checking</strong></div>
+      </div>
+
+      <div id="history-errors" class="errors" role="alert" hidden></div>
+      <div class="history-grid">
+        <article class="panel history-panel">
+          <div class="panel-heading compact">
+            <div>
+              <p class="step">DURABLE JOBS</p>
+              <h3>Recent experiments</h3>
+            </div>
+            <span class="read-only-badge">Read only</span>
+          </div>
+          <div id="job-history" class="history-list" aria-live="polite"></div>
+        </article>
+
+        <article class="panel history-panel">
+          <div class="panel-heading compact">
+            <div>
+              <p class="step">DECISION REPORTS</p>
+              <h3>Optimization and selection</h3>
+            </div>
+          </div>
+          <div id="study-history" class="history-list" aria-live="polite"></div>
+        </article>
+      </div>
+      <p class="history-note">Opening or refreshing this workspace never rebuilds the index, resumes a job, or launches LTspice.</p>
     </section>
   </main>
 

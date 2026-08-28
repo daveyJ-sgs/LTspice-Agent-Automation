@@ -1018,14 +1018,40 @@ GUI-A1 verification gate:
   symlinked paths fail closed, missing placeholders are rejected, and cross-
   origin or unmarked requests cannot invoke the preview endpoint
 
+#### System Builder GUI-A2: Read-only workspace — complete
+
+- Added recent durable-experiment history sourced directly from the canonical
+  manifests, including lifecycle state, point progress, pass/fail counts,
+  execution mode, statistical identity, and report availability
+- Added indexed optimization and robust-selection report discovery, summary
+  counts, explicit current/stale/unavailable index state, and manual refresh
+- Added a session-protected evidence route that preserves report-relative JSON,
+  CSV, RAW, manifest, plan, and child-report links while confining every file
+  to `runs/` and rejecting traversal, symlinks, missing paths, and directories
+- Existing offline report JavaScript remains usable under a report-specific
+  no-network content-security policy; opening reports does not broaden the main
+  System Builder policy
+- History and reports are strictly observational: refresh does not rebuild the
+  experiment index, recover or resume jobs, create artifacts, or run LTspice
+
+GUI-A2 verification gate:
+
+- Real workspace discovery reports 90 durable experiments, no active jobs,
+  available experiment/decision reports, and the five newest experiments as
+  honestly unindexed rather than silently rebuilding the stale index
+- Tests prove byte-for-byte non-mutation, live schema-v2 progress calculation,
+  bounded history, invalid-manifest isolation, session enforcement, traversal
+  rejection, and symlink rejection
+- Real loopback HTTP verification opens the newest experiment report with its
+  offline script policy and full body intact
+
 Next System Builder slices:
 
-1. GUI-A2 — read-only history, durable-job status, and report launcher
-2. GUI-B — editable variables, corners, and requirements with create/start,
+1. GUI-B — editable variables, corners, and requirements with create/start,
    cancel, and resume controls
-3. GUI-C — optimization domains, objectives, constraints, Pareto results, and
+2. GUI-C — optimization domains, objectives, constraints, Pareto results, and
    finalist qualification
-4. GUI-D — Windows packaging and deliberately gated remote GitHub execution
+3. GUI-D — Windows packaging and deliberately gated remote GitHub execution
 
 ### Phase 5: Flagship portable mixed-signal DAQ/scope
 

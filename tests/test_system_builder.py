@@ -1,3 +1,5 @@
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -122,6 +124,55 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertEqual(
             self.client.get("/assets/daq-schematic.png").status_code, 200
         )
+
+    def test_history_and_evidence_require_session_and_remain_confined(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            experiment_id = "mcp-experiment-20260827-201100-123456"
+            experiment = workspace / "runs" / experiment_id
+            experiment.mkdir(parents=True)
+            (experiment / "experiment_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "experiment_id": experiment_id,
+                        "status": "completed",
+                        "point_count": 1,
+                        "finished_points": 1,
+                        "completed_points": 1,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (experiment / "report.html").write_text(
+                "<style>body{color:white}</style><h1>Report</h1>", encoding="utf-8"
+            )
+            client = TestClient(
+                system_builder.create_app(workspace, testing=True),
+                base_url="http://testserver",
+            )
+
+            self.assertEqual(client.get("/api/history").status_code, 401)
+            client.get("/")
+            history = client.get("/api/history")
+            report = client.get(f"/evidence/{experiment_id}/report.html")
+            escaped = client.get("/evidence/%2E%2E/secret.txt")
+
+            self.assertEqual(history.status_code, 200)
+            self.assertEqual(history.json()["summary"]["total_jobs"], 1)
+            self.assertEqual(report.status_code, 200)
+            self.assertIn(
+                "script-src 'unsafe-inline'",
+                report.headers["content-security-policy"],
+            )
+            self.assertEqual(escaped.status_code, 404)
+
+    def test_history_limit_is_bounded(self) -> None:
+        self._open()
+        response = self.client.get("/api/history?limit=1000")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "history_limit")
 
 
 if __name__ == "__main__":

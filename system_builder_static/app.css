@@ -102,10 +102,45 @@ td:first-child { color: var(--text); font-weight: 750; }
 .security-card strong { color: #d4f6dc; }
 .security-card p { color: #92b69b; margin: 4px 0 0; font-size: 13px; line-height: 1.5; }
 
+.history-section { margin-top: 72px; scroll-margin-top: 92px; }
+.history-heading { display: flex; justify-content: space-between; align-items: end; gap: 32px; margin-bottom: 22px; }
+.history-heading h2 { font-size: clamp(30px, 3.4vw, 48px); }
+.history-heading p:last-child { color: var(--muted); max-width: 760px; line-height: 1.55; margin: 12px 0 0; }
+.history-heading button:disabled { cursor: wait; opacity: .65; }
+.history-metrics { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; margin-bottom: 22px; background: #0d1318; }
+.history-metrics > div { padding: 18px 20px; }
+.history-metrics > div + div { border-left: 1px solid var(--border); }
+.history-metrics span { color: var(--muted); display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 7px; }
+.history-metrics strong { font-size: 21px; }
+.history-metrics .index-ready { color: #9ceab0; }
+.history-metrics .index-missing { color: #ffbf82; }
+.history-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 22px; margin-top: 22px; align-items: start; }
+.history-panel { padding: 24px; }
+.read-only-badge { color: #b8c7d2; background: #202a33; border-radius: 999px; padding: 6px 9px; font-size: 11px; font-weight: 750; text-transform: uppercase; letter-spacing: .07em; }
+.history-list { display: grid; gap: 10px; margin-top: 18px; }
+.history-item { background: #0b1015; border: 1px solid #27323b; border-radius: 11px; padding: 14px; }
+.history-item-top, .history-item-bottom { display: flex; justify-content: space-between; align-items: center; gap: 14px; }
+.history-item strong, .history-item small { display: block; }
+.history-item small, .history-item-bottom { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.history-item code { display: block; color: #71808d; font-size: 10px; margin-top: 9px; overflow-wrap: anywhere; }
+.job-status { flex: 0 0 auto; border-radius: 999px; padding: 5px 8px; font-size: 10px; font-weight: 850; letter-spacing: .07em; text-transform: uppercase; }
+.job-status.completed { color: #baf4c8; background: #173d23; }
+.job-status.active { color: #c4e5ff; background: #143b5d; }
+.job-status.defined { color: #e3d5ff; background: #382957; }
+.job-status.failed { color: #ffc5bc; background: #51251f; }
+.progress-track { height: 4px; background: #202b34; border-radius: 999px; overflow: hidden; margin: 12px 0 9px; }
+.progress-track span { display: block; height: 100%; background: linear-gradient(90deg, var(--blue), var(--cyan)); border-radius: inherit; }
+.report-link { color: #70baff; text-decoration: none; font-size: 12px; font-weight: 750; white-space: nowrap; }
+.report-link:hover { text-decoration: underline; }
+.study-item { border-left: 3px solid #315f85; }
+.empty-history { color: var(--muted); text-align: center; padding: 26px 12px; margin: 0; }
+.history-note { color: #6f7e8a; text-align: center; font-size: 12px; margin-top: 18px; }
+
 @media (max-width: 1000px) {
   .hero { grid-template-columns: 1fr; gap: 20px; }
   .hero-graphic { justify-content: flex-start; overflow-x: auto; }
   .builder-grid { grid-template-columns: 1fr; }
+  .history-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 650px) {
   main { width: min(94vw, 1500px); }
@@ -117,5 +152,11 @@ td:first-child { color: var(--text); font-weight: 750; }
   .field-grid { grid-template-columns: 1fr; }
   .wide-field { grid-column: auto; }
   .metric-grid { grid-template-columns: 1fr 1fr; }
+  .history-heading { display: block; }
+  .history-heading button { margin-top: 16px; }
+  .history-metrics { grid-template-columns: 1fr 1fr; }
+  .history-metrics > div + div { border-left: 0; }
+  .history-metrics > div:nth-child(even) { border-left: 1px solid var(--border); }
+  .history-metrics > div:nth-child(n+3) { border-top: 1px solid var(--border); }
   .panel { padding: 20px; }
 }

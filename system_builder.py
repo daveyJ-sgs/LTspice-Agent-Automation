@@ -16,6 +16,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
+from system_builder_history import evidence_file, workspace_history
 from study_recipe import MAX_RECIPE_BYTES, load_study_recipe, preview_study_recipe
 
 
@@ -85,11 +86,18 @@ def create_app(
             return _json_error(400, "host_rejected", "host must be loopback-only")
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; img-src 'self' data:; style-src 'self'; "
-            "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
-            "base-uri 'none'; form-action 'self'"
-        )
+        if request.url.path.startswith("/evidence/"):
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; "
+                "script-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; "
+                "form-action 'none'"
+            )
+        else:
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; img-src 'self' data:; style-src 'self'; "
+                "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
+                "base-uri 'none'; form-action 'self'"
+            )
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
@@ -149,6 +157,27 @@ def create_app(
         if denied is not None:
             return denied
         return JSONResponse(load_study_recipe(EXAMPLE_RECIPE))
+
+    @app.get("/api/history")
+    def history(request: Request, limit: int = 12) -> Response:
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        try:
+            return JSONResponse(workspace_history(workspace, limit=limit))
+        except ValueError as exc:
+            return _json_error(400, "history_limit", str(exc))
+
+    @app.get("/evidence/{artifact_path:path}")
+    def evidence(request: Request, artifact_path: str) -> Response:
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        try:
+            path = evidence_file(workspace / "runs", artifact_path)
+        except ValueError:
+            return _json_error(404, "evidence_not_found", "evidence file was not found")
+        return FileResponse(path)
 
     @app.post("/api/preview")
     async def preview(request: Request) -> Response:
