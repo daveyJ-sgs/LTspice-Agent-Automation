@@ -146,6 +146,8 @@ class SystemBuilderTests(unittest.TestCase):
 
         self.assertIn('id="theme-toggle"', html)
         self.assertIn('class="tool-intro"', html)
+        self.assertIn('class="security-tooltip"', html)
+        self.assertNotIn('class="security-card"', html)
         self.assertIn(':root[data-theme="light"]', css)
         self.assertIn('font-family: "IBM Plex Mono"', css)
         self.assertNotIn("gradient(", css.lower())

@@ -17,9 +17,12 @@
       <a href="#history">Workspace</a>
     </nav>
     <div class="header-actions">
-      <div class="security-state" title="Bound to this computer only">
+      <div class="security-state" tabindex="0" aria-describedby="local-security-detail">
         <span class="status-dot" aria-hidden="true"></span>
         Local only
+        <span id="local-security-detail" class="security-tooltip" role="tooltip">
+          This session is bound to this computer. Circuit access is confined to the displayed workspace, and remote execution is disabled.
+        </span>
       </div>
       <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch color theme" aria-pressed="false">
         <span class="theme-icon" aria-hidden="true">◐</span>
@@ -156,13 +159,6 @@
           </div>
         </article>
 
-        <article class="security-card">
-          <span class="shield" aria-hidden="true">✓</span>
-          <div>
-            <strong>Nothing leaves this computer.</strong>
-            <p>The session is loopback-only. Circuit access is confined to the workspace shown above, and remote execution remains disabled.</p>
-          </div>
-        </article>
       </aside>
     </section>
 
