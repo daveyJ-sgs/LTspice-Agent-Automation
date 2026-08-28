@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LTspice System Builder</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="/" aria-label="LTspice System Builder home">
+      <span class="brand-mark" aria-hidden="true">SB</span>
+      <span><strong>LTspice</strong> System Builder</span>
+    </a>
+    <div class="security-state" title="Bound to this computer only">
+      <span class="status-dot" aria-hidden="true"></span>
+      Local only
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div>
+        <p class="eyebrow">GUI-A1 · SAFE STUDY PREVIEW</p>
+        <h1>Define before<br>you simulate.</h1>
+        <p class="hero-copy">Turn a circuit study into a deterministic, reviewable plan. Preview expands samples, corners, analyses, and run cost without writing artifacts or launching LTspice.</p>
+      </div>
+      <div class="hero-graphic" aria-label="Study flow">
+        <div class="flow-node active">Recipe</div>
+        <span>→</span>
+        <div class="flow-node">Plan</div>
+        <span>→</span>
+        <div class="flow-node muted">Simulate</div>
+        <span>→</span>
+        <div class="flow-node muted">Evidence</div>
+      </div>
+    </section>
+
+    <section class="workspace-strip">
+      <div>
+        <span class="label">Allowed workspace</span>
+        <strong id="workspace">Connecting…</strong>
+      </div>
+      <div>
+        <span class="label">Remote execution</span>
+        <strong>Off</strong>
+      </div>
+      <div>
+        <span class="label">Current action</span>
+        <strong>Preview only</strong>
+      </div>
+    </section>
+
+    <section class="builder-grid">
+      <article class="panel controls-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="step">01 / STUDY</p>
+            <h2>Mixed-signal DAQ tolerance</h2>
+          </div>
+          <span class="file-type">.ltstudy.json</span>
+        </div>
+        <p id="study-description" class="muted-copy">Loading the bundled reference study…</p>
+
+        <div class="field-grid">
+          <label>
+            <span>Samples</span>
+            <input id="sample-count" type="number" min="1" max="1000" step="1" value="12">
+          </label>
+          <label>
+            <span>Seed</span>
+            <input id="seed" type="number" step="1" value="20260825">
+          </label>
+          <label class="wide-field">
+            <span>Sampling method</span>
+            <select id="sampling-method">
+              <option value="halton">Digit-scrambled Halton</option>
+              <option value="latin_hypercube">Latin hypercube</option>
+              <option value="independent">Independent random</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="button-row">
+          <button id="preview-button" class="primary-button" type="button">Preview resolved plan</button>
+          <label class="secondary-button" for="recipe-file">Load recipe</label>
+          <input id="recipe-file" class="visually-hidden" type="file" accept=".json,.ltstudy.json,application/json">
+          <button id="save-button" class="text-button" type="button">Save recipe</button>
+        </div>
+
+        <div class="subsection-heading">
+          <div>
+            <p class="step">02 / VARIABLES</p>
+            <h3>Manufacturing model</h3>
+          </div>
+          <span id="variable-count" class="count-badge">—</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Variable</th><th>Nominal</th><th>Distribution</th></tr></thead>
+            <tbody id="variables"></tbody>
+          </table>
+        </div>
+      </article>
+
+      <aside class="right-column">
+        <article class="panel preview-panel">
+          <div class="panel-heading compact">
+            <div>
+              <p class="step">PLAN PREVIEW</p>
+              <h2 id="preview-title">Waiting for definition</h2>
+            </div>
+            <span id="preview-status" class="status-pill idle">Idle</span>
+          </div>
+
+          <div class="metric-grid">
+            <div><span>Samples</span><strong id="metric-samples">—</strong></div>
+            <div><span>Corners</span><strong id="metric-corners">—</strong></div>
+            <div><span>Points</span><strong id="metric-points">—</strong></div>
+            <div class="accent-metric"><span>LTspice runs</span><strong id="metric-runs">—</strong></div>
+          </div>
+
+          <div class="identity-block">
+            <span class="label">Future immutable plan</span>
+            <code id="plan-id">Not generated</code>
+            <p>No plan directory, RAW file, or job is created by Preview.</p>
+          </div>
+
+          <div id="errors" class="errors" role="alert" hidden></div>
+
+          <div class="subsection-heading">
+            <div>
+              <p class="step">EXECUTION MAP</p>
+              <h3>Paired analyses</h3>
+            </div>
+          </div>
+          <div id="experiments" class="experiment-list"></div>
+        </article>
+
+        <article class="panel circuit-panel">
+          <img src="/assets/daq-schematic.png" alt="Mixed-signal DAQ LTspice schematic">
+          <div>
+            <p class="step">CIRCUIT UNDER STUDY</p>
+            <h3>1 MHz acquisition channel</h3>
+            <p>Two-pole anti-alias filtering, gain, ADC drive, and clocked sample-and-hold loading.</p>
+          </div>
+        </article>
+
+        <article class="security-card">
+          <span class="shield" aria-hidden="true">✓</span>
+          <div>
+            <strong>Nothing leaves this computer.</strong>
+            <p>The session is loopback-only. Circuit access is confined to the workspace shown above, and remote execution remains disabled.</p>
+          </div>
+        </article>
+      </aside>
+    </section>
+  </main>
+
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

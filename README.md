@@ -50,6 +50,8 @@ design.
 - Durable run and experiment manifests, restart recovery, and a static HTML dashboard
 - An MCP server exposing the toolkit as native agent tools
 - Local synchronous and asynchronous REST API
+- LTspice System Builder, a local-only human interface for portable study
+  definition and safe plan preview
 - Unit tests and small validation circuits, from a single-pole RC divider up
   to a resonant 2nd-order active filter
 
@@ -120,6 +122,32 @@ Common workflows are also available through `make`: `make test`, `make ac`,
 `make transient`, `make nand`, `make sallen-key`, `make mixed-signal-daq`,
 `make sweep`, `make statistical-yield`, `make search`, `make step`, and
 `make dashboard`.
+
+## Preview a study with LTspice System Builder
+
+System Builder is the browser-first human interface to the same deterministic
+study contracts used by the MCP. GUI-A1 can load or save a portable
+`.ltstudy.json` recipe, edit the sample count/seed/method, and preview the exact
+future plan identity, corner expansion, and LTspice run count. Preview is pure:
+it does not publish a plan, create a run directory, or start LTspice.
+
+Install the optional GUI dependencies and launch the loopback-only application:
+
+```bash
+python3 -m pip install -r requirements-gui.txt
+make system-builder
+```
+
+The application opens the default browser on a random `127.0.0.1` port. It
+uses a session cookie, same-origin mutation checks, a strict content-security
+policy, bounded JSON bodies, and workspace-confined regular `.cir`/`.net`
+files. Remote execution is disabled in GUI-A1. The bundled reference recipe is
+[`examples/mixed_signal_daq.ltstudy.json`](examples/mixed_signal_daq.ltstudy.json).
+
+Its acceptance test proves that the human-authored DAQ recipe and the existing
+agent-authored definition produce byte-identical statistical plans. The first
+preview resolves 12 manufacturing samples across two ADC-load corners into 24
+points and two paired experiments: 48 prospective LTspice runs.
 
 Each run gets its own timestamped directory under `runs/`. LTspice writes the
 simulation results there, including the `.raw` and `.log` files. Scalar `.meas`

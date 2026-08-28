@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "kind": "statistical",
+  "name": "1 MHz mixed-signal DAQ tolerance study",
+  "description": "Paired AC and transient qualification of the anti-alias filter, gain stage, ADC driver, and sample-and-hold across manufacturing variation and ADC-load corners.",
+  "plan": {
+    "variables": [
+      {
+        "name": "RAA1",
+        "distribution": "gaussian",
+        "nominal": 1000,
+        "sigma": 10,
+        "minimum": 950,
+        "maximum": 1050,
+        "unit": "ohm"
+      },
+      {
+        "name": "RAA2",
+        "distribution": "gaussian",
+        "nominal": 1000,
+        "sigma": 10,
+        "minimum": 950,
+        "maximum": 1050,
+        "unit": "ohm"
+      },
+      {
+        "name": "CAA1",
+        "distribution": "gaussian",
+        "nominal": 1e-10,
+        "sigma": 5e-12,
+        "minimum": 8e-11,
+        "maximum": 1.2e-10,
+        "unit": "F"
+      },
+      {
+        "name": "CAA2",
+        "distribution": "gaussian",
+        "nominal": 1e-10,
+        "sigma": 5e-12,
+        "minimum": 8e-11,
+        "maximum": 1.2e-10,
+        "unit": "F"
+      },
+      {
+        "name": "GAIN",
+        "distribution": "gaussian",
+        "nominal": 1.6,
+        "sigma": 0.008,
+        "minimum": 1.56,
+        "maximum": 1.64,
+        "unit": "V/V"
+      },
+      {
+        "name": "ROUT",
+        "distribution": "gaussian",
+        "nominal": 50,
+        "sigma": 5,
+        "minimum": 25,
+        "maximum": 75,
+        "unit": "ohm"
+      },
+      {
+        "name": "CLOAD",
+        "distribution": "gaussian",
+        "nominal": 5e-11,
+        "sigma": 5e-12,
+        "minimum": 2.5e-11,
+        "maximum": 7.5e-11,
+        "unit": "F"
+      },
+      {
+        "name": "RSW",
+        "distribution": "gaussian",
+        "nominal": 25,
+        "sigma": 2.5,
+        "minimum": 12.5,
+        "maximum": 37.5,
+        "unit": "ohm"
+      },
+      {
+        "name": "CHOLD",
+        "distribution": "gaussian",
+        "nominal": 4.7e-11,
+        "sigma": 2.35e-12,
+        "minimum": 3.76e-11,
+        "maximum": 5.64e-11,
+        "unit": "F"
+      }
+    ],
+    "sample_count": 12,
+    "seed": 20260825,
+    "correlations": [
+      {
+        "variables": ["RAA1", "RAA2"],
+        "matrix": [[1, 0.5], [0.5, 1]]
+      },
+      {
+        "variables": ["CAA1", "CAA2"],
+        "matrix": [[1, 0.4], [0.4, 1]]
+      }
+    ],
+    "corner_axes": [
+      {
+        "name": "adc_load",
+        "parameter": "CADC",
+        "unit": "F",
+        "values": [
+          {"name": "light", "value": 2e-11},
+          {"name": "heavy", "value": 8e-11}
+        ]
+      }
+    ],
+    "corner_aggregate": false,
+    "sampling_method": "halton"
+  },
+  "experiments": [
+    {
+      "name": "ac",
+      "netlist_path": "examples/mixed_signal_daq_ac.cir",
+      "filename": "mixed_signal_daq_ac.cir",
+      "waveform_analyses": [
+        {
+          "name": "analog_bandwidth",
+          "variable": "V(afe)",
+          "secondary_variable": "V(in)",
+          "requirements": [
+            {
+              "metric": "ac_gain_db",
+              "operator": ">=",
+              "target": 3.5,
+              "frequency_value": 100000
+            },
+            {
+              "metric": "cutoff_frequency",
+              "operator": ">=",
+              "target": 800000,
+              "reference_frequency": 1000
+            },
+            {
+              "metric": "cutoff_frequency",
+              "operator": "<=",
+              "target": 1300000,
+              "reference_frequency": 1000
+            },
+            {
+              "metric": "peaking_db",
+              "operator": "<=",
+              "target": 0.1,
+              "reference_frequency": 1000
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "transient",
+      "netlist_path": "examples/mixed_signal_daq_transient.cir",
+      "filename": "mixed_signal_daq_transient.cir",
+      "waveform_analyses": [
+        {
+          "name": "frontend_settling",
+          "variable": "V(afe)",
+          "requirements": [
+            {
+              "metric": "settling_time",
+              "operator": "<=",
+              "target": 1.5e-6,
+              "initial_value": 0.32,
+              "final_value": 3.2,
+              "settling_tolerance": 0.02
+            }
+          ]
+        },
+        {
+          "name": "track_error",
+          "variable": "V(sample_error)",
+          "requirements": [
+            {
+              "metric": "maximum",
+              "operator": "<=",
+              "target": 0.005,
+              "window_start": 1.15e-6,
+              "window_end": 1.2e-6
+            },
+            {
+              "metric": "minimum",
+              "operator": ">=",
+              "target": -0.005,
+              "window_start": 1.15e-6,
+              "window_end": 1.2e-6
+            }
+          ]
+        },
+        {
+          "name": "hold_droop",
+          "variable": "V(hold)",
+          "requirements": [
+            {
+              "metric": "ripple",
+              "operator": "<=",
+              "target": 0.005,
+              "window_start": 1.22e-6,
+              "window_end": 1.8e-6
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "execution": {
+    "max_concurrency": 2,
+    "reuse_cache": true
+  },
+  "report_context": {
+    "title": "1 MHz mixed-signal DAQ front end",
+    "circuit_summary": "A two-pole anti-alias network feeds a buffered 1.6 V/V gain stage, ADC driver, and clocked sample-and-hold. Light and heavy ADC input-capacitance corners exercise the acquisition load.",
+    "schematic_path": "docs/images/mixed-signal-daq-schematic.png"
+  }
+}

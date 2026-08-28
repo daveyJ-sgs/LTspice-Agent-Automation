@@ -968,7 +968,7 @@ Windows acceptance criteria:
 Both acceptance criteria are satisfied by real-Windows run `33080244673` and
 comparison `robust-selection-comparison-a8327f7e16d468e3`.
 
-### Cross-cutting milestone: Human study builder and unattended control
+### Cross-cutting milestone: LTspice System Builder and unattended control
 
 Add a straightforward human interface for configuring and running circuit
 studies when an agent is unavailable. The interface must remain a thin client
@@ -988,6 +988,44 @@ and evidence rather than introducing a second execution path.
   CI use, with identical content-address and provenance checks
 - Qualify the interface by proving that a GUI-authored DAQ study and the
   equivalent agent-authored study generate the same plan and results
+
+#### System Builder GUI-A1: Safe recipe preview — complete
+
+- Added a versioned portable `.ltstudy.json` contract for statistical studies,
+  with circuit-relative netlists, variables, correlations, named corners,
+  waveform requirements, execution preferences, and report context
+- Reused the pure statistical-plan builder and explicit experiment validator;
+  Preview computes the exact future content address without saving a plan,
+  creating a run directory, or invoking LTspice
+- Added structured validation errors with field paths, finite/bounded JSON,
+  regular UTF-8 `.cir`/`.net` inputs, workspace confinement, symlink rejection,
+  parameter-placeholder checks, and total execution expansion
+- Added a responsive local-only interface under the product name **LTspice
+  System Builder**, with recipe load/save, DAQ controls, manufacturing-variable
+  summary, plan identity, run estimate, analysis map, schematic, and visible
+  security state
+- The loopback application uses a random port, an HttpOnly same-site session,
+  exact-origin and request-marker checks for Preview, no CORS permission, a
+  strict content-security policy, and fixed artifact routes
+
+GUI-A1 verification gate:
+
+- Bundled recipe `examples/mixed_signal_daq.ltstudy.json` reproduces the exact
+  agent-authored DAQ statistical plan `statistical-plan-3648d75d3bc11f35`
+- The preview resolves 12 scrambled-Halton samples by two ADC-load corners into
+  24 points and two paired AC/transient experiments, or 48 prospective runs
+- Tests prove Preview leaves its workspace byte-for-byte unchanged, escaped or
+  symlinked paths fail closed, missing placeholders are rejected, and cross-
+  origin or unmarked requests cannot invoke the preview endpoint
+
+Next System Builder slices:
+
+1. GUI-A2 — read-only history, durable-job status, and report launcher
+2. GUI-B — editable variables, corners, and requirements with create/start,
+   cancel, and resume controls
+3. GUI-C — optimization domains, objectives, constraints, Pareto results, and
+   finalist qualification
+4. GUI-D — Windows packaging and deliberately gated remote GitHub execution
 
 ### Phase 5: Flagship portable mixed-signal DAQ/scope
 

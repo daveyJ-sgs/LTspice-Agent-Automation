@@ -23,5 +23,6 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-mcp.txt
-      - run: python -m pip install -r requirements.txt -r requirements-mcp.txt
+            requirements-gui.txt
+      - run: python -m pip install -r requirements.txt -r requirements-mcp.txt -r requirements-gui.txt
       - run: python -m unittest discover -s tests -v

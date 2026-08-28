@@ -1,0 +1,4 @@
+# Optional local Human GUI dependencies for LTspice System Builder.
+fastapi>=0.135,<1
+httpx>=0.28,<1
+uvicorn>=0.41,<1
