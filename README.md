@@ -127,9 +127,16 @@ Common workflows are also available through `make`: `make test`, `make ac`,
 
 System Builder is the browser-first human interface to the same deterministic
 study contracts used by the MCP. It can load or save a portable
-`.ltstudy.json` recipe, edit the sample count/seed/method, and preview the exact
-future plan identity, corner expansion, and LTspice run count. Preview is pure:
-it does not publish a plan, create a run directory, or start LTspice.
+`.ltstudy.json` recipe; edit the sampling controls, continuous manufacturing
+variables, operating corners, and waveform requirements; and preview the exact
+future plan identity, corner expansion, and LTspice run count. Changes are
+validated automatically against the existing engine, with field-scoped errors.
+Preview is pure: it does not publish a plan, create a run directory, or start
+LTspice.
+
+GUI-B1 supports Gaussian and uniform continuous-variable editing. Discrete and
+empirical definitions remain portable through recipe load/save but are not yet
+expanded into dedicated visual editors.
 
 GUI-A2 adds a read-only workspace below the recipe preview. It reads current
 durable-job progress directly from experiment manifests, reports whether the

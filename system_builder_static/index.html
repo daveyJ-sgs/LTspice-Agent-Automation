@@ -34,7 +34,7 @@
   <main>
     <section class="tool-intro">
       <div>
-        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-A2</p>
+        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-B1</p>
         <h1>1 MHz acquisition-channel qualification</h1>
         <p class="intro-copy">Configure and inspect a deterministic AC/transient tolerance study. Preview resolves the plan without launching LTspice.</p>
       </div>
@@ -60,7 +60,7 @@
       </div>
       <div>
         <span class="label">Current action</span>
-        <strong>Preview + inspect</strong>
+        <strong>Edit + preview</strong>
       </div>
     </section>
 
@@ -106,14 +106,38 @@
             <p class="step">02 / VARIABLES</p>
             <h3>Manufacturing model</h3>
           </div>
-          <span id="variable-count" class="count-badge">—</span>
+          <div class="heading-actions">
+            <span id="variable-count" class="count-badge">—</span>
+            <button id="add-variable" class="compact-button" type="button">+ Variable</button>
+          </div>
         </div>
         <div class="table-wrap">
-          <table>
-            <thead><tr><th>Variable</th><th>Nominal</th><th>Distribution</th></tr></thead>
+          <table class="editor-table variable-table">
+            <thead><tr><th>Name</th><th>Distribution</th><th>Nominal</th><th>Tolerance</th><th>Minimum</th><th>Maximum</th><th>Unit</th><th></th></tr></thead>
             <tbody id="variables"></tbody>
           </table>
         </div>
+        <div id="variable-errors" class="inline-errors" aria-live="polite" hidden></div>
+
+        <div class="subsection-heading">
+          <div>
+            <p class="step">03 / CORNERS</p>
+            <h3>Operating conditions</h3>
+          </div>
+          <button id="add-corner" class="compact-button" type="button">+ Corner axis</button>
+        </div>
+        <div id="corners" class="editor-stack"></div>
+        <div id="corner-errors" class="inline-errors" aria-live="polite" hidden></div>
+
+        <div class="subsection-heading">
+          <div>
+            <p class="step">04 / REQUIREMENTS</p>
+            <h3>Electrical pass criteria</h3>
+          </div>
+          <span id="requirement-count" class="count-badge">—</span>
+        </div>
+        <div id="requirements" class="editor-stack"></div>
+        <div id="requirement-errors" class="inline-errors" aria-live="polite" hidden></div>
       </article>
 
       <aside class="right-column">

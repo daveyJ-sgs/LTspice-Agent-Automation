@@ -1065,13 +1065,39 @@ Interface verification gate:
   remote style assets, and no gradients while preserving the complete System
   Builder security and behavior suite
 
+#### System Builder GUI-B1: Safe study editor — complete
+
+- Replaced the read-only manufacturing summary with an editable engineering
+  table for Gaussian and uniform variables, including nominal, sigma,
+  minimum/maximum bounds, units, and explicit add/remove controls
+- Added operating-corner editors for axis identity, netlist parameter, unit,
+  and named values, plus electrical-requirement editors for metric, comparison
+  operator, and target across every AC/transient analysis
+- Every edit updates only the in-memory portable recipe and debounces the
+  existing authoritative Preview endpoint; field-scoped errors and stale-result
+  suppression keep the resolved run count honest while typing
+- Recipe load/save includes the edits, while Preview still cannot publish an
+  immutable plan, create an artifact directory, or invoke LTspice
+
+GUI-B1 verification gate:
+
+- The DAQ recipe remains a valid 12-sample, two-corner, 48-run preview
+- A combined edit to sample count, ROUT nominal, ADC-load value, and AC gain
+  requirement resolves to the expected eight points and 16 LTspice runs
+- Browser checks cover invalid-value feedback and recovery, variable/corner/
+  requirement add-remove cycles, a clean console, and restoration of the
+  original valid definition
+
 Next System Builder slices:
 
-1. GUI-B — editable variables, corners, and requirements with create/start,
-   cancel, and resume controls
-2. GUI-C — optimization domains, objectives, constraints, Pareto results, and
+1. GUI-B2 — explicit recipe-to-immutable-plan creation and confirmed local
+   execution through the existing durable engine
+2. GUI-B3 — live progress, cancel, resume/recovery, and completed-report launch
+3. GUI-B4 — dedicated discrete/empirical variable editors and correlation
+   controls
+4. GUI-C — optimization domains, objectives, constraints, Pareto results, and
    finalist qualification
-3. GUI-D — Windows packaging and deliberately gated remote GitHub execution
+5. GUI-D — Windows packaging and deliberately gated remote GitHub execution
 
 ### Phase 5: Flagship portable mixed-signal DAQ/scope
 

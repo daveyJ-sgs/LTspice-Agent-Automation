@@ -91,6 +91,25 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertEqual(response.json()["plan"]["point_count"], 24)
         self.assertEqual(response.json()["execution"]["total_run_count"], 48)
 
+    def test_preview_accepts_gui_b1_variable_corner_and_requirement_edits(self) -> None:
+        self._open()
+        recipe = self.client.get("/api/examples/mixed-signal-daq").json()
+        recipe["plan"]["sample_count"] = 4
+        recipe["plan"]["variables"][5]["nominal"] = 55
+        recipe["plan"]["corner_axes"][0]["values"][0]["value"] = 3e-11
+        recipe["experiments"][0]["waveform_analyses"][0]["requirements"][0][
+            "target"
+        ] = 3.4
+
+        response = self.client.post(
+            "/api/preview", json=recipe, headers=self._headers()
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["valid"])
+        self.assertEqual(response.json()["plan"]["point_count"], 8)
+        self.assertEqual(response.json()["execution"]["total_run_count"], 16)
+
     def test_preview_rejects_non_json_and_oversized_bodies(self) -> None:
         self._open()
         wrong_type = self.client.post(
@@ -153,6 +172,12 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertNotIn("gradient(", css.lower())
         self.assertNotIn("https://", css)
         self.assertIn("ltspice-system-builder-theme", javascript)
+        self.assertIn('id="add-variable"', html)
+        self.assertIn('id="add-corner"', html)
+        self.assertIn('id="requirements"', html)
+        self.assertIn("schedulePreview", javascript)
+        self.assertIn("renderScopedErrors", javascript)
+        self.assertNotIn('fetch("/api/start"', javascript)
         self.assertTrue((fonts / "LICENSE.txt").is_file())
         for name in system_builder.FONT_ASSETS:
             self.assertEqual((fonts / name).read_bytes()[:4], b"wOF2")
