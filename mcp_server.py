@@ -1440,6 +1440,12 @@ def cancel_experiment(experiment_id: str) -> ExperimentJobSnapshot:
 
 
 @mcp.tool()
+def resume_experiment(experiment_id: str) -> ExperimentJobSnapshot:
+    """Resume unfinished independent points after cooperative cancellation."""
+    return _get_experiment_manager().resume(experiment_id)
+
+
+@mcp.tool()
 def summarize_statistical_experiment(
     experiment_id: str,
 ) -> StatisticalSummaryResult:

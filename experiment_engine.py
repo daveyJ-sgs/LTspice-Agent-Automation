@@ -1754,6 +1754,51 @@ class ExperimentJobManager:
                 self._events.setdefault(experiment_id, threading.Event()).set()
         return self.snapshot(experiment_id)
 
+    def resume(self, experiment_id: str) -> ExperimentJobSnapshot:
+        """Resume unfinished independent work after cooperative cancellation."""
+        with self._lock:
+            manifest = self._load_manifest(experiment_id)
+            status = str(manifest.get("status"))
+            if status in {"defined", "queued", "running", "completed"}:
+                return self.start(experiment_id)
+            if status == "cancelling":
+                raise ValueError("wait for cancellation to finish before resuming")
+            if status == "failed":
+                raise ValueError("failed experiments cannot be resumed")
+            if status != "cancelled":
+                raise ValueError(f"cannot resume experiment in status {status}")
+            definition = manifest.get("definition")
+            if (
+                not isinstance(definition, dict)
+                or definition.get("execution_mode", "independent") != "independent"
+            ):
+                raise ValueError("only independent experiments can be resumed")
+            experiment_dir = self._experiment_dir(experiment_id)
+            for path in experiment_dir.glob("point-*/point_result.json"):
+                if (
+                    path.is_symlink()
+                    or not path.is_file()
+                    or path.stat().st_size > 2 * 1024 * 1024
+                ):
+                    raise ValueError(f"invalid point checkpoint: {path}")
+                try:
+                    point = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise ValueError(f"invalid point checkpoint: {path}") from exc
+                if isinstance(point, dict) and point.get("simulation_status") == "cancelled":
+                    path.unlink()
+            manifest.update(
+                status="queued",
+                running_points=0,
+                cancel_requested=False,
+                all_passed=None,
+            )
+            manifest.pop("finished_at", None)
+            self._save_manifest(manifest)
+            self._events[experiment_id] = threading.Event()
+            self._queue.put(experiment_id)
+        return self.snapshot(experiment_id)
+
     def snapshot(self, experiment_id: str) -> ExperimentJobSnapshot:
         with self._lock:
             manifest = self._load_manifest(experiment_id)

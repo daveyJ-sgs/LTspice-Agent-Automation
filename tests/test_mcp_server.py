@@ -3819,6 +3819,59 @@ class MCPServerTests(unittest.TestCase):
         self.assertEqual(finished["pending_points"], 4)
         self.assertEqual(sorted(calls), [0, 1])
 
+    def test_cancelled_independent_job_resumes_only_unfinished_points(self) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        started = threading.Event()
+        release = threading.Event()
+        calls: list[int] = []
+
+        def execute_point(
+            index: int,
+            combination: dict[str, str],
+            point_dir: Path,
+            *args: object,
+        ) -> dict[str, object]:
+            calls.append(index)
+            if index == 0:
+                started.set()
+                release.wait(2)
+            return {
+                "index": index,
+                "parameters": combination,
+                "run_dir": str(point_dir),
+                "simulation_status": "completed",
+                "duration_seconds": 0.01,
+                "measurements": {},
+                "analyses": [],
+                "all_passed": True,
+                "error": None,
+            }
+
+        try:
+            with patch.object(
+                mcp_server, "_execute_experiment_point", side_effect=execute_point
+            ):
+                defined = manager.define(
+                    "R1 in out {R}\n.end\n",
+                    [{"name": "R", "values": ["1k", "2k", "3k"]}],
+                    max_concurrency=1,
+                )
+                manager.start(defined["experiment_id"])
+                self.assertTrue(started.wait(2))
+                manager.cancel(defined["experiment_id"])
+                release.set()
+                cancelled = manager.wait(defined["experiment_id"])
+                resumed = manager.resume(defined["experiment_id"])
+                finished = manager.wait(defined["experiment_id"])
+        finally:
+            release.set()
+            manager.shutdown()
+
+        self.assertEqual(cancelled["status"], "cancelled")
+        self.assertEqual(resumed["status"], "queued")
+        self.assertEqual(finished["status"], "completed")
+        self.assertEqual(calls, [0, 1, 2])
+
     def test_cancel_after_queue_claim_cannot_be_lost(self) -> None:
         manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
         claimed = threading.Event()
@@ -4232,7 +4285,13 @@ class MCPServerTests(unittest.TestCase):
         tools = asyncio.run(mcp_server.mcp.list_tools())
         names = {tool.name for tool in tools}
         self.assertTrue(
-            {"define_experiment", "start_experiment", "get_experiment", "cancel_experiment"}
+            {
+                "define_experiment",
+                "start_experiment",
+                "get_experiment",
+                "cancel_experiment",
+                "resume_experiment",
+            }
             <= names
         )
 

@@ -123,16 +123,16 @@ Common workflows are also available through `make`: `make test`, `make ac`,
 `make sweep`, `make statistical-yield`, `make search`, `make step`, and
 `make dashboard`.
 
-## Preview a study with LTspice System Builder
+## Build and run a study with LTspice System Builder
 
 System Builder is the browser-first human interface to the same deterministic
 study contracts used by the MCP. It can load or save a portable
-`.ltstudy.json` recipe; edit the sampling controls, continuous manufacturing
-variables, operating corners, and waveform requirements; and preview the exact
-future plan identity, corner expansion, and LTspice run count. Changes are
-validated automatically against the existing engine, with field-scoped errors.
-Preview is pure: it does not publish a plan, create a run directory, or start
-LTspice.
+`.ltstudy.json` recipe; edit sampling controls, manufacturing variables,
+correlations, operating corners, and waveform requirements; and preview the
+exact future plan identity, corner expansion, and LTspice run count. Changes
+are validated automatically against the existing engine, with field-scoped
+errors. Preview is pure: it does not publish a plan, create a run directory, or
+start LTspice.
 
 GUI-B2 adds engineering-unit selectors for capacitance (`pF`, `nF`, `µF`) and
 resistance (`Ω`, `kΩ`, `MΩ`). These are display and entry choices only: the
@@ -144,9 +144,22 @@ qualification**, which launches the recipe's paired analyses through the same
 durable experiment manager used by the MCP. Editing the recipe invalidates the
 confirmation, and repeated Start requests cannot duplicate the launch.
 
-GUI-B1/B2 support Gaussian and uniform continuous-variable editing. Discrete
-and empirical definitions remain portable through recipe load/save but are not
-yet expanded into dedicated visual editors.
+GUI-B4 adds dedicated editors for weighted discrete choices and empirical
+populations. Empirical data may be entered inline or loaded from a named column
+in a workspace-confined CSV file. Correlation groups expose their Gaussian
+members and symmetric matrix directly; diagonal values remain fixed at one,
+and variables that become non-Gaussian are removed from their groups. The
+engine remains authoritative for normalization and positive-definite matrix
+validation.
+
+GUI-B3 makes execution server-owned. The interface follows point-level
+progress, can cooperatively cancel a running qualification, and can resume an
+independent cancelled job without rerunning completed points. Closing the
+browser does not stop the work: the local System Builder process continues the
+experiments and automatically produces statistics, worst cases, sensitivities,
+and the offline HTML report. Restarting System Builder recovers queued or
+running manifests; a completed job whose report failed can be finalized again
+from the workspace or job panel.
 
 GUI-A2 adds a read-only workspace below the recipe preview. It reads current
 durable-job progress directly from experiment manifests, reports whether the
@@ -171,10 +184,11 @@ make system-builder
 The application opens the default browser on a random `127.0.0.1` port. It
 uses a session cookie, same-origin mutation checks, a strict content-security
 policy, bounded JSON bodies, and workspace-confined regular inputs and
-evidence. Local jobs write durable manifests and evidence beneath `runs/`; the
-System Builder process must remain running while its worker is active, while a
-later restart can recover unfinished jobs through the existing durable engine.
-Remote execution remains disabled. The bundled reference recipe is
+evidence. Local jobs write durable manifests and evidence beneath `runs/`. The
+browser may be closed while a job runs, but the System Builder process must
+remain active; if that process stops, a later launch recovers unfinished jobs
+through the durable engine and resumes automatic report processing. Remote
+execution remains disabled. The bundled reference recipe is
 [`examples/mixed_signal_daq.ltstudy.json`](examples/mixed_signal_daq.ltstudy.json).
 
 Its acceptance test proves that the human-authored DAQ recipe and the existing

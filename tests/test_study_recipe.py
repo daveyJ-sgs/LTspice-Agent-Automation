@@ -151,6 +151,21 @@ class StudyRecipeTests(unittest.TestCase):
             preview["errors"],
         )
 
+    def test_report_context_fields_and_paths_fail_closed(self) -> None:
+        recipe = copy.deepcopy(self.recipe)
+        recipe["report_context"] = {
+            "title": "DAQ report",
+            "surprise": "no",
+            "schematic_path": "../outside.svg",
+        }
+        preview = study_recipe.preview_study_recipe(recipe, PROJECT_ROOT)
+
+        self.assertFalse(preview["valid"])
+        self.assertEqual(
+            {error["path"] for error in preview["errors"]},
+            {"report_context.surprise", "report_context.schematic_path"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -34,9 +34,9 @@
   <main>
     <section class="tool-intro">
       <div>
-        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-B2</p>
+        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-B3+B4</p>
         <h1>1 MHz acquisition-channel qualification</h1>
-        <p class="intro-copy">Configure and inspect a deterministic AC/transient tolerance study. Preview resolves the plan without launching LTspice.</p>
+        <p class="intro-copy">Configure, execute, and inspect a deterministic AC/transient tolerance study. Preview remains non-mutating; confirmed work produces durable evidence.</p>
       </div>
       <div class="workflow-rail" aria-label="Study flow">
         <div class="flow-node active">Recipe</div>
@@ -60,7 +60,7 @@
       </div>
       <div>
         <span class="label">Current action</span>
-        <strong>Edit → freeze → confirm</strong>
+        <strong>Edit → freeze → run</strong>
       </div>
     </section>
 
@@ -121,7 +121,17 @@
 
         <div class="subsection-heading">
           <div>
-            <p class="step">03 / CORNERS</p>
+            <p class="step">03 / CORRELATIONS</p>
+            <h3>Matched process variation</h3>
+          </div>
+          <button id="add-correlation" class="compact-button" type="button">+ Correlation group</button>
+        </div>
+        <div id="correlations" class="editor-stack"></div>
+        <div id="correlation-errors" class="inline-errors" aria-live="polite" hidden></div>
+
+        <div class="subsection-heading">
+          <div>
+            <p class="step">04 / CORNERS</p>
             <h3>Operating conditions</h3>
           </div>
           <button id="add-corner" class="compact-button" type="button">+ Corner axis</button>
@@ -131,7 +141,7 @@
 
         <div class="subsection-heading">
           <div>
-            <p class="step">04 / REQUIREMENTS</p>
+            <p class="step">05 / REQUIREMENTS</p>
             <h3>Electrical pass criteria</h3>
           </div>
           <span id="requirement-count" class="count-badge">—</span>

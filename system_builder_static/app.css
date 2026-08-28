@@ -148,10 +148,11 @@ h3 { font-size: 16px; }
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; }
 .field-grid label span { display: block; color: var(--muted); font-size: 11px; font-weight: 600; margin-bottom: 5px; }
 .wide-field { grid-column: 1 / -1; }
-input, select { width: 100%; color: var(--text); background: var(--surface-input); border: 1px solid var(--border-strong); border-radius: 0; padding: 9px 10px; outline: none; }
-input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--danger); background: var(--danger-soft); }
+input, select, textarea { width: 100%; color: var(--text); background: var(--surface-input); border: 1px solid var(--border-strong); border-radius: 0; padding: 9px 10px; outline: none; }
+textarea { min-height: 86px; resize: vertical; font: 400 12px/1.45 "IBM Plex Mono", monospace; }
+input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--danger); background: var(--danger-soft); }
 input { font-family: "IBM Plex Mono", monospace; }
-input:focus, select:focus, button:focus-visible, a:focus-visible, .security-state:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input:focus, select:focus, textarea:focus, button:focus-visible, a:focus-visible, .security-state:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .button-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 16px 0 24px; }
 button, .secondary-button { cursor: pointer; border-radius: 0; padding: 9px 12px; border: 1px solid transparent; font-weight: 600; }
 .primary-button { color: #fff; background: var(--accent); }
@@ -182,6 +183,14 @@ td:first-child { color: var(--text); font-weight: 600; }
 .editor-table .distribution { min-width: 105px; }
 .editor-table .unit { min-width: 66px; }
 .editor-table .unit-selector { min-width: 72px; font-family: "IBM Plex Mono", monospace; }
+.editor-table .not-applicable { color: var(--subtle); text-align: center; font-family: "IBM Plex Mono", monospace; }
+.distribution-detail-row > td { padding: 0 4px 10px; border-top: 0; }
+.distribution-editor { border-left: 2px solid var(--info); background: var(--surface); padding: 10px; }
+.distribution-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.distribution-editor-heading span { color: var(--muted); font-size: 10px; }
+.distribution-editor-heading select { width: auto; min-width: 190px; }
+.choice-rows { display: grid; gap: 6px; }
+.choice-row { display: grid; grid-template-columns: minmax(120px, 1fr) 110px 28px; gap: 6px; align-items: center; }
 .editor-table .remove-cell { width: 28px; padding-right: 0; }
 .editor-stack { display: grid; gap: 8px; }
 .editor-card { border: 1px solid var(--border); background: var(--surface); padding: 11px; }
@@ -195,6 +204,13 @@ td:first-child { color: var(--text); font-weight: 600; }
 .requirement-row { display: grid; grid-template-columns: minmax(115px, 1.4fr) 70px minmax(90px, .8fr) 28px; gap: 6px; align-items: center; }
 .corner-value-row input, .requirement-row input, .requirement-row select { padding: 7px 8px; font-size: 11px; }
 .analysis-meta { color: var(--subtle); font: 400 10px "IBM Plex Mono", monospace; }
+.correlation-variables { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 9px 0 12px; }
+.correlation-variables label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font: 500 10px "IBM Plex Mono", monospace; }
+.correlation-variables input { width: 13px; height: 13px; accent-color: var(--accent); }
+.correlation-matrix { display: grid; grid-template-columns: repeat(var(--matrix-size), minmax(54px, 1fr)); gap: 1px; align-items: center; background: var(--border); }
+.correlation-matrix > * { min-width: 0; border: 0; background: var(--surface-raised); }
+.correlation-matrix strong { align-self: stretch; display: grid; place-items: center; padding: 7px; color: var(--muted); font: 600 9px "IBM Plex Mono", monospace; }
+.correlation-matrix input { text-align: center; }
 .inline-errors { margin-top: 8px; padding: 8px 10px; border-left: 2px solid var(--danger); background: var(--danger-soft); color: var(--danger); font-size: 11px; }
 .inline-errors ul { margin: 0 0 0 16px; padding: 0; }
 .editor-empty { color: var(--muted); border: 1px dashed var(--border); padding: 12px; margin: 0; font-size: 11px; }
@@ -235,7 +251,12 @@ td:first-child { color: var(--text); font-weight: 600; }
 .execution-check input { width: 14px; height: 14px; margin: 1px 0 0; accent-color: var(--accent); }
 .launch-result { margin-top: 12px; padding: 11px; border: 1px solid var(--info); background: var(--info-soft); }
 .launch-result h3 { margin-bottom: 7px; }
-.launch-result ul { margin: 0; padding-left: 18px; color: var(--muted); font: 400 10px/1.6 "IBM Plex Mono", monospace; }
+.tracked-job { display: grid; gap: 7px; padding: 9px 0; border-top: 1px solid var(--border); }
+.tracked-job > div:first-child, .job-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tracked-job small { color: var(--muted); }
+.tracked-job code { color: var(--subtle); overflow-wrap: anywhere; }
+.job-actions { justify-content: flex-start; flex-wrap: wrap; }
+.job-error { color: var(--danger); font-size: 10px; }
 
 .circuit-panel { padding: 0; overflow: hidden; }
 .circuit-panel img { width: 100%; max-height: 245px; object-fit: cover; object-position: top; display: block; border-bottom: 1px solid var(--border); background: var(--schematic-bg); }
@@ -297,6 +318,9 @@ td:first-child { color: var(--text); font-weight: 600; }
   .panel { padding: 15px; }
   .compact-fields { grid-template-columns: 1fr; }
   .confirmation-grid { grid-template-columns: 1fr 1fr; }
+  .distribution-editor-heading { align-items: stretch; flex-direction: column; }
+  .distribution-editor-heading select { width: 100%; }
+  .choice-row { grid-template-columns: 1fr 90px 28px; }
   .requirement-row { grid-template-columns: 1fr 72px; }
   .requirement-row input:first-child { grid-column: 1 / -1; }
 }

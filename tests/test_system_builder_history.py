@@ -111,6 +111,19 @@ class SystemBuilderHistoryTests(unittest.TestCase):
         self.assertEqual(result["index"]["unindexed_jobs"], 1)
         self.assertIn("1 durable job", result["index"]["message"])
 
+    def test_unindexed_statistical_job_is_identified_from_manifest(self) -> None:
+        experiment = self.write_job(status="completed")
+        manifest_path = experiment / "experiment_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["definition"]["point_plan"] = {
+            "source": {"kind": "statistical"}
+        }
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        result = workspace_history(self.workspace)
+
+        self.assertTrue(result["jobs"][0]["statistical"])
+
     def test_evidence_resolver_confines_regular_files_to_runs(self) -> None:
         experiment = self.write_job()
         report = evidence_file(self.runs, f"{experiment.name}/report.html")

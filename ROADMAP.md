@@ -1117,15 +1117,64 @@ GUI-B2 verification gate:
 - Tests cover stale freeze rejection, plan-only publication, run-count
   confirmation, paired launch, idempotency, and clean manager shutdown
 
+#### System Builder GUI-B3: Durable job lifecycle — complete
+
+- Added live point-level status and progress for every experiment launched from
+  a confirmed System Builder plan, with direct access to completed reports
+- Added cooperative cancellation and explicit resume for independent jobs;
+  completed point checkpoints and attempt history are preserved, while only
+  unfinished cancelled points are requeued
+- Moved statistical post-processing into the local server so statistics, worst
+  cases, sensitivities, and offline HTML reports are produced even when the
+  browser is closed
+- Added startup discovery and recovery for System Builder-managed manifests,
+  plus an explicit Finalize action for retrying a failed report build
+
+GUI-B3 verification gate:
+
+- A reduced four-run real DAQ qualification completed AC experiment
+  `mcp-experiment-20260828-081937-262087-4d2cc67e` and transient experiment
+  `mcp-experiment-20260828-081937-263456-fd372507`, with both reports available
+  from the live job panel
+- An uncached eight-run qualification was launched and its client exited
+  immediately; the server independently completed AC experiment
+  `mcp-experiment-20260828-083140-171854-f5bc04d0` and transient experiment
+  `mcp-experiment-20260828-083140-173437-112bfdbd`, including every structured
+  artifact and offline report
+- Tests cover status/cancel/resume/finalize routes, point-checkpoint reuse,
+  startup discovery, browser-independent post-processing, MCP exposure, and
+  fail-closed report context
+
+#### System Builder GUI-B4: Statistical variable controls — complete
+
+- Added dedicated weighted-choice editing for discrete variables, including an
+  explicit nominal choice and add/remove controls
+- Added empirical-variable editing from inline observations or a selected
+  column in a workspace-confined CSV file
+- Added arbitrary Gaussian correlation groups with selectable membership and a
+  symmetric matrix editor whose unit diagonal is fixed
+- Distribution changes, renames, and removals keep correlation membership
+  consistent; the existing recipe compiler remains authoritative for weight
+  normalization, empirical data loading, and correlation validation
+
+GUI-B4 verification gate:
+
+- Browser checks cover all four distribution types, inline and CSV empirical
+  sources, symmetric correlation editing, automatic membership cleanup,
+  changing plan identity, field validation, and a clean console
+- Mixed discrete/empirical DAQ plan
+  `statistical-plan-9ed7db9f8f69a0ef` completed AC experiment
+  `mcp-experiment-20260828-082417-170392-8c9a40b5` and transient experiment
+  `mcp-experiment-20260828-082417-171338-3e52692e`; both retained RAW, JSON,
+  CSV, manifests, statistical summaries, sensitivities, and HTML reports
+- Tests cover portable report context, discrete and empirical preview,
+  three-variable correlation matrices, and the static interaction contract
+
 Next System Builder slices:
 
-1. GUI-B3 — live progress, cancel, resume/recovery, automatic post-processing,
-   and completed-report launch
-2. GUI-B4 — dedicated discrete/empirical variable editors and correlation
-   controls
-3. GUI-C — optimization domains, objectives, constraints, Pareto results, and
+1. GUI-C — optimization domains, objectives, constraints, Pareto results, and
    finalist qualification
-4. GUI-D — Windows packaging and deliberately gated remote GitHub execution
+2. GUI-D — Windows packaging and deliberately gated remote GitHub execution
 
 ### Phase 5: Flagship portable mixed-signal DAQ/scope
 

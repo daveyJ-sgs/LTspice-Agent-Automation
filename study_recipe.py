@@ -38,6 +38,14 @@ ALLOWED_EXPERIMENT_KEYS = {
     "filename",
     "waveform_analyses",
 }
+ALLOWED_REPORT_CONTEXT_KEYS = {
+    "title",
+    "circuit_summary",
+    "simulation_summary",
+    "mcp_context",
+    "schematic_path",
+    "schematic_caption",
+}
 
 
 def _error(path: str, code: str, message: str) -> dict[str, str]:
@@ -402,6 +410,44 @@ def preview_study_recipe(
                 "report_context must be an object",
             )
         )
+    else:
+        for key in sorted(set(report_context) - ALLOWED_REPORT_CONTEXT_KEYS):
+            errors.append(
+                _error(
+                    f"report_context.{key}",
+                    "unknown_field",
+                    f"unknown report context field: {key}",
+                )
+            )
+        for key, value in report_context.items():
+            if key in ALLOWED_REPORT_CONTEXT_KEYS and (
+                not isinstance(value, str)
+                or not value.strip()
+                or len(value) > 1_200
+            ):
+                errors.append(
+                    _error(
+                        f"report_context.{key}",
+                        "invalid_report_context",
+                        "report context values must contain 1 to 1,200 characters",
+                    )
+                )
+        schematic_path = report_context.get("schematic_path")
+        if isinstance(schematic_path, str):
+            portable = PurePosixPath(schematic_path)
+            if (
+                "\\" in schematic_path
+                or portable.is_absolute()
+                or ".." in portable.parts
+                or portable.suffix.lower() not in {".png", ".jpg", ".jpeg"}
+            ):
+                errors.append(
+                    _error(
+                        "report_context.schematic_path",
+                        "invalid_path",
+                        "schematic_path must be a portable PNG or JPEG workspace path",
+                    )
+                )
     try:
         canonical_recipe = _canonical_json(recipe)
     except (TypeError, ValueError):

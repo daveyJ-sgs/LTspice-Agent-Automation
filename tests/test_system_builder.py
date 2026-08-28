@@ -1,8 +1,10 @@
 import json
 import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -17,6 +19,7 @@ class FakeExperimentManager:
         self.defined: list[dict[str, object]] = []
         self.started: list[str] = []
         self.shutdown_called = False
+        self.jobs: dict[str, dict[str, object]] = {}
 
     def define_explicit(self, *args: object) -> dict[str, object]:
         experiment_id = f"mcp-experiment-test-{len(self.defined):04d}"
@@ -27,7 +30,8 @@ class FakeExperimentManager:
             "point_count": point_count,
         }
         self.defined.append({"args": args, "snapshot": snapshot})
-        return snapshot
+        self.jobs[experiment_id] = snapshot
+        return dict(snapshot)
 
     def start(self, experiment_id: str) -> dict[str, object]:
         self.started.append(experiment_id)
@@ -36,7 +40,21 @@ class FakeExperimentManager:
             for item in self.defined
             if item["snapshot"]["experiment_id"] == experiment_id
         )
-        return {**definition, "status": "queued"}
+        definition["status"] = "queued"
+        return dict(definition)
+
+    def snapshot(self, experiment_id: str) -> dict[str, object]:
+        if experiment_id not in self.jobs:
+            raise FileNotFoundError(experiment_id)
+        return dict(self.jobs[experiment_id])
+
+    def cancel(self, experiment_id: str) -> dict[str, object]:
+        self.jobs[experiment_id]["status"] = "cancelled"
+        return self.snapshot(experiment_id)
+
+    def resume(self, experiment_id: str) -> dict[str, object]:
+        self.jobs[experiment_id]["status"] = "queued"
+        return self.snapshot(experiment_id)
 
     def shutdown(self) -> None:
         self.shutdown_called = True
@@ -154,6 +172,45 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertEqual(response.json()["plan"]["point_count"], 8)
         self.assertEqual(response.json()["execution"]["total_run_count"], 16)
 
+    def test_preview_accepts_discrete_empirical_and_correlation_edits(self) -> None:
+        self._open()
+        recipe = self.client.get("/api/examples/mixed-signal-daq").json()
+        recipe["plan"]["variables"][0] = {
+            "name": "RAA1",
+            "distribution": "discrete",
+            "values": ["980", "1k"],
+            "weights": [1, 3],
+            "nominal": "1k",
+            "unit": "ohm",
+        }
+        recipe["plan"]["variables"][1] = {
+            "name": "RAA2",
+            "distribution": "empirical",
+            "values": [980, 1000, 1020],
+            "unit": "ohm",
+        }
+        recipe["plan"]["correlations"] = [recipe["plan"]["correlations"][1]]
+
+        mixed = self.client.post(
+            "/api/preview", json=recipe, headers=self._headers()
+        )
+        self.assertEqual(mixed.status_code, 200)
+        self.assertTrue(mixed.json()["valid"])
+
+        recipe = self.client.get("/api/examples/mixed-signal-daq").json()
+        recipe["plan"]["correlations"] = [
+            {
+                "variables": ["RAA1", "RAA2", "GAIN"],
+                "matrix": [[1, 0.5, 0.2], [0.5, 1, 0.1], [0.2, 0.1, 1]],
+            },
+            recipe["plan"]["correlations"][1],
+        ]
+        correlated = self.client.post(
+            "/api/preview", json=recipe, headers=self._headers()
+        )
+        self.assertEqual(correlated.status_code, 200)
+        self.assertTrue(correlated.json()["valid"])
+
     def test_freeze_rejects_stale_preview_and_publishes_only_the_plan(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
@@ -243,6 +300,142 @@ class SystemBuilderTests(unittest.TestCase):
             self.assertEqual(len(manager.started), 2)
             self.assertTrue(manager.shutdown_called)
 
+    def test_job_cancel_resume_and_finalize_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            recipe = self._workspace_recipe(workspace)
+            recipe["plan"]["sample_count"] = 1
+            manager = FakeExperimentManager()
+            app = system_builder.create_app(
+                workspace,
+                testing=True,
+                manager_factory=lambda _runs: manager,
+            )
+            with TestClient(app, base_url="http://testserver") as client:
+                client.get("/")
+                preview = client.post(
+                    "/api/preview", json=recipe, headers=self._headers()
+                ).json()
+                frozen = client.post(
+                    "/api/freeze",
+                    json={
+                        "recipe": recipe,
+                        "expected_recipe_sha256": preview["recipe"]["sha256"],
+                        "expected_plan_id": preview["plan"]["plan_id"],
+                    },
+                    headers=self._headers(),
+                ).json()
+                started = client.post(
+                    "/api/start",
+                    json={
+                        "launch_token": frozen["launch_token"],
+                        "recipe": recipe,
+                        "confirmed_run_count": frozen["execution"]["total_run_count"],
+                    },
+                    headers=self._headers(),
+                ).json()
+                experiment_id = started["experiments"][0]["experiment_id"]
+                cancelled = client.post(
+                    f"/api/jobs/{experiment_id}/cancel", headers=self._headers()
+                )
+                resumed = client.post(
+                    f"/api/jobs/{experiment_id}/resume", headers=self._headers()
+                )
+                inspected = client.get(f"/api/jobs/{experiment_id}")
+
+                self.assertEqual(cancelled.json()["status"], "cancelled")
+                self.assertTrue(cancelled.json()["resumable"])
+                self.assertEqual(resumed.status_code, 202)
+                self.assertEqual(inspected.json()["status"], "queued")
+
+                manager.jobs[experiment_id].update(
+                    status="completed",
+                    finished_points=2,
+                    passed_points=2,
+                    failed_points=0,
+                    all_passed=True,
+                )
+                experiment_dir = workspace / "runs" / experiment_id
+                experiment_dir.mkdir()
+                source = manager.defined[0]["args"][4]
+                (experiment_dir / "experiment_manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "experiment_id": experiment_id,
+                            "definition": {"point_plan": {"source": source}},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                with patch.object(
+                    system_builder.experiment_report,
+                    "build_experiment_report",
+                    return_value={"plot_count": 1, "trace_count": 2},
+                ) as build:
+                    finalized = client.post(
+                        f"/api/jobs/{experiment_id}/finalize",
+                        headers=self._headers(),
+                    )
+
+                self.assertEqual(finalized.status_code, 200)
+                self.assertEqual(finalized.json()["plot_count"], 1)
+                self.assertEqual(
+                    build.call_args.args[2]["title"],
+                    recipe["report_context"]["title"],
+                )
+
+    def test_completed_managed_job_is_postprocessed_without_browser_polling(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            experiment_id = "mcp-experiment-20260828-090000-000001-deadbeef"
+            experiment_dir = workspace / "runs" / experiment_id
+            experiment_dir.mkdir(parents=True)
+            (experiment_dir / "experiment_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "experiment_id": experiment_id,
+                        "definition": {
+                            "point_plan": {
+                                "source": {
+                                    "kind": "statistical",
+                                    "system_builder": {
+                                        "report_context": {"title": "Recovered DAQ"}
+                                    },
+                                }
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            manager = FakeExperimentManager()
+            manager.jobs[experiment_id] = {
+                "experiment_id": experiment_id,
+                "status": "completed",
+                "point_count": 2,
+                "finished_points": 2,
+                "passed_points": 2,
+                "failed_points": 0,
+                "all_passed": True,
+            }
+            with patch.object(
+                system_builder.experiment_report,
+                "build_experiment_report",
+                return_value={"plot_count": 1, "trace_count": 2},
+            ) as build:
+                app = system_builder.create_app(
+                    workspace,
+                    manager_factory=lambda _runs: manager,
+                )
+                with TestClient(app, base_url="http://127.0.0.1"):
+                    deadline = time.monotonic() + 2
+                    while build.call_count == 0 and time.monotonic() < deadline:
+                        time.sleep(0.02)
+
+            build.assert_called_once()
+            self.assertEqual(build.call_args.args[2]["title"], "Recovered DAQ")
+            self.assertTrue(manager.shutdown_called)
+
     def test_preview_rejects_non_json_and_oversized_bodies(self) -> None:
         self._open()
         wrong_type = self.client.post(
@@ -312,6 +505,12 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertIn("renderScopedErrors", javascript)
         self.assertIn('fetch("/api/freeze"', javascript)
         self.assertIn('fetch("/api/start"', javascript)
+        self.assertIn('mutateJob(job.experiment_id, "finalize")', javascript)
+        self.assertIn('mutateJob(job.experiment_id, "cancel")', javascript)
+        self.assertIn('mutateJob(job.experiment_id, "resume")', javascript)
+        self.assertIn('"discrete", "Discrete"', javascript)
+        self.assertIn('"empirical", "Empirical"', javascript)
+        self.assertIn('id="correlations"', html)
         self.assertIn('"Ω"', javascript)
         self.assertIn('"MΩ"', javascript)
         self.assertIn('"pF"', javascript)

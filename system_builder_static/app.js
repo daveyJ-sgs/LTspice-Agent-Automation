@@ -5,6 +5,8 @@ let previewTimer = null;
 let previewSequence = 0;
 let latestPreview = null;
 let frozenLaunch = null;
+let trackedJobs = new Map();
+let jobPollTimer = null;
 let variableDisplayUnits = new WeakMap();
 let cornerDisplayUnits = new WeakMap();
 
@@ -155,7 +157,7 @@ function invalidateFrozenPlan() {
   frozenLaunch = null;
   byId("freeze-button").disabled = true;
   byId("execution-confirmation").hidden = true;
-  byId("launch-result").hidden = true;
+  if (trackedJobs.size === 0) byId("launch-result").hidden = true;
   byId("execution-acknowledgement").checked = false;
   byId("execution-acknowledgement").disabled = false;
   byId("start-button").disabled = true;
@@ -178,6 +180,170 @@ function setRecipeField(input, object, key, numeric = false) {
   });
 }
 
+function textCell(value = "—") {
+  const cell = document.createElement("td");
+  cell.className = "not-applicable";
+  cell.textContent = value;
+  return cell;
+}
+
+function setDistribution(variable, distribution) {
+  const previousNominal = Number(variable.nominal);
+  const nominal = Number.isFinite(previousNominal) ? previousNominal : 1;
+  for (const key of ["minimum", "maximum", "sigma", "values", "weights", "csv_path", "column", "source"]) {
+    delete variable[key];
+  }
+  variable.distribution = distribution;
+  if (distribution === "gaussian" || distribution === "uniform") {
+    variable.nominal = nominal;
+    variable.minimum = nominal * 0.95;
+    variable.maximum = nominal * 1.05;
+    if (variable.minimum === variable.maximum) {
+      variable.minimum = nominal - 1;
+      variable.maximum = nominal + 1;
+    }
+    if (distribution === "gaussian") {
+      variable.sigma = Math.abs(variable.maximum - variable.minimum) / 6;
+    }
+  } else if (distribution === "discrete") {
+    const label = String(variable.nominal ?? nominal);
+    variable.values = [label];
+    variable.weights = [1];
+    variable.nominal = label;
+  } else {
+    delete variable.nominal;
+    variable.values = [nominal];
+  }
+}
+
+function removeCorrelationVariable(name) {
+  const groups = recipe.plan.correlations || [];
+  for (const group of groups) {
+    const index = (group.variables || []).indexOf(name);
+    if (index < 0) continue;
+    group.variables.splice(index, 1);
+    group.matrix.splice(index, 1);
+    for (const row of group.matrix) row.splice(index, 1);
+  }
+  recipe.plan.correlations = groups.filter((group) => group.variables.length >= 2);
+}
+
+function discreteEditor(variable, base) {
+  const editor = document.createElement("div");
+  editor.className = "distribution-editor";
+  const heading = document.createElement("div");
+  heading.className = "distribution-editor-heading";
+  const title = document.createElement("strong");
+  title.textContent = "Discrete choices";
+  const note = document.createElement("span");
+  note.textContent = "Relative weights are normalized by the plan engine.";
+  heading.append(title, note);
+  const rows = document.createElement("div");
+  rows.className = "choice-rows";
+  for (const [index, value] of (variable.values || []).entries()) {
+    const row = document.createElement("div");
+    row.className = "choice-row";
+    const valueInput = fieldInput(value, `${base}.values[${index}]`);
+    valueInput.placeholder = "SPICE value or category";
+    valueInput.addEventListener("input", () => {
+      const previous = variable.values[index];
+      variable.values[index] = valueInput.value;
+      if (variable.nominal === previous) variable.nominal = valueInput.value;
+      schedulePreview();
+    });
+    const weight = fieldInput(variable.weights?.[index] ?? 1, `${base}.weights[${index}]`);
+    weight.placeholder = "Weight";
+    setRecipeField(weight, variable.weights, index, true);
+    row.append(valueInput, weight, removeButton(`Remove discrete choice ${index + 1}`, () => {
+      const removed = variable.values.splice(index, 1)[0];
+      variable.weights.splice(index, 1);
+      if (variable.nominal === removed) variable.nominal = variable.values[0] ?? "";
+      populateVariables();
+      schedulePreview();
+    }));
+    rows.append(row);
+  }
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "compact-button";
+  add.textContent = "+ Choice";
+  add.addEventListener("click", () => {
+    let suffix = variable.values.length + 1;
+    while (variable.values.includes(`value_${suffix}`)) suffix += 1;
+    variable.values.push(`value_${suffix}`);
+    variable.weights.push(1);
+    populateVariables();
+    schedulePreview();
+  });
+  rows.append(add);
+  editor.append(heading, rows);
+  return editor;
+}
+
+function empiricalEditor(variable, base) {
+  const editor = document.createElement("div");
+  editor.className = "distribution-editor";
+  const heading = document.createElement("div");
+  heading.className = "distribution-editor-heading";
+  const title = document.createElement("strong");
+  title.textContent = "Measured population";
+  const mode = selectInput(
+    variable.csv_path || variable.source?.kind === "csv" ? "csv" : "inline",
+    [["inline", "Inline observations"], ["csv", "Workspace CSV"]],
+    `${base}.empirical_mode`,
+  );
+  mode.addEventListener("change", () => {
+    delete variable.source;
+    if (mode.value === "csv") {
+      delete variable.values;
+      variable.csv_path = "examples/measurements.csv";
+      variable.column = "value";
+    } else {
+      delete variable.csv_path;
+      delete variable.column;
+      variable.values = [1];
+    }
+    populateVariables();
+    schedulePreview();
+  });
+  heading.append(title, mode);
+  editor.append(heading);
+  if (mode.value === "csv") {
+    const fields = document.createElement("div");
+    fields.className = "compact-fields";
+    for (const [key, label] of [["csv_path", "Workspace-relative CSV"], ["column", "Column"]]) {
+      const wrapper = document.createElement("label");
+      const caption = document.createElement("span");
+      caption.textContent = label;
+      const input = fieldInput(variable[key] ?? variable.source?.[key] ?? "", `${base}.${key}`);
+      setRecipeField(input, variable, key);
+      wrapper.append(caption, input);
+      fields.append(wrapper);
+    }
+    editor.append(fields);
+  } else {
+    if (variable.source) delete variable.source;
+    const label = document.createElement("label");
+    const caption = document.createElement("span");
+    caption.textContent = "Observations (comma or line separated)";
+    const values = document.createElement("textarea");
+    values.dataset.path = `${base}.values`;
+    values.setAttribute("aria-label", `${base}.values`);
+    values.value = (variable.values || []).join("\n");
+    values.addEventListener("input", () => {
+      variable.values = values.value
+        .split(/[\n,]/)
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .map(numericValue);
+      schedulePreview();
+    });
+    label.append(caption, values);
+    editor.append(label);
+  }
+  return editor;
+}
+
 function populateVariables() {
   const variables = recipe.plan.variables || [];
   byId("variable-count").textContent = `${variables.length} variables`;
@@ -186,59 +352,190 @@ function populateVariables() {
     const row = document.createElement("tr");
     row.dataset.path = base;
     const name = fieldInput(variable.name, `${base}.name`, "variable-name");
-    setRecipeField(name, variable, "name");
+    name.addEventListener("input", () => {
+      const previous = variable.name;
+      variable.name = name.value;
+      for (const group of recipe.plan.correlations || []) {
+        group.variables = group.variables.map((entry) => entry === previous ? name.value : entry);
+      }
+      populateCorrelations();
+      schedulePreview();
+    });
     const distribution = selectInput(variable.distribution, [
       ["gaussian", "Gaussian"],
       ["uniform", "Uniform"],
+      ["discrete", "Discrete"],
+      ["empirical", "Empirical"],
     ], `${base}.distribution`, "distribution");
     distribution.addEventListener("change", () => {
-      variable.distribution = distribution.value;
-      if (distribution.value === "uniform") {
-        delete variable.sigma;
-      } else if (!(Number(variable.sigma) > 0)) {
-        variable.sigma = Math.abs(Number(variable.maximum) - Number(variable.minimum)) / 6 || 1;
+      if (distribution.value !== "gaussian") {
+        removeCorrelationVariable(variable.name);
       }
+      setDistribution(variable, distribution.value);
       populateVariables();
+      populateCorrelations();
       schedulePreview();
     });
-    const selectedUnit = variableDisplayUnits.get(variable) || defaultDisplayUnit(variable);
-    const factor = unitFactor(variable.unit, selectedUnit);
-    const nominal = scaledFieldInput(variable.nominal, factor, `${base}.nominal`);
-    setScaledRecipeField(nominal, variable, "nominal", factor);
-    const tolerance = scaledFieldInput(variable.sigma, factor, `${base}.sigma`);
-    tolerance.placeholder = distribution.value === "gaussian" ? "σ" : "n/a";
-    tolerance.disabled = distribution.value !== "gaussian";
-    if (!tolerance.disabled) setScaledRecipeField(tolerance, variable, "sigma", factor);
-    const minimum = scaledFieldInput(variable.minimum, factor, `${base}.minimum`);
-    setScaledRecipeField(minimum, variable, "minimum", factor);
-    const maximum = scaledFieldInput(variable.maximum, factor, `${base}.maximum`);
-    setScaledRecipeField(maximum, variable, "maximum", factor);
-    let unit = unitSelect(
-      variable,
-      variableDisplayUnits,
-      `${base}.display_unit`,
-      populateVariables,
-    );
+    const continuous = ["gaussian", "uniform"].includes(variable.distribution);
+    let nominal;
+    let tolerance;
+    let minimum;
+    let maximum;
+    let unit;
+    if (continuous) {
+      const selectedUnit = variableDisplayUnits.get(variable) || defaultDisplayUnit(variable);
+      const factor = unitFactor(variable.unit, selectedUnit);
+      nominal = scaledFieldInput(variable.nominal, factor, `${base}.nominal`);
+      setScaledRecipeField(nominal, variable, "nominal", factor);
+      tolerance = scaledFieldInput(variable.sigma, factor, `${base}.sigma`);
+      tolerance.placeholder = distribution.value === "gaussian" ? "σ" : "n/a";
+      tolerance.disabled = distribution.value !== "gaussian";
+      if (!tolerance.disabled) setScaledRecipeField(tolerance, variable, "sigma", factor);
+      minimum = scaledFieldInput(variable.minimum, factor, `${base}.minimum`);
+      setScaledRecipeField(minimum, variable, "minimum", factor);
+      maximum = scaledFieldInput(variable.maximum, factor, `${base}.maximum`);
+      setScaledRecipeField(maximum, variable, "maximum", factor);
+      unit = unitSelect(variable, variableDisplayUnits, `${base}.display_unit`, populateVariables);
+    } else if (variable.distribution === "discrete") {
+      nominal = selectInput(
+        variable.nominal,
+        (variable.values || []).map((value) => [value, value]),
+        `${base}.nominal`,
+      );
+      nominal.addEventListener("change", () => {
+        variable.nominal = nominal.value;
+        schedulePreview();
+      });
+    }
     if (!unit) {
       unit = fieldInput(variable.unit, `${base}.unit`, "unit");
       setRecipeField(unit, variable, "unit");
     }
-    for (const control of [name, distribution, nominal, tolerance, minimum, maximum, unit]) {
+    for (const control of [name, distribution]) {
       const cell = document.createElement("td");
       cell.append(control);
       row.append(cell);
     }
+    for (const control of [nominal, tolerance, minimum, maximum]) {
+      if (control) {
+        const cell = document.createElement("td");
+        cell.append(control);
+        row.append(cell);
+      } else {
+        row.append(textCell());
+      }
+    }
+    const unitCell = document.createElement("td");
+    unitCell.append(unit);
+    row.append(unitCell);
     const remove = document.createElement("td");
     remove.className = "remove-cell";
     remove.append(removeButton(`Remove variable ${variable.name || index + 1}`, () => {
+      removeCorrelationVariable(variable.name);
       variables.splice(index, 1);
       populateVariables();
+      populateCorrelations();
       schedulePreview();
     }));
     row.append(remove);
-    return row;
+    if (variable.distribution === "discrete" || variable.distribution === "empirical") {
+      const details = document.createElement("tr");
+      details.className = "distribution-detail-row";
+      details.dataset.path = base;
+      const cell = document.createElement("td");
+      cell.colSpan = 8;
+      cell.append(variable.distribution === "discrete"
+        ? discreteEditor(variable, base)
+        : empiricalEditor(variable, base));
+      details.append(cell);
+      return [row, details];
+    }
+    return [row];
   });
-  byId("variables").replaceChildren(...rows);
+  byId("variables").replaceChildren(...rows.flat());
+}
+
+function populateCorrelations() {
+  const groups = recipe.plan.correlations || (recipe.plan.correlations = []);
+  const variables = recipe.plan.variables || [];
+  const gaussian = variables.filter((variable) => variable.distribution === "gaussian");
+  const cards = groups.map((group, groupIndex) => {
+    const base = `plan.correlations[${groupIndex}]`;
+    const card = document.createElement("section");
+    card.className = "editor-card correlation-card";
+    card.dataset.path = base;
+    const heading = document.createElement("div");
+    heading.className = "editor-card-heading";
+    const title = document.createElement("strong");
+    title.textContent = `Correlation group ${groupIndex + 1}`;
+    heading.append(title, removeButton(`Remove correlation group ${groupIndex + 1}`, () => {
+      groups.splice(groupIndex, 1);
+      populateCorrelations();
+      schedulePreview();
+    }));
+    const choices = document.createElement("div");
+    choices.className = "correlation-variables";
+    for (const variable of variables) {
+      const label = document.createElement("label");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = (group.variables || []).includes(variable.name);
+      checkbox.disabled = variable.distribution !== "gaussian" && !checkbox.checked;
+      checkbox.addEventListener("change", () => {
+        const oldNames = [...group.variables];
+        const oldMatrix = group.matrix.map((row) => [...row]);
+        if (checkbox.checked) group.variables.push(variable.name);
+        else group.variables = group.variables.filter((name) => name !== variable.name);
+        group.matrix = group.variables.map((rowName, rowIndex) =>
+          group.variables.map((columnName, columnIndex) => {
+            if (rowName === columnName) return 1;
+            const oldRow = oldNames.indexOf(rowName);
+            const oldColumn = oldNames.indexOf(columnName);
+            return oldRow >= 0 && oldColumn >= 0 ? oldMatrix[oldRow][oldColumn] : 0;
+          }));
+        populateCorrelations();
+        schedulePreview();
+      });
+      label.append(checkbox, document.createTextNode(variable.name));
+      choices.append(label);
+    }
+    const matrix = document.createElement("div");
+    matrix.className = "correlation-matrix";
+    matrix.style.setProperty("--matrix-size", String(Math.max(1, group.variables.length + 1)));
+    matrix.append(document.createElement("span"));
+    for (const name of group.variables) {
+      const label = document.createElement("strong");
+      label.textContent = name;
+      matrix.append(label);
+    }
+    for (const [rowIndex, rowName] of group.variables.entries()) {
+      const label = document.createElement("strong");
+      label.textContent = rowName;
+      matrix.append(label);
+      for (const [columnIndex] of group.variables.entries()) {
+        const input = fieldInput(group.matrix?.[rowIndex]?.[columnIndex] ?? (rowIndex === columnIndex ? 1 : 0), `${base}.matrix[${rowIndex}][${columnIndex}]`);
+        input.disabled = columnIndex >= rowIndex;
+        if (columnIndex < rowIndex) {
+          input.addEventListener("input", () => {
+            const value = numericValue(input.value);
+            group.matrix[rowIndex][columnIndex] = value;
+            group.matrix[columnIndex][rowIndex] = value;
+            const mirrorPath = `${base}.matrix[${columnIndex}][${rowIndex}]`;
+            const mirror = [...matrix.querySelectorAll("input")]
+              .find((element) => element.dataset.path === mirrorPath);
+            if (mirror) mirror.value = input.value;
+            schedulePreview();
+          });
+        }
+        matrix.append(input);
+      }
+    }
+    card.append(heading, choices, matrix);
+    return card;
+  });
+  byId("correlations").replaceChildren(...(cards.length ? cards : [emptyEditor("No matched-variable correlation groups defined.")]));
+  const used = new Set(groups.flatMap((group) => group.variables || []));
+  byId("add-correlation").disabled = gaussian.filter((variable) => !used.has(variable.name)).length < 2;
 }
 
 function populateCorners() {
@@ -388,6 +685,7 @@ function populateRecipeControls() {
   byId("seed").value = recipe.plan.seed;
   byId("sampling-method").value = recipe.plan.sampling_method || "independent";
   populateVariables();
+  populateCorrelations();
   populateCorners();
   populateRequirements();
 }
@@ -413,7 +711,8 @@ function renderErrors(errors) {
 
 function renderScopedErrors(errors) {
   const scopes = [
-    ["variable-errors", ["plan.variables", "plan.correlations"]],
+    ["variable-errors", ["plan.variables"]],
+    ["correlation-errors", ["plan.correlations"]],
     ["corner-errors", ["plan.corner_axes"]],
     ["requirement-errors", ["experiments"]],
   ];
@@ -534,6 +833,128 @@ function reportLink(url, label = "Open report ↗") {
   return link;
 }
 
+function jobActionButton(label, action, className = "compact-button") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.textContent = label;
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await action();
+    } catch (error) {
+      renderHistoryErrors([{path: "job action", message: error.message}]);
+    } finally {
+      button.disabled = false;
+    }
+  });
+  return button;
+}
+
+async function mutateJob(experimentId, action) {
+  const response = await fetch(`/api/jobs/${encodeURIComponent(experimentId)}/${action}`, {
+    method: "POST",
+    headers: {"X-LTspice-System-Builder": "1"},
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error?.message || `${action} failed`);
+  return result;
+}
+
+function renderTrackedJobs() {
+  const container = byId("launch-result");
+  if (trackedJobs.size === 0) {
+    container.hidden = true;
+    container.replaceChildren();
+    return;
+  }
+  const title = document.createElement("h3");
+  title.textContent = "Durable local execution";
+  const cards = [...trackedJobs.values()].map((job) => {
+    const card = document.createElement("div");
+    card.className = "tracked-job";
+    const heading = document.createElement("div");
+    const identity = document.createElement("strong");
+    identity.textContent = String(job.name || "experiment").toUpperCase();
+    const status = document.createElement("span");
+    status.className = `job-status ${statusClass(job.status)}`;
+    status.textContent = job.finalizing ? "building report" : job.status;
+    heading.append(identity, status);
+    const progress = document.createElement("div");
+    progress.className = "progress-track";
+    const bar = document.createElement("span");
+    const finished = Number(job.finished_points || 0);
+    const total = Number(job.point_count || 0);
+    bar.style.width = `${total ? Math.min(100, finished / total * 100) : 0}%`;
+    progress.append(bar);
+    const detail = document.createElement("small");
+    detail.textContent = `${finished}/${total} points · ${job.passed_points || 0} pass · ${job.failed_points || 0} fail`;
+    const id = document.createElement("code");
+    id.textContent = job.experiment_id;
+    const actions = document.createElement("div");
+    actions.className = "job-actions";
+    if (["queued", "running", "cancelling"].includes(job.status)) {
+      actions.append(jobActionButton("Cancel", async () => {
+        trackedJobs.set(job.experiment_id, {...job, ...await mutateJob(job.experiment_id, "cancel")});
+        renderTrackedJobs();
+        scheduleJobPoll(250);
+      }));
+    }
+    if (job.status === "cancelled") {
+      actions.append(jobActionButton("Resume unfinished", async () => {
+        trackedJobs.set(job.experiment_id, {...job, ...await mutateJob(job.experiment_id, "resume")});
+        renderTrackedJobs();
+        scheduleJobPoll(250);
+      }));
+    }
+    if (job.report_url) actions.append(reportLink(job.report_url));
+    if (job.postprocess_error) {
+      const error = document.createElement("span");
+      error.className = "job-error";
+      error.textContent = job.postprocess_error;
+      actions.append(error);
+    }
+    card.append(heading, progress, detail, id, actions);
+    return card;
+  });
+  container.replaceChildren(title, ...cards);
+  container.hidden = false;
+}
+
+async function refreshTrackedJob(job) {
+  const response = await fetch(`/api/jobs/${encodeURIComponent(job.experiment_id)}`);
+  const current = await response.json();
+  if (!response.ok) throw new Error(current.error?.message || "Job status could not be read");
+  const updated = {
+    ...job,
+    ...current,
+    finalizing: current.status === "completed"
+      && !current.report_available
+      && current.postprocess?.state !== "failed",
+    postprocess_error: current.postprocess?.error || null,
+  };
+  trackedJobs.set(job.experiment_id, updated);
+}
+
+async function pollTrackedJobs() {
+  jobPollTimer = null;
+  try {
+    await Promise.all([...trackedJobs.values()].map(refreshTrackedJob));
+    renderTrackedJobs();
+    await loadHistory(false);
+  } catch (error) {
+    renderHistoryErrors([{path: "durable execution", message: error.message}]);
+  }
+  if ([...trackedJobs.values()].some((job) => ["defined", "queued", "running", "cancelling"].includes(job.status) || job.finalizing)) {
+    scheduleJobPoll(1000);
+  }
+}
+
+function scheduleJobPoll(delay = 1000) {
+  window.clearTimeout(jobPollTimer);
+  jobPollTimer = window.setTimeout(pollTrackedJobs, delay);
+}
+
 function renderHistory(result) {
   byId("history-total").textContent = result.summary.total_jobs.toLocaleString();
   byId("history-active").textContent = result.summary.active_jobs.toLocaleString();
@@ -572,6 +993,24 @@ function renderHistory(result) {
     details.textContent = `${job.finished_points}/${job.point_count} points · ${job.passed_points} pass · ${job.failed_points} fail`;
     bottom.append(details);
     if (job.report_url) bottom.append(reportLink(job.report_url));
+    if (["queued", "running", "cancelling"].includes(job.status)) {
+      bottom.append(jobActionButton("Cancel", async () => {
+        trackedJobs.set(job.experiment_id, {name: "recovered", ...job, ...await mutateJob(job.experiment_id, "cancel")});
+        renderTrackedJobs();
+        scheduleJobPoll(250);
+      }));
+    } else if (job.status === "cancelled") {
+      bottom.append(jobActionButton("Resume unfinished", async () => {
+        trackedJobs.set(job.experiment_id, {name: "resumed", ...job, ...await mutateJob(job.experiment_id, "resume")});
+        renderTrackedJobs();
+        scheduleJobPoll(250);
+      }));
+    } else if (job.status === "completed" && !job.report_url) {
+      bottom.append(jobActionButton("Build report", async () => {
+        await mutateJob(job.experiment_id, "finalize");
+        await loadHistory();
+      }));
+    }
 
     const id = document.createElement("code");
     id.textContent = job.experiment_id;
@@ -579,6 +1018,13 @@ function renderHistory(result) {
     return row;
   });
   byId("job-history").replaceChildren(...(jobs.length ? jobs : [emptyHistory("No durable experiments found.")]));
+  for (const job of result.jobs.filter((item) => ["queued", "running", "cancelling"].includes(item.status))) {
+    if (!trackedJobs.has(job.experiment_id)) trackedJobs.set(job.experiment_id, {name: "recovered", ...job});
+  }
+  if ([...trackedJobs.values()].some((job) => ["queued", "running", "cancelling"].includes(job.status))) {
+    renderTrackedJobs();
+    scheduleJobPoll();
+  }
 
   const studies = result.studies.map((study) => {
     const row = document.createElement("div");
@@ -622,10 +1068,12 @@ function renderHistoryErrors(errors) {
   container.hidden = false;
 }
 
-async function loadHistory() {
+async function loadHistory(showBusy = true) {
   const button = byId("refresh-history");
-  button.disabled = true;
-  button.textContent = "Refreshing…";
+  if (showBusy) {
+    button.disabled = true;
+    button.textContent = "Refreshing…";
+  }
   try {
     const response = await fetch("/api/history?limit=12");
     const result = await response.json();
@@ -634,8 +1082,10 @@ async function loadHistory() {
   } catch (error) {
     renderHistoryErrors([{path: "workspace", message: error.message}]);
   } finally {
-    button.disabled = false;
-    button.textContent = "Refresh status";
+    if (showBusy) {
+      button.disabled = false;
+      button.textContent = "Refresh status";
+    }
   }
 }
 
@@ -717,17 +1167,17 @@ async function freezePlan() {
 }
 
 function renderLaunchResult(result) {
-  const container = byId("launch-result");
-  const title = document.createElement("h3");
-  title.textContent = "Durable study queued";
-  const list = document.createElement("ul");
   for (const experiment of result.experiments) {
-    const item = document.createElement("li");
-    item.textContent = `${experiment.name.toUpperCase()} · ${experiment.point_count} points · ${experiment.experiment_id}`;
-    list.append(item);
+    trackedJobs.set(experiment.experiment_id, {
+      ...experiment,
+      finished_points: 0,
+      passed_points: 0,
+      failed_points: 0,
+      report_available: false,
+    });
   }
-  container.replaceChildren(title, list);
-  container.hidden = false;
+  renderTrackedJobs();
+  scheduleJobPoll(250);
 }
 
 async function startStudy() {
@@ -804,6 +1254,20 @@ byId("add-variable").addEventListener("click", () => {
     unit: "",
   });
   populateVariables();
+  populateCorrelations();
+  schedulePreview();
+});
+byId("add-correlation").addEventListener("click", () => {
+  if (!recipe) return;
+  const groups = recipe.plan.correlations || (recipe.plan.correlations = []);
+  const used = new Set(groups.flatMap((group) => group.variables || []));
+  const available = (recipe.plan.variables || [])
+    .filter((variable) => variable.distribution === "gaussian" && !used.has(variable.name))
+    .slice(0, 2)
+    .map((variable) => variable.name);
+  if (available.length < 2) return;
+  groups.push({variables: available, matrix: [[1, 0], [0, 1]]});
+  populateCorrelations();
   schedulePreview();
 });
 byId("add-corner").addEventListener("click", () => {

@@ -141,6 +141,13 @@ def workspace_history(workspace: Path, *, limit: int = 12) -> dict[str, object]:
             )
             finished_points = min(point_count, finished_points)
             indexed_record = indexed.get(experiment_id, {})
+            definition = manifest.get("definition")
+            point_plan = (
+                definition.get("point_plan")
+                if isinstance(definition, dict)
+                else None
+            )
+            source = point_plan.get("source") if isinstance(point_plan, dict) else None
             report_path = experiment_dir / "report.html"
             report_available = report_path.is_file() and not report_path.is_symlink()
             jobs.append(
@@ -167,7 +174,8 @@ def workspace_history(workspace: Path, *, limit: int = 12) -> dict[str, object]:
                         if isinstance(manifest.get("definition"), dict)
                         else "independent",
                     ),
-                    "statistical": bool(indexed_record.get("statistical", False)),
+                    "statistical": bool(indexed_record.get("statistical", False))
+                    or (isinstance(source, dict) and source.get("kind") == "statistical"),
                     "observed_yield": indexed_record.get("observed_yield"),
                     "indexed": experiment_id in indexed,
                     "report_available": report_available,
