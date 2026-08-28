@@ -134,9 +134,19 @@ validated automatically against the existing engine, with field-scoped errors.
 Preview is pure: it does not publish a plan, create a run directory, or start
 LTspice.
 
-GUI-B1 supports Gaussian and uniform continuous-variable editing. Discrete and
-empirical definitions remain portable through recipe load/save but are not yet
-expanded into dedicated visual editors.
+GUI-B2 adds engineering-unit selectors for capacitance (`pF`, `nF`, `µF`) and
+resistance (`Ω`, `kΩ`, `MΩ`). These are display and entry choices only: the
+portable recipe and immutable plan retain canonical SI values, so changing a
+selector without changing the physical value preserves the plan identity.
+After a valid preview, **Create immutable plan** publishes the content-addressed
+plan but does not run LTspice. A separate acknowledgement exposes **Start local
+qualification**, which launches the recipe's paired analyses through the same
+durable experiment manager used by the MCP. Editing the recipe invalidates the
+confirmation, and repeated Start requests cannot duplicate the launch.
+
+GUI-B1/B2 support Gaussian and uniform continuous-variable editing. Discrete
+and empirical definitions remain portable through recipe load/save but are not
+yet expanded into dedicated visual editors.
 
 GUI-A2 adds a read-only workspace below the recipe preview. It reads current
 durable-job progress directly from experiment manifests, reports whether the
@@ -161,7 +171,10 @@ make system-builder
 The application opens the default browser on a random `127.0.0.1` port. It
 uses a session cookie, same-origin mutation checks, a strict content-security
 policy, bounded JSON bodies, and workspace-confined regular inputs and
-evidence. Remote execution remains disabled. The bundled reference recipe is
+evidence. Local jobs write durable manifests and evidence beneath `runs/`; the
+System Builder process must remain running while its worker is active, while a
+later restart can recover unfinished jobs through the existing durable engine.
+Remote execution remains disabled. The bundled reference recipe is
 [`examples/mixed_signal_daq.ltstudy.json`](examples/mixed_signal_daq.ltstudy.json).
 
 Its acceptance test proves that the human-authored DAQ recipe and the existing

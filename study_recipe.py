@@ -452,3 +452,74 @@ def preview_study_recipe(
         },
         "experiments": experiment_previews,
     }
+
+
+def publish_study_recipe_plan(
+    recipe: object,
+    workspace_root: Path,
+    expected_recipe_sha256: str,
+    expected_plan_id: str,
+) -> tuple[dict[str, object], statistical_engine.StatisticalPlanResult]:
+    """Revalidate and publish exactly the plan identified by Preview."""
+    preview = preview_study_recipe(recipe, workspace_root)
+    if not preview.get("valid"):
+        raise ValueError("study recipe is not valid")
+    preview_recipe = preview["recipe"]
+    preview_plan = preview["plan"]
+    assert isinstance(preview_recipe, dict)
+    assert isinstance(preview_plan, dict)
+    if preview_recipe.get("sha256") != expected_recipe_sha256:
+        raise ValueError("recipe changed after its last valid preview")
+    if preview_plan.get("plan_id") != expected_plan_id:
+        raise ValueError("resolved plan changed after its last valid preview")
+    assert isinstance(recipe, dict)
+    definition = recipe["plan"]
+    assert isinstance(definition, dict)
+    plan = statistical_engine.build_statistical_plan(
+        definition["variables"],  # type: ignore[arg-type]
+        definition["sample_count"],  # type: ignore[arg-type]
+        definition["seed"],  # type: ignore[arg-type]
+        definition.get("correlations"),  # type: ignore[arg-type]
+        definition.get("corner_axes"),  # type: ignore[arg-type]
+        definition.get("corner_aggregate", False),  # type: ignore[arg-type]
+        source_root=workspace_root,
+        sampling_method=definition.get("sampling_method", "independent"),  # type: ignore[arg-type]
+    )
+    published = statistical_engine.save_statistical_plan(
+        workspace_root / "runs", plan
+    )
+    if published["plan_id"] != expected_plan_id:
+        raise ValueError("published plan does not match the previewed plan")
+    return preview, published
+
+
+def load_recipe_experiments(
+    recipe: object,
+    workspace_root: Path,
+) -> list[dict[str, object]]:
+    """Return validated experiment definitions with confined netlist text."""
+    preview = preview_study_recipe(recipe, workspace_root)
+    if not preview.get("valid"):
+        raise ValueError("study recipe is not valid")
+    assert isinstance(recipe, dict)
+    experiments = recipe["experiments"]
+    assert isinstance(experiments, list)
+    resolved: list[dict[str, object]] = []
+    for index, experiment in enumerate(experiments):
+        assert isinstance(experiment, dict)
+        path, error = _confined_file(
+            workspace_root,
+            experiment["netlist_path"],
+            f"experiments[{index}].netlist_path",
+        )
+        if error is not None or path is None:
+            raise ValueError("experiment netlist is no longer available")
+        resolved.append(
+            {
+                "name": experiment["name"],
+                "filename": experiment["filename"],
+                "netlist_template": path.read_text(encoding="utf-8"),
+                "waveform_analyses": experiment["waveform_analyses"],
+            }
+        )
+    return resolved

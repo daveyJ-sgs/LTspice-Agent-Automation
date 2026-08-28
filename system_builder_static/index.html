@@ -34,7 +34,7 @@
   <main>
     <section class="tool-intro">
       <div>
-        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-B1</p>
+        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-B2</p>
         <h1>1 MHz acquisition-channel qualification</h1>
         <p class="intro-copy">Configure and inspect a deterministic AC/transient tolerance study. Preview resolves the plan without launching LTspice.</p>
       </div>
@@ -60,7 +60,7 @@
       </div>
       <div>
         <span class="label">Current action</span>
-        <strong>Edit + preview</strong>
+        <strong>Edit → freeze → confirm</strong>
       </div>
     </section>
 
@@ -172,6 +172,37 @@
             </div>
           </div>
           <div id="experiments" class="experiment-list"></div>
+
+          <div class="execution-actions">
+            <button id="freeze-button" class="primary-button" type="button" disabled>Create immutable plan</button>
+            <p>Freezing writes one content-addressed plan. It does not launch LTspice.</p>
+          </div>
+
+          <section id="execution-confirmation" class="execution-confirmation" hidden>
+            <div class="subsection-heading">
+              <div>
+                <p class="step">EXECUTION CONFIRMATION</p>
+                <h3>Local LTspice workload</h3>
+              </div>
+              <span class="status-pill valid">Frozen</span>
+            </div>
+            <dl class="confirmation-grid">
+              <div><dt>Plan</dt><dd id="frozen-plan-id">—</dd></div>
+              <div><dt>Points</dt><dd id="confirm-points">—</dd></div>
+              <div><dt>Analyses</dt><dd id="confirm-experiments">—</dd></div>
+              <div><dt>Total runs</dt><dd id="confirm-runs">—</dd></div>
+              <div><dt>Concurrency</dt><dd id="confirm-concurrency">—</dd></div>
+              <div><dt>Evidence root</dt><dd>runs/</dd></div>
+            </dl>
+            <code id="frozen-artifact" class="artifact-path">—</code>
+            <label class="execution-check">
+              <input id="execution-acknowledgement" type="checkbox">
+              <span>I understand this will launch LTspice locally and write durable evidence.</span>
+            </label>
+            <button id="start-button" class="danger-button" type="button" disabled>Start local study</button>
+          </section>
+
+          <section id="launch-result" class="launch-result" aria-live="polite" hidden></section>
         </article>
 
         <article class="panel circuit-panel">

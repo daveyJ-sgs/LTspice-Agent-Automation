@@ -3,9 +3,17 @@
 let recipe = null;
 let previewTimer = null;
 let previewSequence = 0;
+let latestPreview = null;
+let frozenLaunch = null;
+let variableDisplayUnits = new WeakMap();
+let cornerDisplayUnits = new WeakMap();
 
 const byId = (id) => document.getElementById(id);
 const THEME_KEY = "ltspice-system-builder-theme";
+const UNIT_CHOICES = {
+  F: [["pF", "pF", 1e-12], ["nF", "nF", 1e-9], ["uF", "µF", 1e-6]],
+  ohm: [["ohm", "Ω", 1], ["kohm", "kΩ", 1e3], ["Mohm", "MΩ", 1e6]],
+};
 
 function preferredTheme() {
   try {
@@ -41,6 +49,63 @@ function numericValue(value) {
   if (value.trim() === "") return "";
   const number = Number(value);
   return Number.isFinite(number) ? number : value;
+}
+
+function defaultDisplayUnit(item) {
+  const choices = UNIT_CHOICES[item.unit];
+  if (!choices) return null;
+  const magnitude = Math.abs(Number(item.nominal ?? item.values?.[0]?.value ?? 0));
+  if (item.unit === "F") {
+    if (magnitude >= 1e-6) return "uF";
+    if (magnitude >= 1e-9) return "nF";
+    return "pF";
+  }
+  if (magnitude >= 1e6) return "Mohm";
+  if (magnitude >= 1e3) return "kohm";
+  return "ohm";
+}
+
+function unitFactor(canonicalUnit, displayUnit) {
+  const choice = (UNIT_CHOICES[canonicalUnit] || []).find(([value]) => value === displayUnit);
+  return choice ? choice[2] : 1;
+}
+
+function displayValue(baseValue, factor) {
+  const number = Number(baseValue);
+  if (!Number.isFinite(number)) return baseValue ?? "";
+  return Number((number / factor).toPrecision(9)).toString();
+}
+
+function scaledFieldInput(baseValue, factor, path) {
+  return fieldInput(displayValue(baseValue, factor), path);
+}
+
+function setScaledRecipeField(input, object, key, factor) {
+  input.addEventListener("input", () => {
+    const parsed = numericValue(input.value);
+    object[key] = typeof parsed === "number"
+      ? Number((parsed * factor).toPrecision(15))
+      : parsed;
+    schedulePreview();
+  });
+}
+
+function unitSelect(item, displayUnits, path, onChange) {
+  const choices = UNIT_CHOICES[item.unit];
+  if (!choices) return null;
+  const selected = displayUnits.get(item) || defaultDisplayUnit(item);
+  displayUnits.set(item, selected);
+  const select = selectInput(
+    selected,
+    choices.map(([value, label]) => [value, label]),
+    path,
+    "unit-selector",
+  );
+  select.addEventListener("change", () => {
+    displayUnits.set(item, select.value);
+    onChange();
+  });
+  return select;
 }
 
 function fieldInput(value, path, className = "") {
@@ -85,8 +150,20 @@ function removeButton(label, handler) {
   return button;
 }
 
+function invalidateFrozenPlan() {
+  latestPreview = null;
+  frozenLaunch = null;
+  byId("freeze-button").disabled = true;
+  byId("execution-confirmation").hidden = true;
+  byId("launch-result").hidden = true;
+  byId("execution-acknowledgement").checked = false;
+  byId("execution-acknowledgement").disabled = false;
+  byId("start-button").disabled = true;
+}
+
 function schedulePreview() {
   if (!recipe) return;
+  invalidateFrozenPlan();
   window.clearTimeout(previewTimer);
   const status = byId("preview-status");
   status.className = "status-pill idle preview-pending";
@@ -124,18 +201,28 @@ function populateVariables() {
       populateVariables();
       schedulePreview();
     });
-    const nominal = fieldInput(variable.nominal, `${base}.nominal`);
-    setRecipeField(nominal, variable, "nominal", true);
-    const tolerance = fieldInput(variable.sigma, `${base}.sigma`);
+    const selectedUnit = variableDisplayUnits.get(variable) || defaultDisplayUnit(variable);
+    const factor = unitFactor(variable.unit, selectedUnit);
+    const nominal = scaledFieldInput(variable.nominal, factor, `${base}.nominal`);
+    setScaledRecipeField(nominal, variable, "nominal", factor);
+    const tolerance = scaledFieldInput(variable.sigma, factor, `${base}.sigma`);
     tolerance.placeholder = distribution.value === "gaussian" ? "σ" : "n/a";
     tolerance.disabled = distribution.value !== "gaussian";
-    if (!tolerance.disabled) setRecipeField(tolerance, variable, "sigma", true);
-    const minimum = fieldInput(variable.minimum, `${base}.minimum`);
-    setRecipeField(minimum, variable, "minimum", true);
-    const maximum = fieldInput(variable.maximum, `${base}.maximum`);
-    setRecipeField(maximum, variable, "maximum", true);
-    const unit = fieldInput(variable.unit, `${base}.unit`, "unit");
-    setRecipeField(unit, variable, "unit");
+    if (!tolerance.disabled) setScaledRecipeField(tolerance, variable, "sigma", factor);
+    const minimum = scaledFieldInput(variable.minimum, factor, `${base}.minimum`);
+    setScaledRecipeField(minimum, variable, "minimum", factor);
+    const maximum = scaledFieldInput(variable.maximum, factor, `${base}.maximum`);
+    setScaledRecipeField(maximum, variable, "maximum", factor);
+    let unit = unitSelect(
+      variable,
+      variableDisplayUnits,
+      `${base}.display_unit`,
+      populateVariables,
+    );
+    if (!unit) {
+      unit = fieldInput(variable.unit, `${base}.unit`, "unit");
+      setRecipeField(unit, variable, "unit");
+    }
     for (const control of [name, distribution, nominal, tolerance, minimum, maximum, unit]) {
       const cell = document.createElement("td");
       cell.append(control);
@@ -172,7 +259,7 @@ function populateCorners() {
     }));
     const fields = document.createElement("div");
     fields.className = "compact-fields";
-    for (const [key, label] of [["name", "Axis name"], ["parameter", "Netlist parameter"], ["unit", "Unit"]]) {
+    for (const [key, label] of [["name", "Axis name"], ["parameter", "Netlist parameter"]]) {
       const wrapper = document.createElement("label");
       const caption = document.createElement("span");
       caption.textContent = label;
@@ -181,6 +268,18 @@ function populateCorners() {
       wrapper.append(caption, input);
       fields.append(wrapper);
     }
+    const unitWrapper = document.createElement("label");
+    const unitCaption = document.createElement("span");
+    unitCaption.textContent = "Display unit";
+    let unit = unitSelect(axis, cornerDisplayUnits, `${base}.display_unit`, populateCorners);
+    if (!unit) {
+      unit = fieldInput(axis.unit, `${base}.unit`);
+      setRecipeField(unit, axis, "unit");
+    }
+    unitWrapper.append(unitCaption, unit);
+    fields.append(unitWrapper);
+    const selectedUnit = cornerDisplayUnits.get(axis) || defaultDisplayUnit(axis);
+    const factor = unitFactor(axis.unit, selectedUnit);
     const values = document.createElement("div");
     values.className = "corner-values";
     for (const [valueIndex, entry] of (axis.values || []).entries()) {
@@ -191,9 +290,9 @@ function populateCorners() {
       const label = fieldInput(entry.name, `${valueBase}.name`);
       label.placeholder = "Corner label";
       setRecipeField(label, entry, "name");
-      const value = fieldInput(entry.value, `${valueBase}.value`);
+      const value = scaledFieldInput(entry.value, factor, `${valueBase}.value`);
       value.placeholder = "Value";
-      setRecipeField(value, entry, "value", true);
+      setScaledRecipeField(value, entry, "value", factor);
       row.append(label, value, removeButton(`Remove ${entry.name || "corner value"}`, () => {
         axis.values.splice(valueIndex, 1);
         populateCorners();
@@ -357,6 +456,8 @@ function clearPreviewMetrics() {
 function renderPreview(result) {
   const status = byId("preview-status");
   if (!result.valid) {
+    latestPreview = null;
+    byId("freeze-button").disabled = true;
     status.className = "status-pill invalid";
     status.textContent = "Needs attention";
     byId("preview-title").textContent = "Definition is not valid";
@@ -373,6 +474,8 @@ function renderPreview(result) {
   byId("metric-points").textContent = result.plan.point_count.toLocaleString();
   byId("metric-runs").textContent = result.execution.total_run_count.toLocaleString();
   byId("plan-id").textContent = result.plan.plan_id;
+  latestPreview = result;
+  byId("freeze-button").disabled = false;
   renderErrors([]);
   renderScopedErrors([]);
   byId("experiments").replaceChildren(...result.experiments.map((experiment) => {
@@ -567,6 +670,97 @@ async function preview() {
   }
 }
 
+async function freezePlan() {
+  if (!recipe || !latestPreview) return;
+  const button = byId("freeze-button");
+  button.disabled = true;
+  button.textContent = "Freezing…";
+  try {
+    const response = await fetch("/api/freeze", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({
+        recipe,
+        expected_recipe_sha256: latestPreview.recipe.sha256,
+        expected_plan_id: latestPreview.plan.plan_id,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      if (result.valid === false) {
+        renderPreview(result);
+        return;
+      }
+      throw new Error(result.error?.message || "Plan could not be frozen");
+    }
+    frozenLaunch = result;
+    byId("frozen-plan-id").textContent = result.plan.plan_id;
+    byId("confirm-points").textContent = result.plan.point_count.toLocaleString();
+    byId("confirm-experiments").textContent = result.execution.experiment_count.toLocaleString();
+    byId("confirm-runs").textContent = result.execution.total_run_count.toLocaleString();
+    byId("confirm-concurrency").textContent = result.execution.max_concurrency.toLocaleString();
+    byId("frozen-artifact").textContent = result.plan.artifact;
+    byId("execution-acknowledgement").checked = false;
+    byId("start-button").disabled = true;
+    byId("execution-confirmation").hidden = false;
+    byId("launch-result").hidden = true;
+    renderErrors([]);
+  } catch (error) {
+    renderErrors([{path: "freeze", message: error.message}]);
+    button.disabled = latestPreview === null;
+  } finally {
+    button.textContent = "Create immutable plan";
+  }
+}
+
+function renderLaunchResult(result) {
+  const container = byId("launch-result");
+  const title = document.createElement("h3");
+  title.textContent = "Durable study queued";
+  const list = document.createElement("ul");
+  for (const experiment of result.experiments) {
+    const item = document.createElement("li");
+    item.textContent = `${experiment.name.toUpperCase()} · ${experiment.point_count} points · ${experiment.experiment_id}`;
+    list.append(item);
+  }
+  container.replaceChildren(title, list);
+  container.hidden = false;
+}
+
+async function startStudy() {
+  if (!recipe || !frozenLaunch || !byId("execution-acknowledgement").checked) return;
+  const button = byId("start-button");
+  button.disabled = true;
+  button.textContent = "Queuing…";
+  try {
+    const response = await fetch("/api/start", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({
+        launch_token: frozenLaunch.launch_token,
+        recipe,
+        confirmed_run_count: frozenLaunch.execution.total_run_count,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Study could not be started");
+    renderLaunchResult(result);
+    byId("execution-acknowledgement").disabled = true;
+    button.textContent = "Study queued";
+    await loadHistory();
+  } catch (error) {
+    renderErrors([{path: "execution", message: error.message}]);
+    button.disabled = false;
+    button.textContent = "Start local study";
+  }
+}
+
 async function loadInitialState() {
   const [sessionResponse, recipeResponse] = await Promise.all([
     fetch("/api/session"),
@@ -575,6 +769,9 @@ async function loadInitialState() {
   if (!sessionResponse.ok || !recipeResponse.ok) throw new Error("Local session could not be established");
   const session = await sessionResponse.json();
   recipe = await recipeResponse.json();
+  variableDisplayUnits = new WeakMap();
+  cornerDisplayUnits = new WeakMap();
+  invalidateFrozenPlan();
   byId("workspace").textContent = session.workspace;
   byId("workspace").title = session.workspace;
   populateRecipeControls();
@@ -583,6 +780,11 @@ async function loadInitialState() {
 }
 
 byId("preview-button").addEventListener("click", preview);
+byId("freeze-button").addEventListener("click", freezePlan);
+byId("execution-acknowledgement").addEventListener("change", () => {
+  byId("start-button").disabled = !byId("execution-acknowledgement").checked;
+});
+byId("start-button").addEventListener("click", startStudy);
 for (const id of ["sample-count", "seed", "sampling-method"]) {
   byId(id).addEventListener("input", schedulePreview);
 }
@@ -624,6 +826,9 @@ byId("recipe-file").addEventListener("change", async (event) => {
   if (!file) return;
   try {
     recipe = JSON.parse(await file.text());
+    variableDisplayUnits = new WeakMap();
+    cornerDisplayUnits = new WeakMap();
+    invalidateFrozenPlan();
     populateRecipeControls();
     await preview();
   } catch (error) {

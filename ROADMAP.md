@@ -1088,16 +1088,44 @@ GUI-B1 verification gate:
   requirement add-remove cycles, a clean console, and restoration of the
   original valid definition
 
+#### System Builder GUI-B2: Confirmed local execution — complete
+
+- Added selectable engineering display units for capacitance (`pF`, `nF`,
+  `µF`) and resistance (`Ω`, `kΩ`, `MΩ`); conversions preserve canonical
+  SI recipe values and therefore preserve immutable-plan identity
+- Added a two-step execution boundary: a valid, current Preview can publish its
+  content-addressed immutable plan, then a separate explicit acknowledgement
+  can launch the confirmed LTspice run count
+- Recipe edits invalidate an existing confirmation, stale preview hashes and
+  plan IDs fail closed, and the session-bound launch token makes repeated Start
+  requests idempotent
+- Routed launches through the existing durable MCP experiment manager and plan
+  source seam, creating one independently recoverable experiment for each
+  recipe analysis while keeping remote execution disabled
+
+GUI-B2 verification gate:
+
+- Unit-equivalence browser checks prove `100 pF` / `0.1 nF` and `1 kΩ` /
+  `0.001 MΩ` resolve to the same plan identity
+- A reduced real DAQ qualification froze
+  `statistical-plan-93e8831035f92541` and completed four LTspice runs: AC
+  experiment `mcp-experiment-20260828-070754-852348-53e1e0de` and transient
+  experiment `mcp-experiment-20260828-070754-853099-288b3384`, each passing
+  both ADC-load corners
+- Both experiments retain RAW, log, point/run manifests, JSON, CSV, statistical
+  summaries, worst cases, sensitivities, and offline HTML reports
+- Tests cover stale freeze rejection, plan-only publication, run-count
+  confirmation, paired launch, idempotency, and clean manager shutdown
+
 Next System Builder slices:
 
-1. GUI-B2 — explicit recipe-to-immutable-plan creation and confirmed local
-   execution through the existing durable engine
-2. GUI-B3 — live progress, cancel, resume/recovery, and completed-report launch
-3. GUI-B4 — dedicated discrete/empirical variable editors and correlation
+1. GUI-B3 — live progress, cancel, resume/recovery, automatic post-processing,
+   and completed-report launch
+2. GUI-B4 — dedicated discrete/empirical variable editors and correlation
    controls
-4. GUI-C — optimization domains, objectives, constraints, Pareto results, and
+3. GUI-C — optimization domains, objectives, constraints, Pareto results, and
    finalist qualification
-5. GUI-D — Windows packaging and deliberately gated remote GitHub execution
+4. GUI-D — Windows packaging and deliberately gated remote GitHub execution
 
 ### Phase 5: Flagship portable mixed-signal DAQ/scope
 

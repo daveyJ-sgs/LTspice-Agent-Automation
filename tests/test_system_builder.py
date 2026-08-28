@@ -1,4 +1,5 @@
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,36 @@ import system_builder
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+class FakeExperimentManager:
+    def __init__(self) -> None:
+        self.defined: list[dict[str, object]] = []
+        self.started: list[str] = []
+        self.shutdown_called = False
+
+    def define_explicit(self, *args: object) -> dict[str, object]:
+        experiment_id = f"mcp-experiment-test-{len(self.defined):04d}"
+        point_count = len(args[2])
+        snapshot = {
+            "experiment_id": experiment_id,
+            "status": "defined",
+            "point_count": point_count,
+        }
+        self.defined.append({"args": args, "snapshot": snapshot})
+        return snapshot
+
+    def start(self, experiment_id: str) -> dict[str, object]:
+        self.started.append(experiment_id)
+        definition = next(
+            item["snapshot"]
+            for item in self.defined
+            if item["snapshot"]["experiment_id"] == experiment_id
+        )
+        return {**definition, "status": "queued"}
+
+    def shutdown(self) -> None:
+        self.shutdown_called = True
 
 
 class SystemBuilderTests(unittest.TestCase):
@@ -27,6 +58,19 @@ class SystemBuilderTests(unittest.TestCase):
             "origin": origin,
             "x-ltspice-system-builder": "1",
         }
+
+    def _workspace_recipe(self, root: Path) -> dict[str, object]:
+        recipe = json.loads(
+            (PROJECT_ROOT / "examples/mixed_signal_daq.ltstudy.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for experiment in recipe["experiments"]:
+            source = PROJECT_ROOT / experiment["netlist_path"]
+            target = root / source.name
+            shutil.copyfile(source, target)
+            experiment["netlist_path"] = source.name
+        return recipe
 
     def test_root_establishes_a_local_session_and_security_headers(self) -> None:
         response = self.client.get("/")
@@ -110,6 +154,95 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertEqual(response.json()["plan"]["point_count"], 8)
         self.assertEqual(response.json()["execution"]["total_run_count"], 16)
 
+    def test_freeze_rejects_stale_preview_and_publishes_only_the_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            recipe = self._workspace_recipe(workspace)
+            client = TestClient(
+                system_builder.create_app(workspace, testing=True),
+                base_url="http://testserver",
+            )
+            client.get("/")
+            preview = client.post(
+                "/api/preview", json=recipe, headers=self._headers()
+            ).json()
+            stale = client.post(
+                "/api/freeze",
+                json={
+                    "recipe": recipe,
+                    "expected_recipe_sha256": "0" * 64,
+                    "expected_plan_id": preview["plan"]["plan_id"],
+                },
+                headers=self._headers(),
+            )
+            frozen = client.post(
+                "/api/freeze",
+                json={
+                    "recipe": recipe,
+                    "expected_recipe_sha256": preview["recipe"]["sha256"],
+                    "expected_plan_id": preview["plan"]["plan_id"],
+                },
+                headers=self._headers(),
+            )
+
+            self.assertEqual(stale.status_code, 409)
+            self.assertEqual(stale.json()["error"]["code"], "preview_stale")
+            self.assertEqual(frozen.status_code, 200)
+            artifact = workspace / frozen.json()["plan"]["artifact"]
+            self.assertTrue(artifact.is_file())
+            self.assertEqual(list((workspace / "runs").glob("mcp-experiment-*")), [])
+
+    def test_start_requires_exact_confirmation_and_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            recipe = self._workspace_recipe(workspace)
+            recipe["plan"]["sample_count"] = 1
+            manager = FakeExperimentManager()
+            app = system_builder.create_app(
+                workspace,
+                testing=True,
+                manager_factory=lambda _runs: manager,
+            )
+            with TestClient(app, base_url="http://testserver") as client:
+                client.get("/")
+                preview = client.post(
+                    "/api/preview", json=recipe, headers=self._headers()
+                ).json()
+                frozen = client.post(
+                    "/api/freeze",
+                    json={
+                        "recipe": recipe,
+                        "expected_recipe_sha256": preview["recipe"]["sha256"],
+                        "expected_plan_id": preview["plan"]["plan_id"],
+                    },
+                    headers=self._headers(),
+                ).json()
+                payload = {
+                    "launch_token": frozen["launch_token"],
+                    "recipe": recipe,
+                    "confirmed_run_count": frozen["execution"]["total_run_count"],
+                }
+                wrong_count = client.post(
+                    "/api/start",
+                    json={**payload, "confirmed_run_count": 999},
+                    headers=self._headers(),
+                )
+                started = client.post(
+                    "/api/start", json=payload, headers=self._headers()
+                )
+                repeated = client.post(
+                    "/api/start", json=payload, headers=self._headers()
+                )
+
+            self.assertEqual(wrong_count.status_code, 409)
+            self.assertEqual(wrong_count.json()["error"]["code"], "run_count_changed")
+            self.assertEqual(started.status_code, 202)
+            self.assertEqual(repeated.status_code, 200)
+            self.assertEqual(started.json(), repeated.json())
+            self.assertEqual(len(manager.defined), 2)
+            self.assertEqual(len(manager.started), 2)
+            self.assertTrue(manager.shutdown_called)
+
     def test_preview_rejects_non_json_and_oversized_bodies(self) -> None:
         self._open()
         wrong_type = self.client.post(
@@ -177,7 +310,13 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertIn('id="requirements"', html)
         self.assertIn("schedulePreview", javascript)
         self.assertIn("renderScopedErrors", javascript)
-        self.assertNotIn('fetch("/api/start"', javascript)
+        self.assertIn('fetch("/api/freeze"', javascript)
+        self.assertIn('fetch("/api/start"', javascript)
+        self.assertIn('"Ω"', javascript)
+        self.assertIn('"MΩ"', javascript)
+        self.assertIn('"pF"', javascript)
+        self.assertIn("toPrecision(15)", javascript)
+        self.assertIn('id="execution-acknowledgement"', html)
         self.assertTrue((fonts / "LICENSE.txt").is_file())
         for name in system_builder.FONT_ASSETS:
             self.assertEqual((fonts / name).read_bytes()[:4], b"wOF2")
