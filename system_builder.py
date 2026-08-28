@@ -25,6 +25,12 @@ STATIC_ROOT = PROJECT_ROOT / "system_builder_static"
 EXAMPLE_RECIPE = PROJECT_ROOT / "examples/mixed_signal_daq.ltstudy.json"
 SESSION_COOKIE = "ltspice_system_builder_session"
 HOST_PATTERN = re.compile(r"(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?")
+FONT_ASSETS = {
+    "IBMPlexSans-Regular.woff2",
+    "IBMPlexSans-SemiBold.woff2",
+    "IBMPlexMono-Regular.woff2",
+    "IBMPlexMono-SemiBold.woff2",
+}
 
 
 def _json_error(status: int, code: str, message: str) -> JSONResponse:
@@ -124,6 +130,15 @@ def create_app(
     def javascript() -> FileResponse:
         return FileResponse(
             STATIC_ROOT / "app.js", media_type="text/javascript; charset=utf-8"
+        )
+
+    @app.get("/assets/fonts/{font_name}")
+    def font(font_name: str) -> Response:
+        if font_name not in FONT_ASSETS:
+            return _json_error(404, "font_not_found", "font asset was not found")
+        return FileResponse(
+            STATIC_ROOT / "fonts" / font_name,
+            media_type="font/woff2",
         )
 
     @app.get("/assets/daq-schematic.png")

@@ -12,20 +12,30 @@
       <span class="brand-mark" aria-hidden="true">SB</span>
       <span><strong>LTspice</strong> System Builder</span>
     </a>
-    <div class="security-state" title="Bound to this computer only">
-      <span class="status-dot" aria-hidden="true"></span>
-      Local only
+    <nav class="tool-nav" aria-label="System Builder sections">
+      <a href="#definition">Study setup</a>
+      <a href="#history">Workspace</a>
+    </nav>
+    <div class="header-actions">
+      <div class="security-state" title="Bound to this computer only">
+        <span class="status-dot" aria-hidden="true"></span>
+        Local only
+      </div>
+      <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch color theme" aria-pressed="false">
+        <span class="theme-icon" aria-hidden="true">◐</span>
+        <span id="theme-label">Light</span>
+      </button>
     </div>
   </header>
 
   <main>
-    <section class="hero">
+    <section class="tool-intro">
       <div>
-        <p class="eyebrow">GUI-A2 · SAFE STUDY WORKSPACE</p>
-        <h1>Define before<br>you simulate.</h1>
-        <p class="hero-copy">Turn a circuit study into a deterministic, reviewable plan. Preview expands samples, corners, analyses, and run cost without writing artifacts or launching LTspice.</p>
+        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-A2</p>
+        <h1>1 MHz acquisition-channel qualification</h1>
+        <p class="intro-copy">Configure and inspect a deterministic AC/transient tolerance study. Preview resolves the plan without launching LTspice.</p>
       </div>
-      <div class="hero-graphic" aria-label="Study flow">
+      <div class="workflow-rail" aria-label="Study flow">
         <div class="flow-node active">Recipe</div>
         <span>→</span>
         <div class="flow-node">Plan</div>
@@ -51,7 +61,7 @@
       </div>
     </section>
 
-    <section class="builder-grid">
+    <section id="definition" class="builder-grid">
       <article class="panel controls-panel">
         <div class="panel-heading">
           <div>

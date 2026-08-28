@@ -3,6 +3,30 @@
 let recipe = null;
 
 const byId = (id) => document.getElementById(id);
+const THEME_KEY = "ltspice-system-builder-theme";
+
+function preferredTheme() {
+  try {
+    const saved = window.localStorage.getItem(THEME_KEY);
+    if (["dark", "light"].includes(saved)) return saved;
+  } catch (_) {
+    // The system preference remains available if browser storage is disabled.
+  }
+  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+
+function applyTheme(theme) {
+  const light = theme === "light";
+  document.documentElement.dataset.theme = light ? "light" : "dark";
+  byId("theme-toggle").setAttribute("aria-pressed", String(light));
+  byId("theme-toggle").setAttribute(
+    "aria-label",
+    `Switch to ${light ? "dark" : "light"} mode`,
+  );
+  byId("theme-label").textContent = light ? "Dark" : "Light";
+}
+
+applyTheme(preferredTheme());
 
 function engineering(value, unit) {
   const number = Number(value);
@@ -307,6 +331,15 @@ byId("save-button").addEventListener("click", () => {
   URL.revokeObjectURL(link.href);
 });
 byId("refresh-history").addEventListener("click", loadHistory);
+byId("theme-toggle").addEventListener("click", () => {
+  const theme = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+  applyTheme(theme);
+  try {
+    window.localStorage.setItem(THEME_KEY, theme);
+  } catch (_) {
+    // Theme switching still works for this page when storage is disabled.
+  }
+});
 
 loadInitialState().catch((error) => {
   renderPreview({valid: false, errors: [{path: "$", message: error.message}]});

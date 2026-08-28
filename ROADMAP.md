@@ -1045,6 +1045,26 @@ GUI-A2 verification gate:
 - Real loopback HTTP verification opens the newest experiment report with its
   offline script policy and full body intact
 
+#### System Builder interface foundation — complete
+
+- Replaced the marketing-style hero and oversized typography with a compact
+  engineering-workbench masthead, project context, workflow rail, denser
+  controls, square panels, and measurement-first hierarchy
+- Added flat LTspice-red actions and progress traces while retaining restrained
+  blue for informational circuit state; removed every CSS gradient
+- Bundled IBM Plex Sans and IBM Plex Mono WOFF2 assets under the included SIL
+  Open Font License so the interface remains fully offline
+- Added persistent light and dark modes using only a local theme preference,
+  with explicit keyboard focus and responsive desktop/mobile layouts
+
+Interface verification gate:
+
+- Fixed font routes serve only the four allowlisted WOFF2 assets and reject
+  arbitrary paths
+- Tests require both theme definitions, local font signatures and license, no
+  remote style assets, and no gradients while preserving the complete System
+  Builder security and behavior suite
+
 Next System Builder slices:
 
 1. GUI-B — editable variables, corners, and requirements with create/start,

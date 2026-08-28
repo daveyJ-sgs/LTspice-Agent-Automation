@@ -124,6 +124,36 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertEqual(
             self.client.get("/assets/daq-schematic.png").status_code, 200
         )
+        font = self.client.get("/assets/fonts/IBMPlexMono-Regular.woff2")
+        self.assertEqual(font.status_code, 200)
+        self.assertEqual(font.headers["content-type"], "font/woff2")
+        self.assertEqual(
+            self.client.get("/assets/fonts/../../README.md").status_code,
+            404,
+        )
+
+    def test_engineering_theme_is_offline_and_gradient_free(self) -> None:
+        html = (PROJECT_ROOT / "system_builder_static/index.html").read_text(
+            encoding="utf-8"
+        )
+        css = (PROJECT_ROOT / "system_builder_static/app.css").read_text(
+            encoding="utf-8"
+        )
+        javascript = (PROJECT_ROOT / "system_builder_static/app.js").read_text(
+            encoding="utf-8"
+        )
+        fonts = PROJECT_ROOT / "system_builder_static/fonts"
+
+        self.assertIn('id="theme-toggle"', html)
+        self.assertIn('class="tool-intro"', html)
+        self.assertIn(':root[data-theme="light"]', css)
+        self.assertIn('font-family: "IBM Plex Mono"', css)
+        self.assertNotIn("gradient(", css.lower())
+        self.assertNotIn("https://", css)
+        self.assertIn("ltspice-system-builder-theme", javascript)
+        self.assertTrue((fonts / "LICENSE.txt").is_file())
+        for name in system_builder.FONT_ASSETS:
+            self.assertEqual((fonts / name).read_bytes()[:4], b"wOF2")
 
     def test_history_and_evidence_require_session_and_remain_confined(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

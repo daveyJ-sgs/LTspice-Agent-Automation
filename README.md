@@ -139,6 +139,11 @@ to its JSON, CSV, RAW, manifest, and plan evidence remain available through a
 session-protected, workspace-confined evidence route. Refresh never rebuilds an
 index, resumes a job, or launches LTspice.
 
+The interface uses locally bundled IBM Plex Sans and IBM Plex Mono, compact
+instrument-style layout, flat LTspice-red accents, and persistent light/dark
+themes. It loads no font, stylesheet, script, or telemetry service from the
+network.
+
 Install the optional GUI dependencies and launch the loopback-only application:
 
 ```bash
