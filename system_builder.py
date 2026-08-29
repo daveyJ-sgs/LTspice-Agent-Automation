@@ -302,6 +302,9 @@ def create_app(
         }
 
     def optimization_experiments() -> tuple[dict[str, dict[str, object]], dict[str, object], str]:
+        from examples.mixed_signal_daq_study import TRANSIENT_ANALYSES
+        from examples.optimize_mixed_signal_daq import AC_ANALYSES
+
         execution_recipe = load_study_recipe(EXAMPLE_RECIPE)
         definitions = load_recipe_experiments(execution_recipe, workspace)
         execution = execution_recipe.get("execution", {})
@@ -310,7 +313,11 @@ def create_app(
         experiments = {
             str(definition["name"]): {
                 "netlist_template": definition["netlist_template"],
-                "waveform_analyses": definition["waveform_analyses"],
+                "waveform_analyses": (
+                    AC_ANALYSES
+                    if definition["name"] == "ac"
+                    else TRANSIENT_ANALYSES
+                ),
                 "filename": definition["filename"],
                 "max_concurrency": execution.get("max_concurrency", 2),
                 "reuse_cache": execution.get("reuse_cache", False),
@@ -325,6 +332,30 @@ def create_app(
             separators=(",", ":"),
         ).encode("utf-8")
         return experiments, execution, hashlib.sha256(artifact).hexdigest()
+
+    def validate_optimization_experiments(
+        recipe: object, experiments: dict[str, dict[str, object]]
+    ) -> None:
+        if not isinstance(recipe, dict):
+            raise ValueError("optimization recipe must be an object")
+        selectors = [*recipe.get("objectives", []), *recipe.get("constraints", [])]
+        for selector in selectors:
+            if not isinstance(selector, dict):
+                raise ValueError("optimization selectors must be objects")
+            experiment_name = selector.get("experiment")
+            analysis_name = selector.get("analysis")
+            experiment = experiments.get(str(experiment_name))
+            analyses = experiment.get("waveform_analyses") if experiment else None
+            available = {
+                analysis.get("name")
+                for analysis in analyses
+                if isinstance(analysis, dict)
+            } if isinstance(analyses, list) else set()
+            if analysis_name not in available:
+                raise ValueError(
+                    f"analysis {experiment_name}.{analysis_name} is not defined by "
+                    "the paired circuit study"
+                )
 
     def optimization_job_payload(snapshot: dict[str, object]) -> dict[str, object]:
         experiments = snapshot.get("experiments", {})
@@ -681,6 +712,7 @@ def create_app(
             return JSONResponse(current, status_code=422)
         try:
             experiments, execution, execution_sha256 = optimization_experiments()
+            validate_optimization_experiments(recipe, experiments)
             preview_experiments = current["execution"]
             assert isinstance(preview_experiments, dict)
             if set(experiments) != set(preview_experiments["experiments"]):
@@ -820,6 +852,7 @@ def create_app(
             frozen["state"] = "starting"
             try:
                 experiments, _execution, execution_sha256 = optimization_experiments()
+                validate_optimization_experiments(recipe, experiments)
                 if execution_sha256 != frozen["execution_sha256"]:
                     raise ValueError(
                         "paired circuit analyses changed after plan publication"

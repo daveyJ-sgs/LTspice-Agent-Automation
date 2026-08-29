@@ -1259,13 +1259,16 @@ GUI-C2 verification gate:
 - A real local run published `optimization-plan-2b6f2d62d7ca7c14` and completed
   16 candidates across two ADC-load corners: 32 AC plus 32 transient LTspice
   runs
-- The durable job `optimization-job-3bec924d353585e0` completed both children
-  and produced optimization study `optimization-study-0be161f0785cfede`
+- The durable job `optimization-job-f0e5177d48f048e8` completed both children
+  and produced optimization study `optimization-study-c20e0818a4e2062a` with
+  14 feasible candidates, one Pareto candidate, and deterministic candidate 15
+  selected
 - Browser verification confirmed exact workload disclosure, separate launch
   acknowledgement, 64/64 progress, and passive recovery after a fresh load
 - Tests cover stale preview/workload rejection, acknowledgement enforcement,
-  idempotent Start, plan-only publication, cancellation, resume, discovery,
-  session/origin guards, and the static interaction contract
+  selector-to-analysis compatibility, idempotent Start, plan-only publication,
+  cancellation, resume, discovery, session/origin guards, and the static
+  interaction contract
 
 Next System Builder slices:
 

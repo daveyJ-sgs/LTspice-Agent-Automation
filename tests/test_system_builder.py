@@ -239,6 +239,41 @@ class SystemBuilderTests(unittest.TestCase):
             self.assertTrue((workspace / frozen.json()["plan"]["artifact"]).is_file())
             self.assertEqual(list((workspace / "runs").glob("optimization-job-*")), [])
 
+    def test_optimization_freeze_rejects_missing_selector_analysis(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            self._copy_optimization_netlists(workspace)
+            client = TestClient(
+                system_builder.create_app(workspace, testing=True),
+                base_url="http://testserver",
+            )
+            client.get("/")
+            recipe = client.get(
+                "/api/examples/mixed-signal-daq-optimization"
+            ).json()
+            preview = client.post(
+                "/api/optimization/preview", json=recipe, headers=self._headers()
+            ).json()
+            with patch(
+                "examples.optimize_mixed_signal_daq.AC_ANALYSES",
+                [{"name": "wrong_ac_analysis", "signal": "V(afe)"}],
+            ):
+                response = client.post(
+                    "/api/optimization/freeze",
+                    json={
+                        "recipe": recipe,
+                        "expected_recipe_sha256": preview["recipe"]["sha256"],
+                        "expected_plan_id": preview["plan"]["plan_id"],
+                        "expected_point_count": preview["plan"]["point_count"],
+                        "expected_total_run_count": preview["execution"]["total_run_count"],
+                    },
+                    headers=self._headers(),
+                )
+
+            self.assertEqual(response.status_code, 409)
+            self.assertIn("ac.analog_performance", response.json()["error"]["message"])
+            self.assertFalse((workspace / "runs/optimization-plans").exists())
+
     def test_optimization_start_requires_acknowledgement_and_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
