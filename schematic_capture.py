@@ -241,15 +241,40 @@ $descendants = $automationRoot.FindAll(
   [System.Windows.Automation.TreeScope]::Descendants,
   [System.Windows.Automation.Condition]::TrueCondition
 )
-$changeLogPresent = $false
+$changeLogElement = $null
 foreach ($element in $descendants) {
   if ($element.Current.Name -like "LTspice Tool Change Log:*") {
-    $changeLogPresent = $true
+    $changeLogElement = $element
     break
   }
 }
-if ($changeLogPresent) {
-  $keyboard.SendKeys("^{F4}")
+if ($null -ne $changeLogElement) {
+  try {
+    $windowPattern = $changeLogElement.GetCurrentPattern(
+      [System.Windows.Automation.WindowPattern]::Pattern
+    )
+    $windowPattern.Close()
+  } catch {
+    $closeCondition = [System.Windows.Automation.AndCondition]::new(
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::Button
+      ),
+      [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty,
+        "Close"
+      )
+    )
+    $closeButton = $changeLogElement.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      $closeCondition
+    )
+    if ($null -eq $closeButton) { throw "LTspice change-log close control is unavailable" }
+    $invokePattern = $closeButton.GetCurrentPattern(
+      [System.Windows.Automation.InvokePattern]::Pattern
+    )
+    $invokePattern.Invoke()
+  }
   Start-Sleep -Milliseconds 500
   $remaining = $automationRoot.FindAll(
     [System.Windows.Automation.TreeScope]::Descendants,
