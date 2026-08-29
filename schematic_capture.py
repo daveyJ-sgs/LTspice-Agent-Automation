@@ -206,13 +206,30 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
 using System;
+using System.Text;
 using System.Runtime.InteropServices;
 public static class NativeWindow {
+  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
   [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int command);
+  [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent, EnumWindowsProc callback, IntPtr data);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+  [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam);
+  public static int CloseChildrenContaining(IntPtr parent, string fragment) {
+    int closed = 0;
+    EnumChildWindows(parent, delegate(IntPtr child, IntPtr data) {
+      StringBuilder title = new StringBuilder(512);
+      GetWindowText(child, title, title.Capacity);
+      if (title.ToString().IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0) {
+        if (PostMessage(child, 0x0010, IntPtr.Zero, IntPtr.Zero)) { closed++; }
+      }
+      return true;
+    }, IntPtr.Zero);
+    return closed;
+  }
 }
 "@
 $launched = Start-Process -FilePath $Executable -ArgumentList ('"' + $Source + '"') -PassThru
@@ -232,6 +249,11 @@ if ($process.MainWindowTitle -notlike ("*" + [IO.Path]::GetFileNameWithoutExtens
 [NativeWindow]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
 [NativeWindow]::ShowWindow($process.MainWindowHandle, 3) | Out-Null
 Start-Sleep -Milliseconds 500
+$closedChangeLogs = [NativeWindow]::CloseChildrenContaining(
+  $process.MainWindowHandle,
+  "LTspice Tool Change Log"
+)
+if ($closedChangeLogs -gt 0) { Start-Sleep -Milliseconds 500 }
 (New-Object -ComObject WScript.Shell).SendKeys(" ")
 Start-Sleep -Milliseconds 900
 $rect = New-Object NativeWindow+RECT
