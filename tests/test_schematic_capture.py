@@ -12,6 +12,12 @@ REFERENCE_IMAGE = PROJECT_ROOT / "docs/images/mixed-signal-daq-schematic.png"
 
 
 class SchematicCaptureTests(unittest.TestCase):
+    def test_windows_title_check_accepts_ltspice_stem_only_titles(self) -> None:
+        self.assertIn(
+            "GetFileNameWithoutExtension($Source)",
+            schematic_capture._WINDOWS_CAPTURE_SCRIPT,
+        )
+
     def test_captures_content_addressed_asset_and_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)

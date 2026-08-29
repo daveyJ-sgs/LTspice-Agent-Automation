@@ -224,7 +224,7 @@ while ((Get-Date) -lt $deadline) {
   Start-Sleep -Milliseconds 150
 }
 if ($process.MainWindowHandle -eq 0) { throw "LTspice did not open a schematic window" }
-if ($process.MainWindowTitle -notlike ("*" + [IO.Path]::GetFileName($Source) + "*")) {
+if ($process.MainWindowTitle -notlike ("*" + [IO.Path]::GetFileNameWithoutExtension($Source) + "*")) {
   throw "LTspice opened the wrong schematic window: $($process.MainWindowTitle)"
 }
 [NativeWindow]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
