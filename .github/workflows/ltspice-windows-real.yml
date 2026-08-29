@@ -164,7 +164,12 @@ jobs:
           }
           Start-Sleep -Seconds 2
           $process.Refresh()
-          if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+          if (-not $process.HasExited) {
+            $process.CloseMainWindow() | Out-Null
+            if (-not $process.WaitForExit(5000)) {
+              Stop-Process -Id $process.Id -Force
+            }
+          }
 
       - name: Capture the educational DAQ schematic through real LTspice
         shell: pwsh
