@@ -210,6 +210,7 @@ using System.Runtime.InteropServices;
 public static class NativeWindow {
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
 }
 "@
@@ -232,13 +233,16 @@ if ($process.MainWindowTitle -notlike ("*" + [IO.Path]::GetFileNameWithoutExtens
 Start-Sleep -Milliseconds 900
 $rect = New-Object NativeWindow+RECT
 if (-not [NativeWindow]::GetWindowRect($process.MainWindowHandle, [ref]$rect)) { throw "LTspice window bounds are unavailable" }
-$width = $rect.Right - $rect.Left
-$height = $rect.Bottom - $rect.Top
+$scale = [NativeWindow]::GetDpiForWindow($process.MainWindowHandle) / 96.0
+$left = [int][Math]::Round($rect.Left * $scale)
+$top = [int][Math]::Round($rect.Top * $scale)
+$width = [int][Math]::Round(($rect.Right - $rect.Left) * $scale)
+$height = [int][Math]::Round(($rect.Bottom - $rect.Top) * $scale)
 if ($width -lt 320 -or $height -lt 200) { throw "LTspice window is too small to capture" }
 $bitmap = New-Object System.Drawing.Bitmap $width, $height
 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
 try {
-  $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
+  $graphics.CopyFromScreen($left, $top, 0, 0, $bitmap.Size)
   $bitmap.Save($Output, [System.Drawing.Imaging.ImageFormat]::Png)
 } finally {
   $graphics.Dispose()
