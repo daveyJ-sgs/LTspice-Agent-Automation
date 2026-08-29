@@ -621,6 +621,11 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertIn('"MΩ"', javascript)
         self.assertIn('"pF"', javascript)
         self.assertIn("toPrecision(15)", javascript)
+        self.assertIn('input.autocomplete = "off"', javascript)
+        self.assertIn(
+            "for (const [input, displayedValue] of displayedValues) input.value = displayedValue",
+            javascript,
+        )
         self.assertIn('id="execution-acknowledgement"', html)
         self.assertIn('id="optimization-domains"', html)
         self.assertIn('id="optimization-file"', html)

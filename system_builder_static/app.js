@@ -79,7 +79,9 @@ function displayValue(baseValue, factor) {
 }
 
 function scaledFieldInput(baseValue, factor, path) {
-  return fieldInput(displayValue(baseValue, factor), path);
+  const input = fieldInput(displayValue(baseValue, factor), path);
+  input.autocomplete = "off";
+  return input;
 }
 
 function setScaledRecipeField(input, object, key, factor) {
@@ -657,6 +659,7 @@ function populateCorrelations() {
 
 function populateCorners() {
   const axes = recipe.plan.corner_axes || (recipe.plan.corner_axes = []);
+  const displayedValues = [];
   const cards = axes.map((axis, axisIndex) => {
     const base = `plan.corner_axes[${axisIndex}]`;
     const card = document.createElement("section");
@@ -707,6 +710,7 @@ function populateCorners() {
       const value = scaledFieldInput(entry.value, factor, `${valueBase}.value`);
       value.placeholder = "Value";
       setScaledRecipeField(value, entry, "value", factor);
+      displayedValues.push([value, displayValue(entry.value, factor)]);
       row.append(label, value, removeButton(`Remove ${entry.name || "corner value"}`, () => {
         axis.values.splice(valueIndex, 1);
         populateCorners();
@@ -728,6 +732,7 @@ function populateCorners() {
     return card;
   });
   byId("corners").replaceChildren(...(cards.length ? cards : [emptyEditor("No operating-corner axes defined.")]));
+  for (const [input, displayedValue] of displayedValues) input.value = displayedValue;
 }
 
 function populateRequirements() {
