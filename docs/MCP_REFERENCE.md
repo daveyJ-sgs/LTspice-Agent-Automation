@@ -767,8 +767,22 @@ artifact is written.
 Every `run_manifest.json` records whether caching was requested, whether the
 run was eligible, its cache key, hit/miss state, whether a new entry was stored,
 and any bypass reason. Cache entries live under `runs/cache/`.
-B1 does not automatically evict entries; cache retention and cleanup policy are
-reserved for the later indexing/management work.
+B1 does not automatically evict entries. The repository-level retention tool
+now provides deliberate, dry-run-first cleanup without placing deletion on the
+MCP surface:
+
+```bash
+python3 artifact_retention.py inspect
+python3 artifact_retention.py prune --scope cache --older-than-days 30 --keep-recent 10
+```
+
+Only completed, manifest-validated cache entries are eligible. Supplying
+`--apply` performs the planned deletion after revalidating path boundaries and
+manifest digests; without it, the command is inspection-only. The same tool can
+independently manage terminal simulator runs and finished experiments while
+leaving active and unrecognized artifacts untouched. Experiments referenced by
+retained optimization, robust-selection, adaptive, or comparison evidence are
+protected from pruning.
 
 ## Run a structured experiment as one native LTspice batch
 

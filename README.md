@@ -422,6 +422,30 @@ python3 report_runs.py
 Open [runs/index.html](runs/index.html) to browse statuses, measurements,
 durations, and generated artifacts.
 
+## Inspect and prune generated artifacts
+
+Generated simulator runs, structured experiments, and verified cache entries
+can be inventoried without modifying them:
+
+```bash
+python3 artifact_retention.py inspect
+python3 artifact_retention.py prune --older-than-days 30 --keep-recent 10
+```
+
+`prune` is a dry run unless `--apply` is supplied. It manages only direct
+children with valid terminal `run_manifest.json` or `experiment_manifest.json`
+files and completed `runs/cache/simulation-*` entries. Recent entries are kept
+separately for each class. Active jobs, malformed or unknown directories,
+plans, studies, dashboards, and files at the `runs/` root are never eligible.
+Experiments referenced by retained optimization, robust-selection, adaptive,
+or comparison evidence are also protected.
+Immediately before deletion, the tool rechecks each path boundary and manifest
+digest; anything changed since planning causes the operation to stop.
+
+Use repeated `--scope runs`, `--scope experiments`, or `--scope cache` options
+to narrow a cleanup. Review the dry-run list before explicitly repeating the
+same command with `--apply`.
+
 ## Use native LTspice stepping
 
 Native `.step` runs multiple parameter points in one LTspice invocation:

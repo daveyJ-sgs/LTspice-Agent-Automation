@@ -29,7 +29,7 @@ analysis, PCB feedback, firmware boundaries, and a Windows host implementation.
 
 ## Approved development sequence
 
-### Phase 0: Establish the cross-platform baseline
+### Phase 0: Establish the cross-platform baseline — complete
 
 Before expanding the MCP surface:
 
@@ -52,7 +52,19 @@ Windows acceptance criteria:
 - Avoid shell-specific commands and POSIX-only process assumptions.
 - Verify stdio MCP operation from a Windows MCP client.
 
-### Phase 1: Waveform property engine
+Phase 0 closure:
+
+- `artifact_retention.py` inventories only manifest-proven terminal simulator
+  runs, experiments, and completed cache entries. Pruning is age- and
+  keep-count-bounded, dry-run by default, revalidates manifests immediately
+  before deletion, protects experiments referenced by retained studies, and
+  leaves active, unknown, study, plan, dashboard, and root-level artifacts
+  untouched.
+- The ordinary cross-platform workflow runs a real MCP SDK client against
+  `mcp_server.py` over stdio on Windows, lists the advertised tools, and calls
+  the non-mutating `list_runs` tool.
+
+### Phase 1: Waveform property engine — complete
 
 Add full-resolution, machine-checkable waveform analysis as first-class MCP
 tools. Phase 1 is split into three independently verifiable sections.
@@ -93,7 +105,7 @@ Windows acceptance criteria:
 - Test binary, ASCII, complex, double-precision, FastAccess, and stepped raw
   fixtures on both platforms.
 
-### Phase 2: Structured experiment runner
+### Phase 2: Structured experiment runner — complete
 
 Generalize single-value parameter substitution into durable experiments with:
 
@@ -233,7 +245,7 @@ Windows acceptance criteria:
   Windows rather than assuming Unix signal behavior.
 - Keep experiment definitions and result schemas portable between platforms.
 
-### Phase 3: Statistical yield and worst-case analysis
+### Phase 3: Statistical yield and worst-case analysis — complete
 
 Turn the standalone Monte Carlo example into a general, durable statistical
 layer over the Phase 2 experiment system. Statistical studies must reuse the
@@ -555,7 +567,7 @@ Verification gate:
 - Adaptive studies resume at a batch boundary and reproduce their full sample
   and boundary-resolution history from the same definition.
 
-#### Phase 3E: Statistical reports, indexing, and hardening
+#### Phase 3E: Statistical reports, indexing, and hardening — complete
 
 ##### Phase 3E-A: Integrated analysis reports — complete
 
@@ -740,7 +752,7 @@ Recommended implementation sequence:
 5. Add sensitivity, bounded adaptive sampling, reports, indexing, and final
    cross-platform hardening.
 
-### Phase 4: Constrained multi-objective optimization
+### Phase 4: Constrained multi-objective optimization — complete
 
 Optimize component and model parameters against explicit objectives and hard
 constraints. The system should support:
@@ -1355,20 +1367,16 @@ expensive evaluation.
 
 ## Immediate next milestone
 
-Begin Phase 4A with the smallest complete deterministic optimization slice:
+Build System Builder GUI-C as a thin human-facing surface over the completed
+Phase 4 contracts:
 
-1. Freeze a versioned candidate-plan schema that records optimizer state,
-   objectives, hard constraints, parameter domains, and reproducibility data.
-2. Generate a bounded coarse mixed-signal DAQ candidate population containing
-   continuous and explicit preferred-value-series component choices without
-   invoking a second simulation runner. Keep Sallen-Key only as a small unit
-   fixture.
-3. Evaluate candidates through the existing experiment and requirement paths,
-   keeping electrical constraint failures separate from simulation or analysis
-   errors.
-4. Produce a traceable Pareto report and an explicit explanation for one
-   selected candidate; do not add local refinement until the coarse-search
-   evidence contract is stable.
-5. Stop Phase 4A after local real-LTspice DAQ qualification. Serialize, resume,
-   and compare the same candidate plan on macOS and Windows in Phase 4B before
-   adding refinement or richer parameter types.
+1. Edit bounded optimization domains using the existing continuous, integer,
+   categorical, explicit-value, and preferred-series schemas.
+2. Configure objectives and hard constraints without creating a second
+   optimizer or translating them into a private GUI-only format.
+3. Preview candidate count, corner expansion, analysis work, and immutable plan
+   identity before execution.
+4. Present feasible candidates, the Pareto front, rejection reasons, and the
+   deterministic winner with links to retained evidence.
+5. Launch finalist qualification only through the existing guarded execution
+   path; keep remote GitHub execution and Windows packaging assigned to GUI-D.
