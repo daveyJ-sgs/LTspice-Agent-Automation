@@ -212,6 +212,7 @@ public static class NativeWindow {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
   [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int command);
 }
 "@
 $launched = Start-Process -FilePath $Executable -ArgumentList ('"' + $Source + '"') -PassThru
@@ -229,6 +230,8 @@ if ($process.MainWindowTitle -notlike ("*" + [IO.Path]::GetFileNameWithoutExtens
   throw "LTspice opened the wrong schematic window: $($process.MainWindowTitle)"
 }
 [NativeWindow]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
+[NativeWindow]::ShowWindow($process.MainWindowHandle, 3) | Out-Null
+Start-Sleep -Milliseconds 500
 (New-Object -ComObject WScript.Shell).SendKeys(" ")
 Start-Sleep -Milliseconds 900
 $rect = New-Object NativeWindow+RECT
