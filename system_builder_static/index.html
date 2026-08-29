@@ -14,6 +14,7 @@
     </a>
     <nav class="tool-nav" aria-label="System Builder sections">
       <a href="#definition">Study setup</a>
+      <a href="#optimization">Optimization</a>
       <a href="#history">Workspace</a>
     </nav>
     <div class="header-actions">
@@ -34,9 +35,9 @@
   <main>
     <section class="tool-intro">
       <div>
-        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-B5</p>
-        <h1>1 MHz acquisition-channel qualification</h1>
-        <p class="intro-copy">Configure, execute, and inspect a deterministic AC/transient tolerance study. Preview remains non-mutating; confirmed work produces durable evidence.</p>
+        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-C1</p>
+        <h1>1 MHz acquisition-channel engineering</h1>
+        <p class="intro-copy">Configure tolerance qualification or inspect a deterministic optimization design space. Every Preview is non-mutating; confirmed work uses the existing durable evidence engines.</p>
       </div>
       <div class="workflow-rail" aria-label="Study flow">
         <div class="flow-node active">Recipe</div>
@@ -248,6 +249,77 @@
       </aside>
     </section>
 
+    <section id="optimization" class="optimization-section">
+      <div class="history-heading">
+        <div>
+          <p class="step">GUI-C1 / OPTIMIZATION SETUP</p>
+          <h2>Design-space preview</h2>
+          <p>Edit the Phase 4 DAQ domains and decision criteria, then resolve the exact immutable plan identity and workload without writing artifacts or launching LTspice.</p>
+        </div>
+        <div class="button-row section-actions">
+          <label class="secondary-button" for="optimization-file">Load .ltopt.json</label>
+          <input id="optimization-file" class="visually-hidden" type="file" accept=".json,.ltopt.json,application/json">
+          <button id="optimization-save" class="text-button" type="button">Save recipe</button>
+          <button id="optimization-reset" class="secondary-button" type="button">Reset DAQ reference</button>
+          <button id="optimization-preview" class="primary-button" type="button">Preview candidate plan</button>
+        </div>
+      </div>
+
+      <div class="optimization-grid">
+        <article class="panel optimization-controls">
+          <div class="panel-heading compact">
+            <div><p class="step">01 / DESIGN DOMAINS</p><h3>Candidate parameters</h3></div>
+            <span id="optimization-domain-count" class="count-badge">—</span>
+          </div>
+          <div class="table-wrap">
+            <table class="editor-table optimization-table">
+              <thead><tr><th>Name</th><th>Domain type</th><th>Values or range</th><th>Unit</th></tr></thead>
+              <tbody id="optimization-domains"></tbody>
+            </table>
+          </div>
+          <p class="editor-note">Fixed circuit conditions: <code id="optimization-fixed">—</code></p>
+
+          <div class="subsection-heading"><div><p class="step">02 / OPERATING CORNERS</p><h3>Finite corner axes</h3></div></div>
+          <div id="optimization-corners" class="editor-stack"></div>
+
+          <div class="subsection-heading"><div><p class="step">03 / OBJECTIVES</p><h3>Pareto tradeoffs</h3></div><span id="optimization-objective-count" class="count-badge">—</span></div>
+          <div id="optimization-objectives" class="optimization-rows"></div>
+
+          <div class="subsection-heading"><div><p class="step">04 / CONSTRAINTS</p><h3>Hard electrical limits</h3></div><span id="optimization-constraint-count" class="count-badge">—</span></div>
+          <div id="optimization-constraints" class="optimization-rows"></div>
+        </article>
+
+        <aside class="panel optimization-preview-panel">
+          <div class="panel-heading compact">
+            <div><p class="step">CANDIDATE PLAN PREVIEW</p><h2 id="optimization-preview-title">Loading reference design</h2></div>
+            <span id="optimization-status" class="status-pill idle">Idle</span>
+          </div>
+          <div class="metric-grid">
+            <div><span>Candidates</span><strong id="optimization-candidates">—</strong></div>
+            <div><span>Corners</span><strong id="optimization-corner-count">—</strong></div>
+            <div><span>Points</span><strong id="optimization-points">—</strong></div>
+            <div class="accent-metric"><span>LTspice runs</span><strong id="optimization-runs">—</strong></div>
+          </div>
+          <div class="identity-block">
+            <span class="label">Future immutable optimization plan</span>
+            <code id="optimization-plan-id">Not generated</code>
+            <p id="optimization-policy">No plan directory, RAW file, or job is created by Preview.</p>
+          </div>
+          <div id="optimization-errors" class="errors" role="alert" hidden></div>
+          <div class="subsection-heading"><div><p class="step">DOMAIN EXPANSION</p><h3>Resolved candidate grid</h3></div></div>
+          <div id="optimization-domain-summary" class="domain-summary"></div>
+          <div class="subsection-heading"><div><p class="step">EXECUTION MAP</p><h3>Required analyses</h3></div></div>
+          <div id="optimization-experiments" class="experiment-list"></div>
+          <div class="limit-block">
+            <span class="label">Engine ceilings</span>
+            <code id="optimization-limits">—</code>
+            <p>Candidate and expanded-point limits are enforced by the Phase 4 engine before any artifact is written.</p>
+          </div>
+          <div class="preview-only-note">GUI-C1 is preview-only. Plan publication and durable execution begin in GUI-C2.</div>
+        </aside>
+      </div>
+    </section>
+
     <section id="history" class="history-section">
       <div class="history-heading">
         <div>
@@ -293,5 +365,6 @@
   </main>
 
   <script src="/assets/app.js" defer></script>
+  <script src="/assets/optimization.js" defer></script>
 </body>
 </html>

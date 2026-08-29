@@ -913,6 +913,16 @@ def _plan_bytes(plan: OptimizationPlan) -> bytes:
     return (_canonical_json(plan, pretty=True) + "\n").encode("utf-8")
 
 
+def _optimization_plan_identity(artifact: bytes) -> tuple[str, str]:
+    digest = hashlib.sha256(artifact).hexdigest()
+    return f"optimization-plan-{digest[:16]}", digest
+
+
+def optimization_plan_identity(plan: OptimizationPlan) -> tuple[str, str]:
+    """Return the content address a plan would receive without writing it."""
+    return _optimization_plan_identity(_plan_bytes(plan))
+
+
 def _confined_root(runs_dir: Path, name: str) -> Path:
     runs_dir.mkdir(parents=True, exist_ok=True)
     resolved_runs = runs_dir.resolve()
@@ -967,8 +977,7 @@ def save_optimization_plan(
     runs_dir: Path, plan: OptimizationPlan
 ) -> OptimizationPlanResult:
     artifact = _plan_bytes(plan)
-    digest = hashlib.sha256(artifact).hexdigest()
-    plan_id = f"optimization-plan-{digest[:16]}"
+    plan_id, digest = _optimization_plan_identity(artifact)
     root = _confined_root(runs_dir, "optimization-plans")
     plan_dir = root / plan_id
     try:

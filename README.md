@@ -174,6 +174,19 @@ the schematic. On a fresh Windows installation, capture dismisses only
 positively identified LTspice change-log and Web Sync panes before recording
 the validated schematic window.
 
+GUI-C1 adds a separate, preview-only optimization workspace backed directly by
+the Phase 4 engine. It edits continuous, integer, categorical, explicit
+preferred-value, and generated E6/E12/E24 domains; finite operating corners;
+Pareto objectives; hard constraints; weights; targets; and metric arguments.
+The preview reports domain expansion, candidate/corner/point counts, the AC and
+transient run workload, engine ceilings, selection policy, and the exact future
+content-addressed plan ID. It does not publish that plan or launch LTspice.
+The bundled
+[`examples/mixed_signal_daq.ltopt.json`](examples/mixed_signal_daq.ltopt.json)
+resolves to the already-qualified Phase 4B plan
+`optimization-plan-2b6f2d62d7ca7c14`: 16 candidates, two ADC-load corners, 32
+expanded points, and 64 prospective AC/transient simulations.
+
 GUI-A2 adds a read-only workspace below the recipe preview. It reads current
 durable-job progress directly from experiment manifests, reports whether the
 rebuildable experiment index is current, and launches existing experiment,

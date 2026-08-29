@@ -1216,11 +1216,37 @@ GUI-B5 verification gate:
   guarded API access, recipe validation, Windows document-title behavior, and
   first-run obstruction checks
 
+#### System Builder GUI-C1: Optimization setup and preview — complete
+
+- Added a portable `.ltopt.json` recipe for Phase 4 design domains, fixed
+  parameters, named operating corners, objectives, constraints, and metric
+  selectors
+- Added compact engineering controls for all existing domain kinds:
+  continuous grids, integer ranges, categorical values, explicit preferred
+  values, and generated E6/E12/E24 ranges
+- Added editable Pareto goals and weights plus hard-constraint operators,
+  targets, and metric arguments without introducing a GUI-only optimizer
+- Preview calls `build_optimization_plan` directly and reports domain sizes,
+  candidates, corners, expanded points, AC/transient workload, engine ceilings,
+  selection policy, and the exact future content address without writing files
+
+GUI-C1 verification gate:
+
+- The bundled DAQ recipe resolves to the existing tolerance-aware Phase 4B
+  `optimization-plan-2b6f2d62d7ca7c14`: 16 candidates, two corners, 32 points,
+  and 64 prospective LTspice runs
+- Invalid domains, unknown fields, non-finite JSON, oversized bodies, missing
+  sessions, and unmarked/cross-origin mutations fail closed
+- Backend tests prove Preview is non-mutating and the static interaction
+  contract retains local assets, engineering units, both themes, and no
+  gradients
+
 Next System Builder slices:
 
-1. GUI-C — optimization domains, objectives, constraints, Pareto results, and
-   finalist qualification
-2. GUI-D — Windows packaging and deliberately gated remote GitHub execution
+1. GUI-C2 — publish and durably execute a confirmed optimization plan
+2. GUI-C3 — Pareto, rejection, margin, and deterministic-winner results
+3. GUI-C4 — selected-finalist tolerance and corner qualification
+4. GUI-D — Windows packaging and deliberately gated remote GitHub execution
 
 ### Phase 5: Flagship portable mixed-signal DAQ/scope
 
@@ -1367,16 +1393,16 @@ expensive evaluation.
 
 ## Immediate next milestone
 
-Build System Builder GUI-C as a thin human-facing surface over the completed
-Phase 4 contracts:
+Build System Builder GUI-C2 as a confirmed execution surface over the completed
+Phase 4 durable optimizer:
 
-1. Edit bounded optimization domains using the existing continuous, integer,
-   categorical, explicit-value, and preferred-series schemas.
-2. Configure objectives and hard constraints without creating a second
-   optimizer or translating them into a private GUI-only format.
-3. Preview candidate count, corner expansion, analysis work, and immutable plan
-   identity before execution.
-4. Present feasible candidates, the Pareto front, rejection reasons, and the
-   deterministic winner with links to retained evidence.
-5. Launch finalist qualification only through the existing guarded execution
-   path; keep remote GitHub execution and Windows packaging assigned to GUI-D.
+1. Re-preview the edited `.ltopt.json` recipe and require its exact recipe hash,
+   plan ID, point count, and total run count before publication.
+2. Publish the same content-addressed optimization plan used by MCP; do not
+   create a GUI-specific plan artifact.
+3. Define the paired AC/transient study through `OptimizationStudyManager` and
+   expose a separate explicit acknowledgement before launch.
+4. Show candidate, corner, child-experiment, and total-run progress with honest
+   simulation, analysis, constraint, cancellation, and resume states.
+5. Stop before result visualization; Pareto and finalist views remain GUI-C3
+   and GUI-C4 respectively.

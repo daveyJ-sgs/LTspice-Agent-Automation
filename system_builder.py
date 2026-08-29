@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 import experiment_report
+import optimization_recipe
 import schematic_capture
 import statistical_engine
 from system_builder_history import evidence_file, workspace_history
@@ -35,6 +36,7 @@ from study_recipe import (
 PROJECT_ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = PROJECT_ROOT / "system_builder_static"
 EXAMPLE_RECIPE = PROJECT_ROOT / "examples/mixed_signal_daq.ltstudy.json"
+EXAMPLE_OPTIMIZATION_RECIPE = PROJECT_ROOT / "examples/mixed_signal_daq.ltopt.json"
 SESSION_COOKIE = "ltspice_system_builder_session"
 HOST_PATTERN = re.compile(r"(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?")
 FONT_ASSETS = {
@@ -332,6 +334,13 @@ def create_app(
             STATIC_ROOT / "app.js", media_type="text/javascript; charset=utf-8"
         )
 
+    @app.get("/assets/optimization.js")
+    def optimization_javascript() -> FileResponse:
+        return FileResponse(
+            STATIC_ROOT / "optimization.js",
+            media_type="text/javascript; charset=utf-8",
+        )
+
     @app.get("/assets/fonts/{font_name}")
     def font(font_name: str) -> Response:
         if font_name not in FONT_ASSETS:
@@ -372,6 +381,15 @@ def create_app(
         if denied is not None:
             return denied
         return JSONResponse(load_study_recipe(EXAMPLE_RECIPE))
+
+    @app.get("/api/examples/mixed-signal-daq-optimization")
+    def mixed_signal_daq_optimization(request: Request) -> Response:
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        return JSONResponse(
+            optimization_recipe.load_optimization_recipe(EXAMPLE_OPTIMIZATION_RECIPE)
+        )
 
     @app.get("/api/history")
     def history(request: Request, limit: int = 12) -> Response:
@@ -510,6 +528,19 @@ def create_app(
         if error is not None:
             return error
         return JSONResponse(preview_study_recipe(recipe, workspace))
+
+    @app.post("/api/optimization/preview")
+    async def preview_optimization(request: Request) -> Response:
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        recipe, error = await read_json_body(
+            request,
+            maximum=optimization_recipe.MAX_OPTIMIZATION_RECIPE_BYTES,
+        )
+        if error is not None:
+            return error
+        return JSONResponse(optimization_recipe.preview_optimization_recipe(recipe))
 
     @app.post("/api/freeze")
     async def freeze(request: Request) -> Response:

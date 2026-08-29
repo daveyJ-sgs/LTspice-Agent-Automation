@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "kind": "optimization",
+  "title": "1 MHz acquisition-channel optimization",
+  "description": "Trade anti-alias rejection against acquisition settling while enforcing bandwidth, peaking, tracking, droop, and ADC-load constraints.",
+  "parameters": [
+    {"name": "RAA1", "kind": "preferred_values", "series": "E12", "values": [820, 1000], "unit": "ohm"},
+    {"name": "CAA1", "kind": "preferred_values", "series": "E12", "values": [8.2e-11, 1e-10], "unit": "F"},
+    {"name": "CAA2", "kind": "preferred_values", "series": "E12", "values": [8.2e-11, 1e-10], "unit": "F"},
+    {"name": "ROUT", "kind": "continuous", "minimum": 35, "maximum": 65, "count": 2, "unit": "ohm"}
+  ],
+  "fixed_parameters": {"RAA2": 1000, "GAIN": 1.6, "CLOAD": 5e-11, "RSW": 25, "CHOLD": 4.7e-11},
+  "corner_axes": [
+    {"name": "adc_load", "parameter": "CADC", "unit": "F", "values": [{"name": "light", "value": 2e-11}, {"name": "heavy", "value": 8e-11}]}
+  ],
+  "objectives": [
+    {"name": "alias_gain", "experiment": "ac", "analysis": "analog_performance", "metric": "ac_gain_db", "goal": "minimize", "weight": 1, "absolute_tolerance": 0.05, "relative_tolerance": 0, "metric_parameters": {"frequency_value": 10000000}},
+    {"name": "settling_time", "experiment": "transient", "analysis": "frontend_settling", "metric": "settling_time", "goal": "minimize", "weight": 1, "absolute_tolerance": 5e-8, "relative_tolerance": 0}
+  ],
+  "constraints": [
+    {"name": "passband_gain", "experiment": "ac", "analysis": "analog_performance", "metric": "ac_gain_db", "operator": ">=", "target": 3.5, "metric_parameters": {"frequency_value": 100000}},
+    {"name": "minimum_bandwidth", "experiment": "ac", "analysis": "analog_performance", "metric": "cutoff_frequency", "operator": ">=", "target": 800000, "metric_parameters": {"reference_frequency": 1000}},
+    {"name": "maximum_bandwidth", "experiment": "ac", "analysis": "analog_performance", "metric": "cutoff_frequency", "operator": "<=", "target": 1300000, "metric_parameters": {"reference_frequency": 1000}},
+    {"name": "passband_peaking", "experiment": "ac", "analysis": "analog_performance", "metric": "peaking_db", "operator": "<=", "target": 0.1, "metric_parameters": {"reference_frequency": 1000}},
+    {"name": "alias_rejection", "experiment": "ac", "analysis": "analog_performance", "metric": "ac_gain_db", "operator": "<=", "target": -20, "metric_parameters": {"frequency_value": 10000000}},
+    {"name": "frontend_settling", "experiment": "transient", "analysis": "frontend_settling", "metric": "settling_time", "operator": "<=", "target": 1.5e-6},
+    {"name": "tracking_upper", "experiment": "transient", "analysis": "track_error", "metric": "maximum", "operator": "<=", "target": 0.005},
+    {"name": "tracking_lower", "experiment": "transient", "analysis": "track_error", "metric": "minimum", "operator": ">=", "target": -0.005},
+    {"name": "hold_droop", "experiment": "transient", "analysis": "hold_droop", "metric": "ripple", "operator": "<=", "target": 0.005}
+  ]
+}

@@ -153,6 +153,42 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertEqual(response.json()["plan"]["point_count"], 24)
         self.assertEqual(response.json()["execution"]["total_run_count"], 48)
 
+    def test_optimization_preview_matches_existing_phase_4_daq_plan(self) -> None:
+        self._open()
+        recipe = self.client.get(
+            "/api/examples/mixed-signal-daq-optimization"
+        ).json()
+
+        response = self.client.post(
+            "/api/optimization/preview", json=recipe, headers=self._headers()
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertTrue(result["valid"])
+        self.assertEqual(
+            result["plan"]["plan_id"], "optimization-plan-2b6f2d62d7ca7c14"
+        )
+        self.assertEqual(result["plan"]["candidate_count"], 16)
+        self.assertEqual(result["plan"]["point_count"], 32)
+        self.assertEqual(result["execution"]["total_run_count"], 64)
+
+    def test_optimization_preview_is_guarded_and_rejects_invalid_domains(self) -> None:
+        self._open()
+        recipe = self.client.get(
+            "/api/examples/mixed-signal-daq-optimization"
+        ).json()
+        recipe["parameters"][0]["values"] = [1000]
+
+        denied = self.client.post("/api/optimization/preview", json=recipe)
+        invalid = self.client.post(
+            "/api/optimization/preview", json=recipe, headers=self._headers()
+        )
+
+        self.assertEqual(denied.status_code, 403)
+        self.assertEqual(invalid.status_code, 200)
+        self.assertFalse(invalid.json()["valid"])
+
     def test_preview_accepts_gui_b1_variable_corner_and_requirement_edits(self) -> None:
         self._open()
         recipe = self.client.get("/api/examples/mixed-signal-daq").json()
@@ -466,6 +502,7 @@ class SystemBuilderTests(unittest.TestCase):
         self._open()
         self.assertEqual(self.client.get("/assets/app.css").status_code, 200)
         self.assertEqual(self.client.get("/assets/app.js").status_code, 200)
+        self.assertEqual(self.client.get("/assets/optimization.js").status_code, 200)
         self.assertEqual(
             self.client.get("/assets/daq-schematic.png").status_code, 200
         )
@@ -550,6 +587,9 @@ class SystemBuilderTests(unittest.TestCase):
         javascript = (PROJECT_ROOT / "system_builder_static/app.js").read_text(
             encoding="utf-8"
         )
+        optimization_javascript = (
+            PROJECT_ROOT / "system_builder_static/optimization.js"
+        ).read_text(encoding="utf-8")
         fonts = PROJECT_ROOT / "system_builder_static/fonts"
 
         self.assertIn('id="theme-toggle"', html)
@@ -582,6 +622,17 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertIn('"pF"', javascript)
         self.assertIn("toPrecision(15)", javascript)
         self.assertIn('id="execution-acknowledgement"', html)
+        self.assertIn('id="optimization-domains"', html)
+        self.assertIn('id="optimization-file"', html)
+        self.assertIn('id="optimization-save"', html)
+        self.assertIn('id="optimization-objectives"', html)
+        self.assertIn('id="optimization-constraints"', html)
+        self.assertIn('id="optimization-plan-id"', html)
+        self.assertIn('fetch("/api/optimization/preview"', optimization_javascript)
+        self.assertIn(
+            '"preferred_series", "Generated E-series"', optimization_javascript
+        )
+        self.assertIn("GUI-C1 is preview-only", html)
         self.assertTrue((fonts / "LICENSE.txt").is_file())
         for name in system_builder.FONT_ASSETS:
             self.assertEqual((fonts / name).read_bytes()[:4], b"wOF2")
