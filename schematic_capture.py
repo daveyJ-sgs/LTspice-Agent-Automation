@@ -318,6 +318,33 @@ if ($null -ne $webSyncWindow) {
 }
 $keyboard.SendKeys(" ")
 Start-Sleep -Milliseconds 900
+$lateWebSync = [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+  [System.Windows.Automation.TreeScope]::Children,
+  [System.Windows.Automation.Condition]::TrueCondition
+) | Where-Object { $_.Current.Name -eq "Web Sync" } | Select-Object -First 1
+if ($null -ne $lateWebSync) {
+  $noButton = $lateWebSync.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::NameProperty,
+      "No"
+    )
+  )
+  if ($null -eq $noButton) { throw "LTspice Web Sync No button is unavailable" }
+  $invokePattern = $noButton.GetCurrentPattern(
+    [System.Windows.Automation.InvokePattern]::Pattern
+  )
+  $invokePattern.Invoke()
+  Start-Sleep -Milliseconds 500
+  [NativeWindow]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
+  $keyboard.SendKeys(" ")
+  Start-Sleep -Milliseconds 900
+  $remainingWebSync = [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+    [System.Windows.Automation.TreeScope]::Children,
+    [System.Windows.Automation.Condition]::TrueCondition
+  ) | Where-Object { $_.Current.Name -eq "Web Sync" }
+  if ($remainingWebSync.Count -ne 0) { throw "LTspice Web Sync dialog did not close" }
+}
 $rect = New-Object NativeWindow+RECT
 if (-not [NativeWindow]::GetWindowRect($process.MainWindowHandle, [ref]$rect)) { throw "LTspice window bounds are unavailable" }
 $scale = [NativeWindow]::GetDpiForWindow($process.MainWindowHandle) / 96.0
