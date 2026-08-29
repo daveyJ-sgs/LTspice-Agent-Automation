@@ -67,7 +67,7 @@ function defaultDisplayUnit(item) {
   return "ohm";
 }
 
-function unitFactor(canonicalUnit, displayUnit) {
+function studyUnitFactor(canonicalUnit, displayUnit) {
   const choice = (UNIT_CHOICES[canonicalUnit] || []).find(([value]) => value === displayUnit);
   return choice ? choice[2] : 1;
 }
@@ -79,9 +79,7 @@ function displayValue(baseValue, factor) {
 }
 
 function scaledFieldInput(baseValue, factor, path) {
-  const input = fieldInput(displayValue(baseValue, factor), path);
-  input.autocomplete = "off";
-  return input;
+  return fieldInput(displayValue(baseValue, factor), path);
 }
 
 function setScaledRecipeField(input, object, key, factor) {
@@ -503,7 +501,7 @@ function populateVariables() {
     let unit;
     if (continuous) {
       const selectedUnit = variableDisplayUnits.get(variable) || defaultDisplayUnit(variable);
-      const factor = unitFactor(variable.unit, selectedUnit);
+      const factor = studyUnitFactor(variable.unit, selectedUnit);
       nominal = scaledFieldInput(variable.nominal, factor, `${base}.nominal`);
       setScaledRecipeField(nominal, variable, "nominal", factor);
       tolerance = scaledFieldInput(variable.sigma, factor, `${base}.sigma`);
@@ -659,7 +657,6 @@ function populateCorrelations() {
 
 function populateCorners() {
   const axes = recipe.plan.corner_axes || (recipe.plan.corner_axes = []);
-  const displayedValues = [];
   const cards = axes.map((axis, axisIndex) => {
     const base = `plan.corner_axes[${axisIndex}]`;
     const card = document.createElement("section");
@@ -696,7 +693,7 @@ function populateCorners() {
     unitWrapper.append(unitCaption, unit);
     fields.append(unitWrapper);
     const selectedUnit = cornerDisplayUnits.get(axis) || defaultDisplayUnit(axis);
-    const factor = unitFactor(axis.unit, selectedUnit);
+    const factor = studyUnitFactor(axis.unit, selectedUnit);
     const values = document.createElement("div");
     values.className = "corner-values";
     for (const [valueIndex, entry] of (axis.values || []).entries()) {
@@ -710,7 +707,6 @@ function populateCorners() {
       const value = scaledFieldInput(entry.value, factor, `${valueBase}.value`);
       value.placeholder = "Value";
       setScaledRecipeField(value, entry, "value", factor);
-      displayedValues.push([value, displayValue(entry.value, factor)]);
       row.append(label, value, removeButton(`Remove ${entry.name || "corner value"}`, () => {
         axis.values.splice(valueIndex, 1);
         populateCorners();
@@ -732,7 +728,6 @@ function populateCorners() {
     return card;
   });
   byId("corners").replaceChildren(...(cards.length ? cards : [emptyEditor("No operating-corner axes defined.")]));
-  for (const [input, displayedValue] of displayedValues) input.value = displayedValue;
 }
 
 function populateRequirements() {
