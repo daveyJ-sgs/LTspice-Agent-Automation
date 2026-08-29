@@ -1241,12 +1241,37 @@ GUI-C1 verification gate:
   contract retains local assets, engineering units, both themes, and no
   gradients
 
+#### System Builder GUI-C2: Confirmed durable optimization — complete
+
+- Revalidates the exact previewed recipe hash, plan ID, point count, and total
+  AC/transient run count before publishing an artifact
+- Publishes the existing MCP-compatible content-addressed optimization plan;
+  no GUI-specific plan or evaluator was introduced
+- Requires a separate explicit acknowledgement before defining and starting
+  the paired DAQ studies through `OptimizationStudyManager`
+- Reports candidate/corner structure, aggregate LTspice progress, individual
+  AC/transient child progress, evaluation state, cancellation, and resume
+- Discovers the latest durable optimization job after a fresh page load without
+  launching, resuming, or mutating it
+
+GUI-C2 verification gate:
+
+- A real local run published `optimization-plan-2b6f2d62d7ca7c14` and completed
+  16 candidates across two ADC-load corners: 32 AC plus 32 transient LTspice
+  runs
+- The durable job `optimization-job-3bec924d353585e0` completed both children
+  and produced optimization study `optimization-study-0be161f0785cfede`
+- Browser verification confirmed exact workload disclosure, separate launch
+  acknowledgement, 64/64 progress, and passive recovery after a fresh load
+- Tests cover stale preview/workload rejection, acknowledgement enforcement,
+  idempotent Start, plan-only publication, cancellation, resume, discovery,
+  session/origin guards, and the static interaction contract
+
 Next System Builder slices:
 
-1. GUI-C2 — publish and durably execute a confirmed optimization plan
-2. GUI-C3 — Pareto, rejection, margin, and deterministic-winner results
-3. GUI-C4 — selected-finalist tolerance and corner qualification
-4. GUI-D — Windows packaging and deliberately gated remote GitHub execution
+1. GUI-C3 — Pareto, rejection, margin, and deterministic-winner results
+2. GUI-C4 — selected-finalist tolerance and corner qualification
+3. GUI-D — Windows packaging and deliberately gated remote GitHub execution
 
 ### Phase 5: Flagship portable mixed-signal DAQ/scope
 
@@ -1393,16 +1418,15 @@ expensive evaluation.
 
 ## Immediate next milestone
 
-Build System Builder GUI-C2 as a confirmed execution surface over the completed
-Phase 4 durable optimizer:
+Build System Builder GUI-C3 as the read-only decision surface over a completed
+durable optimization study:
 
-1. Re-preview the edited `.ltopt.json` recipe and require its exact recipe hash,
-   plan ID, point count, and total run count before publication.
-2. Publish the same content-addressed optimization plan used by MCP; do not
-   create a GUI-specific plan artifact.
-3. Define the paired AC/transient study through `OptimizationStudyManager` and
-   expose a separate explicit acknowledgement before launch.
-4. Show candidate, corner, child-experiment, and total-run progress with honest
-   simulation, analysis, constraint, cancellation, and resume states.
-5. Stop before result visualization; Pareto and finalist views remain GUI-C3
-   and GUI-C4 respectively.
+1. Read the existing `optimization_results.json` and report evidence; do not
+   recalculate candidate results in the browser.
+2. Show feasible, constraint-rejected, and invalid candidates with concise
+   rejection reasons and worst electrical margins.
+3. Plot the Pareto set and distinguish the deterministic selected candidate
+   using the engine-recorded selection policy and explanation.
+4. Link every candidate back to its exact plan point and AC/transient evidence.
+5. Stop before launching finalist tolerance/corner qualification, which remains
+   GUI-C4.

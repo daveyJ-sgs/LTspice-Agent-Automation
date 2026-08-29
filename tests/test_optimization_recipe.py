@@ -43,6 +43,31 @@ class OptimizationRecipeTests(unittest.TestCase):
         self.assertTrue(preview["valid"])
         self.assertEqual(before, after)
 
+    def test_publish_requires_the_exact_previewed_workload(self):
+        recipe = optimization_recipe.load_optimization_recipe(REFERENCE_RECIPE)
+        preview = optimization_recipe.preview_optimization_recipe(recipe)
+        with tempfile.TemporaryDirectory() as temporary:
+            runs = Path(temporary) / "runs"
+            with self.assertRaisesRegex(ValueError, "run count changed"):
+                optimization_recipe.publish_optimization_recipe_plan(
+                    recipe,
+                    runs,
+                    preview["recipe"]["sha256"],
+                    preview["plan"]["plan_id"],
+                    preview["plan"]["point_count"],
+                    63,
+                )
+            _resolved, published = optimization_recipe.publish_optimization_recipe_plan(
+                recipe,
+                runs,
+                preview["recipe"]["sha256"],
+                preview["plan"]["plan_id"],
+                preview["plan"]["point_count"],
+                preview["execution"]["total_run_count"],
+            )
+
+        self.assertEqual(published["plan_id"], preview["plan"]["plan_id"])
+
     def test_domain_edit_recalculates_identity_and_workload(self):
         recipe = optimization_recipe.load_optimization_recipe(REFERENCE_RECIPE)
         reference = optimization_recipe.preview_optimization_recipe(recipe)

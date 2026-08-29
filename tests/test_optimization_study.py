@@ -185,8 +185,11 @@ class OptimizationStudyManagerTests(unittest.TestCase):
             children.statuses[child["experiment_id"]] = "completed"
 
         completed = restarted.snapshot(defined["optimization_job_id"])
+        manifest = Path(completed["manifest"])
+        modified_at = manifest.stat().st_mtime_ns
         repeated = restarted.snapshot(defined["optimization_job_id"])
         self.assertEqual(completed, repeated)
+        self.assertEqual(manifest.stat().st_mtime_ns, modified_at)
         self.assertEqual(completed["status"], "completed")
         self.assertEqual(
             completed["optimization_study_id"],

@@ -35,7 +35,7 @@
   <main>
     <section class="tool-intro">
       <div>
-        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-C1</p>
+        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-C2</p>
         <h1>1 MHz acquisition-channel engineering</h1>
         <p class="intro-copy">Configure tolerance qualification or inspect a deterministic optimization design space. Every Preview is non-mutating; confirmed work uses the existing durable evidence engines.</p>
       </div>
@@ -252,9 +252,9 @@
     <section id="optimization" class="optimization-section">
       <div class="history-heading">
         <div>
-          <p class="step">GUI-C1 / OPTIMIZATION SETUP</p>
-          <h2>Design-space preview</h2>
-          <p>Edit the Phase 4 DAQ domains and decision criteria, then resolve the exact immutable plan identity and workload without writing artifacts or launching LTspice.</p>
+          <p class="step">GUI-C2 / OPTIMIZATION EXECUTION</p>
+          <h2>Design-space setup and run</h2>
+          <p>Edit and preview the Phase 4 DAQ design space, then explicitly publish and launch the exact content-addressed workload through the durable optimization engine.</p>
         </div>
         <div class="button-row section-actions">
           <label class="secondary-button" for="optimization-file">Load .ltopt.json</label>
@@ -315,7 +315,31 @@
             <code id="optimization-limits">—</code>
             <p>Candidate and expanded-point limits are enforced by the Phase 4 engine before any artifact is written.</p>
           </div>
-          <div class="preview-only-note">GUI-C1 is preview-only. Plan publication and durable execution begin in GUI-C2.</div>
+          <div class="execution-actions">
+            <button id="optimization-freeze" class="primary-button" type="button" disabled>Publish confirmed plan</button>
+            <p>Publication writes the MCP-compatible plan only. LTspice remains idle.</p>
+          </div>
+          <section id="optimization-confirmation" class="execution-confirmation" hidden>
+            <div class="subsection-heading">
+              <div><p class="step">EXECUTION CONFIRMATION</p><h3>Durable optimization workload</h3></div>
+              <span class="status-pill valid">Published</span>
+            </div>
+            <dl class="confirmation-grid">
+              <div><dt>Plan</dt><dd id="optimization-frozen-plan">—</dd></div>
+              <div><dt>Candidates</dt><dd id="optimization-confirm-candidates">—</dd></div>
+              <div><dt>Corners</dt><dd id="optimization-confirm-corners">—</dd></div>
+              <div><dt>Points</dt><dd id="optimization-confirm-points">—</dd></div>
+              <div><dt>Total runs</dt><dd id="optimization-confirm-runs">—</dd></div>
+              <div><dt>Concurrency</dt><dd id="optimization-confirm-concurrency">—</dd></div>
+            </dl>
+            <code id="optimization-frozen-artifact" class="artifact-path">—</code>
+            <label class="execution-check">
+              <input id="optimization-acknowledgement" type="checkbox">
+              <span>I understand this will launch the paired AC and transient LTspice studies locally and write durable evidence.</span>
+            </label>
+            <button id="optimization-start" class="danger-button" type="button" disabled>Start local optimization</button>
+          </section>
+          <section id="optimization-job" class="launch-result" aria-live="polite" hidden></section>
         </aside>
       </div>
     </section>

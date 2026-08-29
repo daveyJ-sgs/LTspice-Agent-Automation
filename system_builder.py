@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import hmac
 import json
 import re
@@ -20,7 +21,9 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 import experiment_report
+import optimization_engine
 import optimization_recipe
+import optimization_study
 import schematic_capture
 import statistical_engine
 from system_builder_history import evidence_file, workspace_history
@@ -76,6 +79,7 @@ def create_app(
     manager_builder = manager_factory or _default_manager_factory
     capture_builder = schematic_capturer or schematic_capture.capture_schematic
     execution_manager: object | None = None
+    optimization_manager: optimization_study.OptimizationStudyManager | None = None
     execution_lock = threading.Lock()
     report_lock = threading.Lock()
     postprocess_stop = threading.Event()
@@ -83,12 +87,21 @@ def create_app(
     postprocess_states: dict[str, dict[str, str]] = {}
     managed_jobs: set[str] = set()
     frozen_launches: dict[str, dict[str, object]] = {}
+    frozen_optimization_launches: dict[str, dict[str, object]] = {}
 
     def get_execution_manager() -> object:
         nonlocal execution_manager
         if execution_manager is None:
             execution_manager = manager_builder(workspace / "runs")
         return execution_manager
+
+    def get_optimization_manager() -> optimization_study.OptimizationStudyManager:
+        nonlocal optimization_manager
+        if optimization_manager is None:
+            optimization_manager = optimization_study.OptimizationStudyManager(
+                workspace / "runs", get_execution_manager()  # type: ignore[arg-type]
+            )
+        return optimization_manager
 
     def shutdown_execution_manager() -> None:
         nonlocal execution_manager
@@ -286,6 +299,94 @@ def create_app(
             else None,
             "resumable": snapshot["status"] == "cancelled",
             "postprocess": postprocess,
+        }
+
+    def optimization_experiments() -> tuple[dict[str, dict[str, object]], dict[str, object], str]:
+        execution_recipe = load_study_recipe(EXAMPLE_RECIPE)
+        definitions = load_recipe_experiments(execution_recipe, workspace)
+        execution = execution_recipe.get("execution", {})
+        if not isinstance(execution, dict):
+            raise ValueError("optimization execution settings are invalid")
+        experiments = {
+            str(definition["name"]): {
+                "netlist_template": definition["netlist_template"],
+                "waveform_analyses": definition["waveform_analyses"],
+                "filename": definition["filename"],
+                "max_concurrency": execution.get("max_concurrency", 2),
+                "reuse_cache": execution.get("reuse_cache", False),
+            }
+            for definition in definitions
+        }
+        artifact = json.dumps(
+            experiments,
+            sort_keys=True,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return experiments, execution, hashlib.sha256(artifact).hexdigest()
+
+    def optimization_job_payload(snapshot: dict[str, object]) -> dict[str, object]:
+        experiments = snapshot.get("experiments", {})
+        if not isinstance(experiments, dict):
+            raise ValueError("optimization job experiments are invalid")
+        children = []
+        totals = {
+            "total_runs": 0,
+            "finished_points": 0,
+            "running_points": 0,
+            "pending_points": 0,
+            "passed_points": 0,
+            "failed_points": 0,
+            "error_points": 0,
+        }
+        for name, child in sorted(experiments.items()):
+            if not isinstance(child, dict):
+                raise ValueError("optimization child snapshot is invalid")
+            item = {
+                "name": name,
+                "experiment_id": child.get("experiment_id"),
+                "status": child.get("status"),
+                "point_count": child.get("point_count", 0),
+                "finished_points": child.get("finished_points", 0),
+                "running_points": child.get("running_points", 0),
+                "pending_points": child.get("pending_points", 0),
+                "passed_points": child.get("passed_points", 0),
+                "failed_points": child.get("failed_points", 0),
+                "error_points": child.get("error_points", 0),
+            }
+            children.append(item)
+            totals["total_runs"] += int(item["point_count"])
+            for key in set(totals) - {"total_runs"}:
+                value = item.get(key, 0)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    totals[key] += value
+        plan = optimization_engine.load_optimization_plan(
+            workspace / "runs", str(snapshot["plan_id"])
+        )
+        candidate_count = int(plan["candidate_count"])
+        point_count = int(plan["point_count"])
+        return {
+            "optimization_job_id": snapshot["optimization_job_id"],
+            "plan_id": snapshot["plan_id"],
+            "status": snapshot["status"],
+            "experiments": children,
+            "progress": {
+                **totals,
+                "candidate_count": candidate_count,
+                "corner_count": point_count // candidate_count,
+                "point_count": point_count,
+                "evaluation": (
+                    "complete"
+                    if snapshot.get("optimization_study_id")
+                    else "failed"
+                    if snapshot["status"] == "failed"
+                    else "pending"
+                ),
+            },
+            "optimization_study_id": snapshot.get("optimization_study_id"),
+            "resumable": snapshot["status"] == "cancelled",
+            "error": snapshot.get("error"),
         }
 
     @app.middleware("http")
@@ -541,6 +642,272 @@ def create_app(
         if error is not None:
             return error
         return JSONResponse(optimization_recipe.preview_optimization_recipe(recipe))
+
+    @app.post("/api/optimization/freeze")
+    async def freeze_optimization(request: Request) -> Response:
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        payload, error = await read_json_body(
+            request,
+            maximum=optimization_recipe.MAX_OPTIMIZATION_RECIPE_BYTES + 8192,
+        )
+        if error is not None:
+            return error
+        if not isinstance(payload, dict):
+            return _json_error(
+                400, "invalid_optimization_freeze", "freeze request must be an object"
+            )
+        recipe = payload.get("recipe")
+        expected_recipe_sha256 = payload.get("expected_recipe_sha256")
+        expected_plan_id = payload.get("expected_plan_id")
+        expected_point_count = payload.get("expected_point_count")
+        expected_total_run_count = payload.get("expected_total_run_count")
+        if (
+            not isinstance(expected_recipe_sha256, str)
+            or not isinstance(expected_plan_id, str)
+            or not isinstance(expected_point_count, int)
+            or isinstance(expected_point_count, bool)
+            or not isinstance(expected_total_run_count, int)
+            or isinstance(expected_total_run_count, bool)
+        ):
+            return _json_error(
+                400,
+                "invalid_optimization_freeze",
+                "freeze requires the previewed recipe, plan, point, and run identities",
+            )
+        current = optimization_recipe.preview_optimization_recipe(recipe)
+        if not current.get("valid"):
+            return JSONResponse(current, status_code=422)
+        try:
+            experiments, execution, execution_sha256 = optimization_experiments()
+            preview_experiments = current["execution"]
+            assert isinstance(preview_experiments, dict)
+            if set(experiments) != set(preview_experiments["experiments"]):
+                raise ValueError(
+                    "optimization objectives do not match the paired circuit analyses"
+                )
+            preview_result, published = (
+                optimization_recipe.publish_optimization_recipe_plan(
+                    recipe,
+                    workspace / "runs",
+                    expected_recipe_sha256,
+                    expected_plan_id,
+                    expected_point_count,
+                    expected_total_run_count,
+                )
+            )
+        except (OSError, ValueError) as exc:
+            return _json_error(409, "optimization_freeze_failed", str(exc))
+        launch_token = secrets.token_urlsafe(32)
+        with execution_lock:
+            while len(frozen_optimization_launches) >= 32:
+                frozen_optimization_launches.pop(
+                    next(iter(frozen_optimization_launches))
+                )
+            frozen_optimization_launches[launch_token] = {
+                "state": "ready",
+                "recipe_sha256": expected_recipe_sha256,
+                "plan_id": expected_plan_id,
+                "point_count": expected_point_count,
+                "total_run_count": expected_total_run_count,
+                "execution_sha256": execution_sha256,
+                "response": None,
+            }
+        return JSONResponse(
+            {
+                "status": "frozen",
+                "launch_token": launch_token,
+                "recipe_sha256": expected_recipe_sha256,
+                "plan": {
+                    "plan_id": published["plan_id"],
+                    "plan_sha256": published["plan_sha256"],
+                    "candidate_count": published["candidate_count"],
+                    "point_count": published["point_count"],
+                    "artifact": (
+                        f"runs/optimization-plans/{published['plan_id']}/"
+                        "optimization_plan.json"
+                    ),
+                },
+                "execution": {
+                    **preview_result["execution"],  # type: ignore[dict-item]
+                    "max_concurrency": execution.get("max_concurrency", 2),
+                    "reuse_cache": execution.get("reuse_cache", False),
+                },
+            }
+        )
+
+    @app.post("/api/optimization/start")
+    async def start_optimization(request: Request) -> Response:
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        payload, error = await read_json_body(
+            request,
+            maximum=optimization_recipe.MAX_OPTIMIZATION_RECIPE_BYTES + 8192,
+        )
+        if error is not None:
+            return error
+        if not isinstance(payload, dict):
+            return _json_error(
+                400, "invalid_optimization_start", "start request must be an object"
+            )
+        launch_token = payload.get("launch_token")
+        recipe = payload.get("recipe")
+        confirmed_point_count = payload.get("confirmed_point_count")
+        confirmed_run_count = payload.get("confirmed_run_count")
+        acknowledged = payload.get("acknowledged")
+        if (
+            not isinstance(launch_token, str)
+            or not isinstance(confirmed_point_count, int)
+            or isinstance(confirmed_point_count, bool)
+            or not isinstance(confirmed_run_count, int)
+            or isinstance(confirmed_run_count, bool)
+            or acknowledged is not True
+        ):
+            return _json_error(
+                400,
+                "invalid_optimization_start",
+                "start requires the launch token, exact workload, and acknowledgement",
+            )
+        with execution_lock:
+            frozen = frozen_optimization_launches.get(launch_token)
+            if frozen is None:
+                return _json_error(
+                    409,
+                    "optimization_freeze_required",
+                    "publish a fresh immutable optimization plan before starting",
+                )
+            if frozen["state"] == "started":
+                response = frozen["response"]
+                assert isinstance(response, dict)
+                return JSONResponse(response)
+            if frozen["state"] != "ready":
+                return _json_error(
+                    409,
+                    "optimization_launch_unavailable",
+                    "this frozen optimization launch is already in progress or failed",
+                )
+            current = optimization_recipe.preview_optimization_recipe(recipe)
+            if not current.get("valid"):
+                return JSONResponse(current, status_code=422)
+            current_recipe = current["recipe"]
+            current_plan = current["plan"]
+            current_execution = current["execution"]
+            assert isinstance(current_recipe, dict)
+            assert isinstance(current_plan, dict)
+            assert isinstance(current_execution, dict)
+            if (
+                current_recipe.get("sha256") != frozen["recipe_sha256"]
+                or current_plan.get("plan_id") != frozen["plan_id"]
+            ):
+                return _json_error(
+                    409,
+                    "frozen_optimization_changed",
+                    "the recipe no longer matches the immutable optimization plan",
+                )
+            if (
+                confirmed_point_count != frozen["point_count"]
+                or confirmed_point_count != current_plan.get("point_count")
+                or confirmed_run_count != frozen["total_run_count"]
+                or confirmed_run_count != current_execution.get("total_run_count")
+            ):
+                return _json_error(
+                    409,
+                    "optimization_workload_changed",
+                    "confirmed workload does not match the frozen optimization plan",
+                )
+            frozen["state"] = "starting"
+            try:
+                experiments, _execution, execution_sha256 = optimization_experiments()
+                if execution_sha256 != frozen["execution_sha256"]:
+                    raise ValueError(
+                        "paired circuit analyses changed after plan publication"
+                    )
+                manager = get_optimization_manager()
+                defined = manager.define(str(frozen["plan_id"]), experiments)
+                started = manager.start(defined["optimization_job_id"])
+                response = optimization_job_payload(started)
+                frozen["state"] = "started"
+                frozen["response"] = response
+                return JSONResponse(response, status_code=202)
+            except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+                frozen["state"] = "failed"
+                return _json_error(409, "optimization_launch_failed", str(exc))
+
+    @app.get("/api/optimization/jobs")
+    def optimization_jobs(request: Request, limit: int = 8) -> Response:
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        if not isinstance(limit, int) or not 1 <= limit <= 32:
+            return _json_error(400, "optimization_job_limit", "limit must be 1 to 32")
+        root = workspace / "runs" / "optimization-jobs"
+        if not root.is_dir() or root.is_symlink():
+            return JSONResponse({"jobs": []})
+        paths = sorted(
+            (
+                path
+                for path in root.glob("optimization-job-*")
+                if path.is_dir() and not path.is_symlink()
+            ),
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )[:limit]
+        jobs = []
+        for path in paths:
+            try:
+                jobs.append(
+                    optimization_job_payload(
+                        get_optimization_manager().snapshot(path.name)
+                    )
+                )
+            except (FileNotFoundError, OSError, RuntimeError, ValueError):
+                continue
+        return JSONResponse({"jobs": jobs})
+
+    @app.get("/api/optimization/jobs/{optimization_job_id}")
+    def optimization_job(request: Request, optimization_job_id: str) -> Response:
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        try:
+            return JSONResponse(
+                optimization_job_payload(
+                    get_optimization_manager().snapshot(optimization_job_id)
+                )
+            )
+        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+            return _json_error(404, "optimization_job_not_found", str(exc))
+
+    @app.post("/api/optimization/jobs/{optimization_job_id}/cancel")
+    def cancel_optimization_job(
+        request: Request, optimization_job_id: str
+    ) -> Response:
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        try:
+            return JSONResponse(
+                optimization_job_payload(
+                    get_optimization_manager().cancel(optimization_job_id)
+                )
+            )
+        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+            return _json_error(409, "optimization_cancel_failed", str(exc))
+
+    @app.post("/api/optimization/jobs/{optimization_job_id}/resume")
+    def resume_optimization_job(
+        request: Request, optimization_job_id: str
+    ) -> Response:
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        try:
+            snapshot = get_optimization_manager().resume(optimization_job_id)
+            return JSONResponse(optimization_job_payload(snapshot), status_code=202)
+        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+            return _json_error(409, "optimization_resume_failed", str(exc))
 
     @app.post("/api/freeze")
     async def freeze(request: Request) -> Response:

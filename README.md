@@ -187,6 +187,18 @@ resolves to the already-qualified Phase 4B plan
 `optimization-plan-2b6f2d62d7ca7c14`: 16 candidates, two ADC-load corners, 32
 expanded points, and 64 prospective AC/transient simulations.
 
+GUI-C2 turns that preview into an explicitly confirmed durable run without
+forking the Phase 4 implementation. **Publish confirmed plan** revalidates the
+exact recipe hash, plan ID, point count, and total run count before writing the
+same content-addressed optimization plan used by MCP. A separate acknowledgement
+then defines and launches the paired DAQ AC/transient work through
+`OptimizationStudyManager`. The interface reports candidate and corner
+structure, per-analysis progress, aggregate LTspice progress, evaluation state,
+cooperative cancellation, and resume controls. Refreshing the page rediscovers
+the durable optimization job but never launches or resumes it automatically.
+Pareto and finalist visualization remain deliberately reserved for GUI-C3 and
+GUI-C4.
+
 GUI-A2 adds a read-only workspace below the recipe preview. It reads current
 durable-job progress directly from experiment manifests, reports whether the
 rebuildable experiment index is current, and launches existing experiment,

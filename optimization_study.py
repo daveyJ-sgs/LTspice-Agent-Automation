@@ -300,6 +300,20 @@ class OptimizationStudyManager:
             self._save(manifest)
         return self.snapshot(optimization_job_id)
 
+    def resume(self, optimization_job_id: str) -> OptimizationJobSnapshot:
+        with self._lock:
+            manifest = self._load(optimization_job_id)
+            snapshots, ids = self._children(manifest)
+            for name in sorted(ids):
+                if snapshots[name]["status"] == "cancelled":
+                    self.experiment_manager.resume(ids[name])
+                elif snapshots[name]["status"] not in {"completed", "failed"}:
+                    self.experiment_manager.start(ids[name])
+            manifest["status"] = "queued"
+            manifest["error"] = None
+            self._save(manifest)
+        return self.snapshot(optimization_job_id)
+
     def snapshot(self, optimization_job_id: str) -> OptimizationJobSnapshot:
         with self._lock:
             manifest = self._load(optimization_job_id)
@@ -325,13 +339,16 @@ class OptimizationStudyManager:
                 except Exception as exc:
                     status = "failed"
                     error = str(exc)
-            manifest.update(
+            next_state = dict(
                 status=status,
                 experiment_statuses=statuses,
                 result=result,
                 error=error,
             )
-            self._save(manifest)
+            changed = any(manifest.get(key) != value for key, value in next_state.items())
+            manifest.update(next_state)
+            if changed:
+                self._save(manifest)
 
         study_id = result.get("study_id") if isinstance(result, dict) else None
         study_dir = (

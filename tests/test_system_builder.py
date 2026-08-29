@@ -56,6 +56,9 @@ class FakeExperimentManager:
         self.jobs[experiment_id]["status"] = "queued"
         return self.snapshot(experiment_id)
 
+    def definition_hash(self, experiment_id: str) -> str:
+        return f"definition-{experiment_id}"
+
     def shutdown(self) -> None:
         self.shutdown_called = True
 
@@ -89,6 +92,12 @@ class SystemBuilderTests(unittest.TestCase):
             shutil.copyfile(source, target)
             experiment["netlist_path"] = source.name
         return recipe
+
+    def _copy_optimization_netlists(self, root: Path) -> None:
+        examples = root / "examples"
+        examples.mkdir()
+        for name in ("mixed_signal_daq_ac.cir", "mixed_signal_daq_transient.cir"):
+            shutil.copyfile(PROJECT_ROOT / "examples" / name, examples / name)
 
     def test_root_establishes_a_local_session_and_security_headers(self) -> None:
         response = self.client.get("/")
@@ -188,6 +197,171 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertEqual(denied.status_code, 403)
         self.assertEqual(invalid.status_code, 200)
         self.assertFalse(invalid.json()["valid"])
+
+    def test_optimization_freeze_rejects_stale_workload_and_publishes_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            self._copy_optimization_netlists(workspace)
+            client = TestClient(
+                system_builder.create_app(workspace, testing=True),
+                base_url="http://testserver",
+            )
+            client.get("/")
+            recipe = client.get(
+                "/api/examples/mixed-signal-daq-optimization"
+            ).json()
+            preview = client.post(
+                "/api/optimization/preview", json=recipe, headers=self._headers()
+            ).json()
+            payload = {
+                "recipe": recipe,
+                "expected_recipe_sha256": preview["recipe"]["sha256"],
+                "expected_plan_id": preview["plan"]["plan_id"],
+                "expected_point_count": preview["plan"]["point_count"],
+                "expected_total_run_count": preview["execution"]["total_run_count"],
+            }
+
+            stale = client.post(
+                "/api/optimization/freeze",
+                json={**payload, "expected_total_run_count": 63},
+                headers=self._headers(),
+            )
+            frozen = client.post(
+                "/api/optimization/freeze", json=payload, headers=self._headers()
+            )
+
+            self.assertEqual(stale.status_code, 409)
+            self.assertEqual(
+                stale.json()["error"]["code"], "optimization_freeze_failed"
+            )
+            self.assertEqual(frozen.status_code, 200)
+            self.assertEqual(frozen.json()["plan"]["point_count"], 32)
+            self.assertTrue((workspace / frozen.json()["plan"]["artifact"]).is_file())
+            self.assertEqual(list((workspace / "runs").glob("optimization-job-*")), [])
+
+    def test_optimization_start_requires_acknowledgement_and_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            self._copy_optimization_netlists(workspace)
+            manager = FakeExperimentManager()
+            app = system_builder.create_app(
+                workspace,
+                testing=True,
+                manager_factory=lambda _runs: manager,
+            )
+            with TestClient(app, base_url="http://testserver") as client:
+                client.get("/")
+                recipe = client.get(
+                    "/api/examples/mixed-signal-daq-optimization"
+                ).json()
+                preview = client.post(
+                    "/api/optimization/preview",
+                    json=recipe,
+                    headers=self._headers(),
+                ).json()
+                frozen = client.post(
+                    "/api/optimization/freeze",
+                    json={
+                        "recipe": recipe,
+                        "expected_recipe_sha256": preview["recipe"]["sha256"],
+                        "expected_plan_id": preview["plan"]["plan_id"],
+                        "expected_point_count": preview["plan"]["point_count"],
+                        "expected_total_run_count": preview["execution"]["total_run_count"],
+                    },
+                    headers=self._headers(),
+                ).json()
+                payload = {
+                    "launch_token": frozen["launch_token"],
+                    "recipe": recipe,
+                    "confirmed_point_count": frozen["plan"]["point_count"],
+                    "confirmed_run_count": frozen["execution"]["total_run_count"],
+                }
+                denied = client.post(
+                    "/api/optimization/start",
+                    json={**payload, "acknowledged": False},
+                    headers=self._headers(),
+                )
+                started = client.post(
+                    "/api/optimization/start",
+                    json={**payload, "acknowledged": True},
+                    headers=self._headers(),
+                )
+                repeated = client.post(
+                    "/api/optimization/start",
+                    json={**payload, "acknowledged": True},
+                    headers=self._headers(),
+                )
+
+            self.assertEqual(denied.status_code, 400)
+            self.assertEqual(started.status_code, 202)
+            self.assertEqual(repeated.status_code, 200)
+            self.assertEqual(started.json(), repeated.json())
+            self.assertEqual(started.json()["status"], "queued")
+            self.assertEqual(
+                {item["name"] for item in started.json()["experiments"]},
+                {"ac", "transient"},
+            )
+            self.assertEqual(len(manager.defined), 2)
+            self.assertEqual(len(manager.started), 2)
+
+    def test_optimization_job_cancel_resume_and_discovery_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            self._copy_optimization_netlists(workspace)
+            manager = FakeExperimentManager()
+            app = system_builder.create_app(
+                workspace,
+                testing=True,
+                manager_factory=lambda _runs: manager,
+            )
+            with TestClient(app, base_url="http://testserver") as client:
+                client.get("/")
+                recipe = client.get(
+                    "/api/examples/mixed-signal-daq-optimization"
+                ).json()
+                preview = client.post(
+                    "/api/optimization/preview",
+                    json=recipe,
+                    headers=self._headers(),
+                ).json()
+                frozen = client.post(
+                    "/api/optimization/freeze",
+                    json={
+                        "recipe": recipe,
+                        "expected_recipe_sha256": preview["recipe"]["sha256"],
+                        "expected_plan_id": preview["plan"]["plan_id"],
+                        "expected_point_count": preview["plan"]["point_count"],
+                        "expected_total_run_count": preview["execution"]["total_run_count"],
+                    },
+                    headers=self._headers(),
+                ).json()
+                started = client.post(
+                    "/api/optimization/start",
+                    json={
+                        "launch_token": frozen["launch_token"],
+                        "recipe": recipe,
+                        "confirmed_point_count": frozen["plan"]["point_count"],
+                        "confirmed_run_count": frozen["execution"]["total_run_count"],
+                        "acknowledged": True,
+                    },
+                    headers=self._headers(),
+                ).json()
+                job_id = started["optimization_job_id"]
+                cancelled = client.post(
+                    f"/api/optimization/jobs/{job_id}/cancel",
+                    headers=self._headers(),
+                )
+                resumed = client.post(
+                    f"/api/optimization/jobs/{job_id}/resume",
+                    headers=self._headers(),
+                )
+                discovered = client.get("/api/optimization/jobs")
+
+            self.assertEqual(cancelled.json()["status"], "cancelled")
+            self.assertTrue(cancelled.json()["resumable"])
+            self.assertEqual(resumed.status_code, 202)
+            self.assertEqual(resumed.json()["status"], "queued")
+            self.assertEqual(discovered.json()["jobs"][0]["optimization_job_id"], job_id)
 
     def test_preview_accepts_gui_b1_variable_corner_and_requirement_edits(self) -> None:
         self._open()
@@ -631,10 +805,16 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertIn('id="optimization-constraints"', html)
         self.assertIn('id="optimization-plan-id"', html)
         self.assertIn('fetch("/api/optimization/preview"', optimization_javascript)
+        self.assertIn('id="optimization-freeze"', html)
+        self.assertIn('id="optimization-acknowledgement"', html)
+        self.assertIn('id="optimization-job"', html)
+        self.assertIn('fetch("/api/optimization/freeze"', optimization_javascript)
+        self.assertIn('fetch("/api/optimization/start"', optimization_javascript)
+        self.assertIn("recoverOptimizationJob", optimization_javascript)
         self.assertIn(
             '"preferred_series", "Generated E-series"', optimization_javascript
         )
-        self.assertIn("GUI-C1 is preview-only", html)
+        self.assertNotIn("GUI-C1 is preview-only", html)
         self.assertTrue((fonts / "LICENSE.txt").is_file())
         for name in system_builder.FONT_ASSETS:
             self.assertEqual((fonts / name).read_bytes()[:4], b"wOF2")

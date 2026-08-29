@@ -137,3 +137,43 @@ def preview_optimization_recipe(recipe: object) -> dict[str, object]:
                 {"path": "optimization", "code": "invalid_plan", "message": str(exc)}
             ],
         }
+
+
+def publish_optimization_recipe_plan(
+    recipe: object,
+    runs_dir: Path,
+    expected_recipe_sha256: str,
+    expected_plan_id: str,
+    expected_point_count: int,
+    expected_total_run_count: int,
+) -> tuple[dict[str, object], optimization_engine.OptimizationPlanResult]:
+    """Revalidate and publish exactly the optimization plan shown by Preview."""
+    preview = preview_optimization_recipe(recipe)
+    if not preview.get("valid"):
+        raise ValueError("optimization recipe is not valid")
+    preview_recipe = preview["recipe"]
+    preview_plan = preview["plan"]
+    execution = preview["execution"]
+    assert isinstance(preview_recipe, dict)
+    assert isinstance(preview_plan, dict)
+    assert isinstance(execution, dict)
+    if preview_recipe.get("sha256") != expected_recipe_sha256:
+        raise ValueError("recipe changed after its last valid preview")
+    if preview_plan.get("plan_id") != expected_plan_id:
+        raise ValueError("resolved plan changed after its last valid preview")
+    if preview_plan.get("point_count") != expected_point_count:
+        raise ValueError("point count changed after its last valid preview")
+    if execution.get("total_run_count") != expected_total_run_count:
+        raise ValueError("run count changed after its last valid preview")
+    assert isinstance(recipe, dict)
+    plan = optimization_engine.build_optimization_plan(
+        recipe["parameters"],  # type: ignore[arg-type]
+        recipe["objectives"],  # type: ignore[arg-type]
+        recipe["constraints"],  # type: ignore[arg-type]
+        recipe["fixed_parameters"],  # type: ignore[arg-type]
+        recipe["corner_axes"],  # type: ignore[arg-type]
+    )
+    published = optimization_engine.save_optimization_plan(runs_dir, plan)
+    if published["plan_id"] != expected_plan_id:
+        raise ValueError("published plan does not match the previewed plan")
+    return preview, published

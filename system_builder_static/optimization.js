@@ -4,6 +4,10 @@ let optimizationRecipe = null;
 let optimizationTimer = null;
 let optimizationSequence = 0;
 let optimizationDisplayUnits = new WeakMap();
+let latestOptimizationPreview = null;
+let frozenOptimizationLaunch = null;
+let trackedOptimizationJob = null;
+let optimizationPollTimer = null;
 
 const optId = (id) => document.getElementById(id);
 const OPT_UNITS = {
@@ -312,6 +316,8 @@ function renderOptimizationPreview(result) {
   optId("optimization-limits").textContent = `${result.limits.maximum_candidates} candidates · ${result.limits.maximum_points} expanded points`;
   renderOptimizationErrors(result.errors || []);
   if (!result.valid) {
+    latestOptimizationPreview = null;
+    optId("optimization-freeze").disabled = true;
     optId("optimization-preview-title").textContent = "Definition needs attention";
     for (const id of ["optimization-candidates", "optimization-corner-count", "optimization-points", "optimization-runs"]) optId(id).textContent = "—";
     optId("optimization-plan-id").textContent = "Not generated";
@@ -319,6 +325,8 @@ function renderOptimizationPreview(result) {
     optId("optimization-experiments").replaceChildren();
     return;
   }
+  latestOptimizationPreview = result;
+  optId("optimization-freeze").disabled = false;
   optId("optimization-preview-title").textContent = "Ready to become immutable";
   optId("optimization-candidates").textContent = result.plan.candidate_count.toLocaleString();
   optId("optimization-corner-count").textContent = result.plan.corner_count.toLocaleString();
@@ -357,13 +365,210 @@ function renderOptimizationPreview(result) {
   optId("optimization-experiments").replaceChildren(...experiments);
 }
 
+function invalidateOptimizationLaunch() {
+  frozenOptimizationLaunch = null;
+  optId("optimization-confirmation").hidden = true;
+  optId("optimization-acknowledgement").checked = false;
+  optId("optimization-acknowledgement").disabled = false;
+  optId("optimization-start").disabled = true;
+}
+
 function scheduleOptimizationPreview() {
   if (!optimizationRecipe) return;
+  invalidateOptimizationLaunch();
   window.clearTimeout(optimizationTimer);
   const status = optId("optimization-status");
   status.className = "status-pill idle preview-pending";
   status.textContent = "Checking";
   optimizationTimer = window.setTimeout(previewOptimization, 350);
+}
+
+async function freezeOptimizationPlan() {
+  if (!optimizationRecipe || !latestOptimizationPreview) return;
+  const button = optId("optimization-freeze");
+  button.disabled = true;
+  button.textContent = "Publishing…";
+  try {
+    const response = await fetch("/api/optimization/freeze", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-LTspice-System-Builder": "1"},
+      body: JSON.stringify({
+        recipe: optimizationRecipe,
+        expected_recipe_sha256: latestOptimizationPreview.recipe.sha256,
+        expected_plan_id: latestOptimizationPreview.plan.plan_id,
+        expected_point_count: latestOptimizationPreview.plan.point_count,
+        expected_total_run_count: latestOptimizationPreview.execution.total_run_count,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Optimization plan could not be published");
+    frozenOptimizationLaunch = result;
+    optId("optimization-frozen-plan").textContent = result.plan.plan_id;
+    optId("optimization-confirm-candidates").textContent = result.plan.candidate_count.toLocaleString();
+    optId("optimization-confirm-corners").textContent = latestOptimizationPreview.plan.corner_count.toLocaleString();
+    optId("optimization-confirm-points").textContent = result.plan.point_count.toLocaleString();
+    optId("optimization-confirm-runs").textContent = result.execution.total_run_count.toLocaleString();
+    optId("optimization-confirm-concurrency").textContent = result.execution.max_concurrency.toLocaleString();
+    optId("optimization-frozen-artifact").textContent = result.plan.artifact;
+    optId("optimization-acknowledgement").checked = false;
+    optId("optimization-acknowledgement").disabled = false;
+    optId("optimization-start").disabled = true;
+    optId("optimization-confirmation").hidden = false;
+    renderOptimizationErrors([]);
+  } catch (error) {
+    renderOptimizationErrors([{path: "publication", message: error.message}]);
+  } finally {
+    button.disabled = latestOptimizationPreview === null;
+    button.textContent = "Publish confirmed plan";
+  }
+}
+
+function optimizationStatusClass(status) {
+  if (status === "completed") return "valid";
+  if (["failed", "cancelled"].includes(status)) return "invalid";
+  return "idle";
+}
+
+function optimizationProgressRow(label, value, total) {
+  const row = document.createElement("div");
+  row.className = "optimization-progress-row";
+  const text = document.createElement("span");
+  text.textContent = label;
+  const count = document.createElement("strong");
+  count.textContent = `${Number(value).toLocaleString()} / ${Number(total).toLocaleString()}`;
+  const track = document.createElement("div");
+  track.className = "progress-track";
+  const fill = document.createElement("span");
+  fill.style.width = `${total ? Math.min(100, (Number(value) / Number(total)) * 100) : 0}%`;
+  track.append(fill);
+  row.append(text, count, track);
+  return row;
+}
+
+function renderOptimizationJob(job) {
+  trackedOptimizationJob = job;
+  const container = optId("optimization-job");
+  const heading = document.createElement("div");
+  heading.className = "panel-heading compact";
+  const title = document.createElement("div");
+  const step = document.createElement("p");
+  step.className = "step";
+  step.textContent = "DURABLE OPTIMIZATION JOB";
+  const name = document.createElement("h3");
+  name.textContent = job.optimization_job_id;
+  title.append(step, name);
+  const status = document.createElement("span");
+  status.className = `status-pill ${optimizationStatusClass(job.status)}`;
+  status.textContent = job.status;
+  heading.append(title, status);
+
+  const structure = document.createElement("p");
+  structure.className = "optimization-structure";
+  structure.textContent = `${job.progress.candidate_count} candidates × ${job.progress.corner_count} corners × ${job.experiments.length} analyses`;
+  const progress = document.createElement("div");
+  progress.className = "optimization-progress";
+  progress.append(optimizationProgressRow("Total LTspice runs", job.progress.finished_points, job.progress.total_runs));
+  for (const child of job.experiments) {
+    progress.append(optimizationProgressRow(`${child.name.toUpperCase()} · ${child.status}`, child.finished_points, child.point_count));
+  }
+  const evaluation = document.createElement("p");
+  evaluation.className = "editor-note";
+  evaluation.textContent = job.progress.evaluation === "complete"
+    ? "Electrical analysis is complete. Pareto and winner visualization begins in GUI-C3."
+    : `Optimization evaluation: ${job.progress.evaluation}.`;
+  const actions = document.createElement("div");
+  actions.className = "job-actions";
+  if (["defined", "queued", "running", "cancelling"].includes(job.status)) {
+    const cancel = document.createElement("button");
+    cancel.className = "secondary-button";
+    cancel.type = "button";
+    cancel.textContent = "Cancel remaining runs";
+    cancel.addEventListener("click", () => mutateOptimizationJob("cancel"));
+    actions.append(cancel);
+  } else if (job.resumable) {
+    const resume = document.createElement("button");
+    resume.className = "secondary-button";
+    resume.type = "button";
+    resume.textContent = "Resume unfinished runs";
+    resume.addEventListener("click", () => mutateOptimizationJob("resume"));
+    actions.append(resume);
+  }
+  if (job.error) {
+    const error = document.createElement("p");
+    error.className = "job-error";
+    error.textContent = job.error;
+    actions.append(error);
+  }
+  container.replaceChildren(heading, structure, progress, evaluation, actions);
+  container.hidden = false;
+  window.clearTimeout(optimizationPollTimer);
+  if (["defined", "queued", "running", "cancelling"].includes(job.status)) {
+    optimizationPollTimer = window.setTimeout(pollOptimizationJob, 750);
+  }
+}
+
+async function pollOptimizationJob() {
+  if (!trackedOptimizationJob) return;
+  try {
+    const response = await fetch(`/api/optimization/jobs/${trackedOptimizationJob.optimization_job_id}`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Optimization status is unavailable");
+    renderOptimizationJob(result);
+  } catch (error) {
+    renderOptimizationErrors([{path: "optimization job", message: error.message}]);
+  }
+}
+
+async function mutateOptimizationJob(action) {
+  if (!trackedOptimizationJob) return;
+  try {
+    const response = await fetch(`/api/optimization/jobs/${trackedOptimizationJob.optimization_job_id}/${action}`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-LTspice-System-Builder": "1"},
+      body: "{}",
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || `Optimization ${action} failed`);
+    renderOptimizationJob(result);
+  } catch (error) {
+    renderOptimizationErrors([{path: `optimization ${action}`, message: error.message}]);
+  }
+}
+
+async function startOptimization() {
+  if (!optimizationRecipe || !frozenOptimizationLaunch || !optId("optimization-acknowledgement").checked) return;
+  const button = optId("optimization-start");
+  button.disabled = true;
+  button.textContent = "Queuing…";
+  try {
+    const response = await fetch("/api/optimization/start", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-LTspice-System-Builder": "1"},
+      body: JSON.stringify({
+        launch_token: frozenOptimizationLaunch.launch_token,
+        recipe: optimizationRecipe,
+        confirmed_point_count: frozenOptimizationLaunch.plan.point_count,
+        confirmed_run_count: frozenOptimizationLaunch.execution.total_run_count,
+        acknowledged: true,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Optimization could not be started");
+    optId("optimization-acknowledgement").disabled = true;
+    button.textContent = "Optimization queued";
+    renderOptimizationJob(result);
+  } catch (error) {
+    renderOptimizationErrors([{path: "execution", message: error.message}]);
+    button.disabled = false;
+    button.textContent = "Start local optimization";
+  }
+}
+
+async function recoverOptimizationJob() {
+  const response = await fetch("/api/optimization/jobs?limit=1");
+  if (!response.ok) return;
+  const result = await response.json();
+  if (result.jobs.length) renderOptimizationJob(result.jobs[0]);
 }
 
 async function previewOptimization() {
@@ -402,9 +607,15 @@ async function loadOptimizationReference() {
   optimizationDisplayUnits = new WeakMap();
   renderOptimizationEditors();
   await previewOptimization();
+  await recoverOptimizationJob();
 }
 
 optId("optimization-preview").addEventListener("click", previewOptimization);
+optId("optimization-freeze").addEventListener("click", freezeOptimizationPlan);
+optId("optimization-acknowledgement").addEventListener("change", () => {
+  optId("optimization-start").disabled = !optId("optimization-acknowledgement").checked;
+});
+optId("optimization-start").addEventListener("click", startOptimization);
 optId("optimization-file").addEventListener("change", async (event) => {
   const [file] = event.target.files;
   if (!file) return;

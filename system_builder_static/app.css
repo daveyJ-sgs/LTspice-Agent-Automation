@@ -302,6 +302,12 @@ td:first-child { color: var(--text); font-weight: 600; }
 .optimization-section { margin-top: 48px; scroll-margin-top: 74px; }
 .optimization-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(390px, .8fr); gap: 16px; align-items: start; }
 .optimization-preview-panel { position: sticky; top: 74px; }
+.optimization-structure { color: var(--muted); font: 400 10px/1.45 "IBM Plex Mono", monospace; }
+.optimization-progress { display: grid; gap: 9px; margin: 12px 0; }
+.optimization-progress-row { display: grid; grid-template-columns: 1fr auto; gap: 5px 10px; align-items: center; color: var(--muted); font-size: 10px; }
+.optimization-progress-row strong { color: var(--text); font: 600 10px "IBM Plex Mono", monospace; }
+.progress-track { grid-column: 1 / -1; height: 5px; overflow: hidden; background: var(--border); }
+.progress-track span { display: block; height: 100%; background: var(--accent); transition: width .2s linear; }
 .section-actions { margin: 0; justify-content: flex-end; }
 .optimization-table { min-width: 720px; margin-top: 12px; }
 .optimization-table td:nth-child(3) { min-width: 320px; }
