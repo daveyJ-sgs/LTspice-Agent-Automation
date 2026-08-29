@@ -170,7 +170,9 @@ content-addressed PNG plus provenance JSON beneath
 the same PNG is embedded into completed offline reports. macOS capture requires
 Accessibility and Screen Recording permission for the terminal application;
 Windows uses the local LTspice window through PowerShell and does not transmit
-the schematic.
+the schematic. On a fresh Windows installation, capture dismisses only
+positively identified LTspice change-log and Web Sync panes before recording
+the validated schematic window.
 
 GUI-A2 adds a read-only workspace below the recipe preview. It reads current
 durable-job progress directly from experiment manifests, reports whether the

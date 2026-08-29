@@ -1170,6 +1170,40 @@ GUI-B4 verification gate:
 - Tests cover portable report context, discrete and empirical preview,
   three-variable correlation matrices, and the static interaction contract
 
+#### System Builder GUI-B5: Hybrid schematic capture — complete
+
+- Added recipe-driven selection of an existing workspace PNG/JPEG or an
+  editable LTspice `.asc` source, with the DAQ recipe pointing to both its
+  educational schematic and current report image
+- Added workspace-confined source/image discovery and guarded capture/image
+  routes; traversal, symlinks, wrong suffixes, oversized inputs, and unmarked
+  mutations fail closed
+- Native macOS and Windows adapters open the exact source document, validate
+  its process and title, zoom the schematic to full extent, and write a
+  content-addressed PNG plus provenance JSON under
+  `runs/system-builder-assets/`
+- System Builder immediately previews the managed capture and carries the same
+  image into completed offline reports while retaining the `.asc` as the
+  editable human source
+- Windows first-run handling maximizes the validated schematic and dismisses
+  only positively identified LTspice change-log and Web Sync panes before
+  capture; no blind close shortcut is sent to a user schematic
+
+GUI-B5 verification gate:
+
+- Real macOS LTspice capture produced a clean 1566 by 798 full-schematic image,
+  displayed it in System Builder, and embedded it into the completed transient
+  DAQ report
+- Real Windows LTspice 26.0.2 run `33254906906` produced a visually inspected
+  1040 by 736 full-schematic image with 34,688 recognized blue circuit pixels
+  and a zero central white-obstruction fraction
+- The same Windows run completed the real simulator smoke test, structured DAQ
+  qualification, durable optimization comparison, and finalist tolerance
+  proof before uploading the capture and structured evidence
+- Tests cover capture provenance, workspace confinement, bounded discovery,
+  guarded API access, recipe validation, Windows document-title behavior, and
+  first-run obstruction checks
+
 Next System Builder slices:
 
 1. GUI-C — optimization domains, objectives, constraints, Pareto results, and
