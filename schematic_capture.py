@@ -204,32 +204,16 @@ param([string]$Executable, [string]$Source, [string]$Output)
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName UIAutomationClient
 Add-Type @"
 using System;
-using System.Text;
 using System.Runtime.InteropServices;
 public static class NativeWindow {
-  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
   [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int command);
-  [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent, EnumWindowsProc callback, IntPtr data);
-  [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
-  [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam);
-  public static int CloseChildrenContaining(IntPtr parent, string fragment) {
-    int closed = 0;
-    EnumChildWindows(parent, delegate(IntPtr child, IntPtr data) {
-      StringBuilder title = new StringBuilder(512);
-      GetWindowText(child, title, title.Capacity);
-      if (title.ToString().IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0) {
-        if (PostMessage(child, 0x0010, IntPtr.Zero, IntPtr.Zero)) { closed++; }
-      }
-      return true;
-    }, IntPtr.Zero);
-    return closed;
-  }
 }
 "@
 $launched = Start-Process -FilePath $Executable -ArgumentList ('"' + $Source + '"') -PassThru
@@ -249,12 +233,31 @@ if ($process.MainWindowTitle -notlike ("*" + [IO.Path]::GetFileNameWithoutExtens
 [NativeWindow]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
 [NativeWindow]::ShowWindow($process.MainWindowHandle, 3) | Out-Null
 Start-Sleep -Milliseconds 500
-$closedChangeLogs = [NativeWindow]::CloseChildrenContaining(
-  $process.MainWindowHandle,
-  "LTspice Tool Change Log"
+$keyboard = New-Object -ComObject WScript.Shell
+$automationRoot = [System.Windows.Automation.AutomationElement]::FromHandle(
+  $process.MainWindowHandle
 )
-if ($closedChangeLogs -gt 0) { Start-Sleep -Milliseconds 500 }
-(New-Object -ComObject WScript.Shell).SendKeys(" ")
+$descendants = $automationRoot.FindAll(
+  [System.Windows.Automation.TreeScope]::Descendants,
+  [System.Windows.Automation.Condition]::TrueCondition
+)
+$changeLogPresent = $false
+foreach ($element in $descendants) {
+  if ($element.Current.Name -like "LTspice Tool Change Log:*") {
+    $changeLogPresent = $true
+    break
+  }
+}
+if ($changeLogPresent) {
+  $keyboard.SendKeys("^{F4}")
+  Start-Sleep -Milliseconds 500
+  $remaining = $automationRoot.FindAll(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.Condition]::TrueCondition
+  ) | Where-Object { $_.Current.Name -like "LTspice Tool Change Log:*" }
+  if ($remaining.Count -ne 0) { throw "LTspice change-log pane did not close" }
+}
+$keyboard.SendKeys(" ")
 Start-Sleep -Milliseconds 900
 $rect = New-Object NativeWindow+RECT
 if (-not [NativeWindow]::GetWindowRect($process.MainWindowHandle, [ref]$rect)) { throw "LTspice window bounds are unavailable" }

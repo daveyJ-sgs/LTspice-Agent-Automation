@@ -19,6 +19,7 @@ class SchematicCaptureTests(unittest.TestCase):
         )
         self.assertIn("GetDpiForWindow", schematic_capture._WINDOWS_CAPTURE_SCRIPT)
         self.assertIn("ShowWindow($process.MainWindowHandle, 3)", schematic_capture._WINDOWS_CAPTURE_SCRIPT)
+        self.assertIn("UIAutomationClient", schematic_capture._WINDOWS_CAPTURE_SCRIPT)
         self.assertIn("LTspice Tool Change Log", schematic_capture._WINDOWS_CAPTURE_SCRIPT)
 
     def test_captures_content_addressed_asset_and_metadata(self) -> None:
