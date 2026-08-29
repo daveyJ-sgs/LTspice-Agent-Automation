@@ -289,10 +289,7 @@ for ($attempt = 0; $attempt -lt 20 -and $null -eq $webSyncWindow; $attempt++) {
     [System.Windows.Automation.Condition]::TrueCondition
   )
   foreach ($window in $topLevelWindows) {
-    if (
-      $window.Current.ProcessId -eq $process.Id -and
-      $window.Current.Name -eq "Web Sync"
-    ) {
+    if ($window.Current.Name -eq "Web Sync") {
       $webSyncWindow = $window
       break
     }
@@ -313,6 +310,11 @@ if ($null -ne $webSyncWindow) {
   )
   $invokePattern.Invoke()
   Start-Sleep -Milliseconds 500
+  $remainingWebSync = [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+    [System.Windows.Automation.TreeScope]::Children,
+    [System.Windows.Automation.Condition]::TrueCondition
+  ) | Where-Object { $_.Current.Name -eq "Web Sync" }
+  if ($remainingWebSync.Count -ne 0) { throw "LTspice Web Sync dialog did not close" }
 }
 $keyboard.SendKeys(" ")
 Start-Sleep -Milliseconds 900
