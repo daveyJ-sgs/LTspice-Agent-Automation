@@ -228,6 +228,123 @@ function removeCorrelationVariable(name) {
   recipe.plan.correlations = groups.filter((group) => group.variables.length >= 2);
 }
 
+function schematicContext() {
+  if (!recipe.report_context || typeof recipe.report_context !== "object") {
+    recipe.report_context = {};
+  }
+  return recipe.report_context;
+}
+
+function renderSchematicErrors(errors = []) {
+  const container = byId("schematic-errors");
+  if (errors.length === 0) {
+    container.hidden = true;
+    container.replaceChildren();
+    return;
+  }
+  const list = document.createElement("ul");
+  for (const error of errors) {
+    const item = document.createElement("li");
+    item.textContent = error.message || String(error);
+    list.append(item);
+  }
+  container.replaceChildren(list);
+  container.hidden = false;
+}
+
+function showSchematicImage(cacheBust = false) {
+  if (!recipe) return;
+  const context = schematicContext();
+  const image = byId("schematic-preview");
+  const placeholder = byId("schematic-placeholder");
+  const path = String(context.schematic_path || "").trim();
+  if (!path) {
+    image.hidden = true;
+    image.removeAttribute("src");
+    placeholder.hidden = false;
+    byId("schematic-status").textContent = "Select a PNG/JPEG or capture an LTspice schematic.";
+    return;
+  }
+  image.onload = () => {
+    image.hidden = false;
+    placeholder.hidden = true;
+    byId("schematic-status").textContent = path;
+  };
+  image.onerror = () => {
+    image.hidden = true;
+    placeholder.hidden = false;
+    byId("schematic-status").textContent = `Image unavailable: ${path}`;
+  };
+  const version = cacheBust ? `&v=${Date.now()}` : "";
+  image.src = `/api/schematic/image?path=${encodeURIComponent(path)}${version}`;
+}
+
+function populateSchematicControls() {
+  const context = schematicContext();
+  byId("schematic-source-path").value = context.schematic_source_path || "";
+  byId("schematic-image-path").value = context.schematic_path || "";
+  byId("circuit-title").textContent = context.title || recipe.name || "Circuit under study";
+  byId("circuit-summary").textContent = context.circuit_summary || recipe.description || "LTspice study schematic";
+  renderSchematicErrors();
+  showSchematicImage();
+}
+
+async function loadSchematicFiles() {
+  const response = await fetch("/api/schematic/files");
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error?.message || "Schematic files could not be listed");
+  const populate = (id, values) => {
+    byId(id).replaceChildren(...values.map((value) => {
+      const option = document.createElement("option");
+      option.value = value;
+      return option;
+    }));
+  };
+  populate("schematic-source-files", result.sources || []);
+  populate("schematic-image-files", result.images || []);
+}
+
+async function captureSchematic() {
+  if (!recipe) return;
+  const sourcePath = byId("schematic-source-path").value.trim();
+  const button = byId("capture-schematic");
+  renderSchematicErrors();
+  if (!sourcePath) {
+    renderSchematicErrors([{message: "Select a workspace-relative LTspice .asc file first."}]);
+    return;
+  }
+  button.disabled = true;
+  button.textContent = "Capturing…";
+  byId("schematic-status").textContent = "Opening LTspice and capturing its schematic window…";
+  try {
+    const response = await fetch("/api/schematic/capture", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({source_path: sourcePath}),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Schematic capture failed");
+    const context = schematicContext();
+    context.schematic_source_path = result.source_path;
+    context.schematic_path = result.schematic_path;
+    byId("schematic-source-path").value = result.source_path;
+    byId("schematic-image-path").value = result.schematic_path;
+    byId("schematic-status").textContent = `${result.capture_method} · ${result.width} × ${result.height}`;
+    showSchematicImage(true);
+    await loadSchematicFiles();
+    schedulePreview();
+  } catch (error) {
+    renderSchematicErrors([{message: error.message}]);
+    byId("schematic-status").textContent = "Capture did not complete.";
+  } finally {
+    button.disabled = false;
+    button.textContent = "Capture from LTspice";
+  }
+}
+
 function discreteEditor(variable, base) {
   const editor = document.createElement("div");
   editor.className = "distribution-editor";
@@ -688,6 +805,7 @@ function populateRecipeControls() {
   populateCorrelations();
   populateCorners();
   populateRequirements();
+  populateSchematicControls();
 }
 
 function renderErrors(errors) {
@@ -715,6 +833,7 @@ function renderScopedErrors(errors) {
     ["correlation-errors", ["plan.correlations"]],
     ["corner-errors", ["plan.corner_axes"]],
     ["requirement-errors", ["experiments"]],
+    ["schematic-errors", ["report_context.schematic_path", "report_context.schematic_source_path"]],
   ];
   document.querySelectorAll("[data-path]").forEach((element) => {
     element.removeAttribute("aria-invalid");
@@ -1225,6 +1344,7 @@ async function loadInitialState() {
   byId("workspace").textContent = session.workspace;
   byId("workspace").title = session.workspace;
   populateRecipeControls();
+  await loadSchematicFiles();
   await preview();
   await loadHistory();
 }
@@ -1235,6 +1355,32 @@ byId("execution-acknowledgement").addEventListener("change", () => {
   byId("start-button").disabled = !byId("execution-acknowledgement").checked;
 });
 byId("start-button").addEventListener("click", startStudy);
+byId("capture-schematic").addEventListener("click", captureSchematic);
+byId("refresh-schematic").addEventListener("click", () => {
+  if (!recipe) return;
+  const context = schematicContext();
+  const selected = byId("schematic-image-path").value.trim();
+  if (selected) context.schematic_path = selected;
+  else delete context.schematic_path;
+  showSchematicImage(true);
+  schedulePreview();
+});
+byId("schematic-source-path").addEventListener("input", () => {
+  if (!recipe) return;
+  const context = schematicContext();
+  const value = byId("schematic-source-path").value;
+  if (value) context.schematic_source_path = value;
+  else delete context.schematic_source_path;
+  schedulePreview();
+});
+byId("schematic-image-path").addEventListener("input", () => {
+  if (!recipe) return;
+  const context = schematicContext();
+  const value = byId("schematic-image-path").value;
+  if (value) context.schematic_path = value;
+  else delete context.schematic_path;
+  schedulePreview();
+});
 for (const id of ["sample-count", "seed", "sampling-method"]) {
   byId(id).addEventListener("input", schedulePreview);
 }

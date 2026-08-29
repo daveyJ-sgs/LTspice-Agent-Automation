@@ -166,6 +166,14 @@ jobs:
           $process.Refresh()
           if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
 
+      - name: Capture the educational DAQ schematic through real LTspice
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          python tests/real_ltspice_schematic_capture.py
+          Get-Process -Name "LTspice", "XVIIx64", "scad3" -ErrorAction SilentlyContinue |
+            Stop-Process -Force
+
       - name: Run bounded real simulator verification
         shell: pwsh
         timeout-minutes: 3
@@ -202,6 +210,8 @@ jobs:
           path: |
             ${{ runner.temp }}/ltspice-install.log
             ${{ runner.temp }}/ltspice-first-run.png
+            runs/system-builder-assets/*.png
+            runs/system-builder-assets/*.json
             ${{ runner.temp }}/ltspice-real-smoke/run_manifest.json
             ${{ runner.temp }}/ltspice-real-smoke/rc_lowpass.log
             ${{ runner.temp }}/ltspice-real-smoke/rc_lowpass.raw

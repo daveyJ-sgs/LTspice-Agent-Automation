@@ -51,6 +51,7 @@ class ReportContext(TypedDict, total=False):
     simulation_summary: str
     mcp_context: str
     schematic_path: str
+    schematic_source_path: str
     schematic_caption: str
 
 

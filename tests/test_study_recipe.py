@@ -157,13 +157,18 @@ class StudyRecipeTests(unittest.TestCase):
             "title": "DAQ report",
             "surprise": "no",
             "schematic_path": "../outside.svg",
+            "schematic_source_path": "../outside.cir",
         }
         preview = study_recipe.preview_study_recipe(recipe, PROJECT_ROOT)
 
         self.assertFalse(preview["valid"])
         self.assertEqual(
             {error["path"] for error in preview["errors"]},
-            {"report_context.surprise", "report_context.schematic_path"},
+            {
+                "report_context.surprise",
+                "report_context.schematic_path",
+                "report_context.schematic_source_path",
+            },
         )
 
 

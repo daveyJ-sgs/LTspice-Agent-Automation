@@ -34,7 +34,7 @@
   <main>
     <section class="tool-intro">
       <div>
-        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-B3+B4</p>
+        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-B5</p>
         <h1>1 MHz acquisition-channel qualification</h1>
         <p class="intro-copy">Configure, execute, and inspect a deterministic AC/transient tolerance study. Preview remains non-mutating; confirmed work produces durable evidence.</p>
       </div>
@@ -216,12 +216,33 @@
         </article>
 
         <article class="panel circuit-panel">
-          <img src="/assets/daq-schematic.png" alt="Mixed-signal DAQ LTspice schematic">
-          <div>
-            <p class="step">CIRCUIT UNDER STUDY</p>
-            <h3>1 MHz acquisition channel</h3>
-            <p>Two-pole anti-alias filtering, gain, ADC drive, and clocked sample-and-hold loading.</p>
+          <div class="schematic-frame">
+            <img id="schematic-preview" src="/assets/daq-schematic.png" alt="LTspice schematic selected by the study recipe">
+            <p id="schematic-placeholder" hidden>No schematic image selected.</p>
           </div>
+          <div class="circuit-details">
+            <p class="step">CIRCUIT UNDER STUDY</p>
+            <h3 id="circuit-title">1 MHz acquisition channel</h3>
+            <p id="circuit-summary">Two-pole anti-alias filtering, gain, ADC drive, and clocked sample-and-hold loading.</p>
+            <div class="schematic-fields">
+              <label>
+                <span>LTspice source (.asc)</span>
+                <input id="schematic-source-path" list="schematic-source-files" type="text" spellcheck="false" placeholder="examples/my_circuit.asc">
+              </label>
+              <label>
+                <span>Report image (PNG/JPEG)</span>
+                <input id="schematic-image-path" list="schematic-image-files" type="text" spellcheck="false" placeholder="docs/images/my-circuit.png">
+              </label>
+            </div>
+            <div class="button-row schematic-actions">
+              <button id="capture-schematic" class="primary-button" type="button">Capture from LTspice</button>
+              <button id="refresh-schematic" class="secondary-button" type="button">Use selected image</button>
+            </div>
+            <p id="schematic-status" class="schematic-status" aria-live="polite">Workspace-relative paths only.</p>
+            <div id="schematic-errors" class="inline-errors" aria-live="polite" hidden></div>
+          </div>
+          <datalist id="schematic-source-files"></datalist>
+          <datalist id="schematic-image-files"></datalist>
         </article>
 
       </aside>

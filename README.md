@@ -161,6 +161,17 @@ and the offline HTML report. Restarting System Builder recovers queued or
 running manifests; a completed job whose report failed can be finalized again
 from the workspace or job panel.
 
+GUI-B5 makes the circuit view recipe-driven. A study can select an existing
+workspace PNG/JPEG or name a companion LTspice `.asc` source and use
+**Capture from LTspice**. Native capture opens that exact schematic, zooms it
+to full extent, verifies the launched process and document title, and writes a
+content-addressed PNG plus provenance JSON beneath
+`runs/system-builder-assets/`. LSB immediately displays the managed image and
+the same PNG is embedded into completed offline reports. macOS capture requires
+Accessibility and Screen Recording permission for the terminal application;
+Windows uses the local LTspice window through PowerShell and does not transmit
+the schematic.
+
 GUI-A2 adds a read-only workspace below the recipe preview. It reads current
 durable-job progress directly from experiment manifests, reports whether the
 rebuildable experiment index is current, and launches existing experiment,

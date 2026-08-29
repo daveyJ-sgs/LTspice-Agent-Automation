@@ -17,8 +17,10 @@ from typing import Callable
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 import experiment_report
+import schematic_capture
 import statistical_engine
 from system_builder_history import evidence_file, workspace_history
 from study_recipe import (
@@ -62,6 +64,7 @@ def create_app(
     *,
     testing: bool = False,
     manager_factory: Callable[[Path], object] | None = None,
+    schematic_capturer: Callable[[Path, object], dict[str, object]] | None = None,
 ) -> FastAPI:
     """Create one session-scoped loopback application."""
     workspace = workspace_root.resolve(strict=True)
@@ -69,6 +72,7 @@ def create_app(
         raise ValueError("workspace_root must be a directory")
     session_token = secrets.token_urlsafe(32)
     manager_builder = manager_factory or _default_manager_factory
+    capture_builder = schematic_capturer or schematic_capture.capture_schematic
     execution_manager: object | None = None
     execution_lock = threading.Lock()
     report_lock = threading.Lock()
@@ -378,6 +382,60 @@ def create_app(
             return JSONResponse(workspace_history(workspace, limit=limit))
         except ValueError as exc:
             return _json_error(400, "history_limit", str(exc))
+
+    @app.get("/api/schematic/files")
+    def schematic_files(request: Request) -> Response:
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        try:
+            return JSONResponse(schematic_capture.list_schematic_files(workspace))
+        except (OSError, ValueError) as exc:
+            return _json_error(409, "schematic_files_failed", str(exc))
+
+    @app.get("/api/schematic/image")
+    def schematic_image(request: Request, path: str) -> Response:
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        try:
+            image = schematic_capture.resolve_schematic_image(workspace, path)
+        except ValueError:
+            return _json_error(
+                404,
+                "schematic_image_not_found",
+                "schematic image was not found inside the workspace",
+            )
+        media_type = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+        }[image.suffix.lower()]
+        return FileResponse(image, media_type=media_type)
+
+    @app.post("/api/schematic/capture")
+    async def capture_schematic_image(request: Request) -> Response:
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        payload, error = await read_json_body(request, maximum=4096)
+        if error is not None:
+            return error
+        if not isinstance(payload, dict) or set(payload) != {"source_path"}:
+            return _json_error(
+                400,
+                "invalid_schematic_capture",
+                "capture requires exactly one source_path field",
+            )
+        try:
+            result = await run_in_threadpool(
+                capture_builder,
+                workspace,
+                payload["source_path"],
+            )
+            return JSONResponse(result)
+        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+            return _json_error(409, "schematic_capture_failed", str(exc))
 
     @app.get("/api/jobs/{experiment_id}")
     def job(request: Request, experiment_id: str) -> Response:

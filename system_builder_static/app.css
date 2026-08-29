@@ -259,9 +259,18 @@ td:first-child { color: var(--text); font-weight: 600; }
 .job-error { color: var(--danger); font-size: 10px; }
 
 .circuit-panel { padding: 0; overflow: hidden; }
-.circuit-panel img { width: 100%; max-height: 245px; object-fit: cover; object-position: top; display: block; border-bottom: 1px solid var(--border); background: var(--schematic-bg); }
-.circuit-panel div { padding: 15px 18px 18px; }
-.circuit-panel p:last-child { color: var(--muted); margin-bottom: 0; line-height: 1.45; font-size: 12px; }
+.schematic-frame { min-height: 180px; display: grid; place-items: center; border-bottom: 1px solid var(--border); background: var(--schematic-bg); }
+.schematic-frame img { width: 100%; max-height: 340px; object-fit: contain; display: block; }
+.schematic-frame p { color: #30343a; font: 600 11px "IBM Plex Mono", monospace; }
+.circuit-details { padding: 15px 18px 18px; }
+.circuit-details > p { color: var(--muted); margin-bottom: 0; line-height: 1.45; font-size: 12px; }
+.schematic-fields { display: grid; gap: 8px; margin-top: 14px; }
+.schematic-fields label { display: grid; gap: 4px; }
+.schematic-fields label span { color: var(--subtle); font: 600 9px "IBM Plex Mono", monospace; text-transform: uppercase; letter-spacing: .05em; }
+.schematic-fields input { font-size: 10px; }
+.schematic-actions { margin-top: 10px; }
+.schematic-actions button { padding: 8px 10px; font-size: 10px; }
+.schematic-status { color: var(--subtle) !important; font: 400 9px/1.45 "IBM Plex Mono", monospace !important; margin-top: 9px !important; overflow-wrap: anywhere; }
 .history-section { margin-top: 48px; scroll-margin-top: 74px; }
 .history-heading { display: flex; justify-content: space-between; align-items: end; gap: 28px; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 14px; }
 .history-heading h2 { font-size: 22px; }

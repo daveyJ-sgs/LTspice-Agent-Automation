@@ -44,6 +44,7 @@ ALLOWED_REPORT_CONTEXT_KEYS = {
     "simulation_summary",
     "mcp_context",
     "schematic_path",
+    "schematic_source_path",
     "schematic_caption",
 }
 
@@ -446,6 +447,22 @@ def preview_study_recipe(
                         "report_context.schematic_path",
                         "invalid_path",
                         "schematic_path must be a portable PNG or JPEG workspace path",
+                    )
+                )
+        schematic_source_path = report_context.get("schematic_source_path")
+        if isinstance(schematic_source_path, str):
+            portable = PurePosixPath(schematic_source_path)
+            if (
+                "\\" in schematic_source_path
+                or portable.is_absolute()
+                or ".." in portable.parts
+                or portable.suffix.lower() != ".asc"
+            ):
+                errors.append(
+                    _error(
+                        "report_context.schematic_source_path",
+                        "invalid_path",
+                        "schematic_source_path must be a portable LTspice .asc workspace path",
                     )
                 )
     try:

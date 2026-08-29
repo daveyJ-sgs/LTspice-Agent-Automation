@@ -477,6 +477,69 @@ class SystemBuilderTests(unittest.TestCase):
             404,
         )
 
+    def test_schematic_files_capture_and_image_routes_are_confined(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            source = workspace / "design.asc"
+            source.write_text("Version 4\nSHEET 1 880 680\n", encoding="utf-8")
+            image = workspace / "reference.png"
+            shutil.copyfile(
+                PROJECT_ROOT / "docs/images/mixed-signal-daq-schematic.png",
+                image,
+            )
+
+            def capture(root: Path, source_path: object) -> dict[str, object]:
+                self.assertEqual(root, workspace.resolve())
+                self.assertEqual(source_path, "design.asc")
+                assets = root / "runs/system-builder-assets"
+                assets.mkdir(parents=True)
+                output = assets / "captured.png"
+                shutil.copyfile(image, output)
+                return {
+                    "source_path": "design.asc",
+                    "source_sha256": "1" * 64,
+                    "schematic_path": "runs/system-builder-assets/captured.png",
+                    "capture_method": "test-native-window",
+                    "captured_at": "2026-08-28T12:00:00+00:00",
+                    "width": 1200,
+                    "height": 700,
+                }
+
+            client = TestClient(
+                system_builder.create_app(
+                    workspace,
+                    testing=True,
+                    schematic_capturer=capture,
+                ),
+                base_url="http://testserver",
+            )
+            self.assertEqual(client.get("/api/schematic/files").status_code, 401)
+            client.get("/")
+            files = client.get("/api/schematic/files")
+            existing = client.get("/api/schematic/image?path=reference.png")
+            escaped = client.get("/api/schematic/image?path=../outside.png")
+            unmarked = client.post(
+                "/api/schematic/capture", json={"source_path": "design.asc"}
+            )
+            captured = client.post(
+                "/api/schematic/capture",
+                json={"source_path": "design.asc"},
+                headers=self._headers(),
+            )
+            captured_image = client.get(
+                f"/api/schematic/image?path={captured.json()['schematic_path']}"
+            )
+
+            self.assertEqual(files.status_code, 200)
+            self.assertEqual(files.json()["sources"], ["design.asc"])
+            self.assertEqual(existing.status_code, 200)
+            self.assertEqual(existing.headers["content-type"], "image/png")
+            self.assertEqual(escaped.status_code, 404)
+            self.assertEqual(unmarked.status_code, 403)
+            self.assertEqual(captured.status_code, 200)
+            self.assertEqual(captured.json()["capture_method"], "test-native-window")
+            self.assertEqual(captured_image.status_code, 200)
+
     def test_engineering_theme_is_offline_and_gradient_free(self) -> None:
         html = (PROJECT_ROOT / "system_builder_static/index.html").read_text(
             encoding="utf-8"
@@ -511,6 +574,9 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertIn('"discrete", "Discrete"', javascript)
         self.assertIn('"empirical", "Empirical"', javascript)
         self.assertIn('id="correlations"', html)
+        self.assertIn('id="capture-schematic"', html)
+        self.assertIn('id="schematic-source-path"', html)
+        self.assertIn('fetch("/api/schematic/capture"', javascript)
         self.assertIn('"Ω"', javascript)
         self.assertIn('"MΩ"', javascript)
         self.assertIn('"pF"', javascript)

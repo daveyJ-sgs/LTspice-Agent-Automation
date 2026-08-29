@@ -217,6 +217,7 @@ COMMON_REPORT_CONTEXT = {
         "their samples and corners, evaluate requirements, and retain portable evidence."
     ),
     "schematic_path": "docs/images/mixed-signal-daq-schematic.png",
+    "schematic_source_path": "examples/mixed_signal_daq.asc",
     "schematic_caption": (
         "The editable LTspice .asc is the educational human view. Automation "
         "runs equivalent .cir netlists and substitutes the sampled component "

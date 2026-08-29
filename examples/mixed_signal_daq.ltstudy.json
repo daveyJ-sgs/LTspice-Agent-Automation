@@ -214,6 +214,7 @@
   "report_context": {
     "title": "1 MHz mixed-signal DAQ front end",
     "circuit_summary": "A two-pole anti-alias network feeds a buffered 1.6 V/V gain stage, ADC driver, and clocked sample-and-hold. Light and heavy ADC input-capacitance corners exercise the acquisition load.",
-    "schematic_path": "docs/images/mixed-signal-daq-schematic.png"
+    "schematic_path": "docs/images/mixed-signal-daq-schematic.png",
+    "schematic_source_path": "examples/mixed_signal_daq.asc"
   }
 }
