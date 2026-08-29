@@ -34,7 +34,27 @@ def main() -> None:
         )
         if blue_pixels < 50:
             raise RuntimeError("captured window lacks recognizable LTspice schematic ink")
-    summary = {**result, "blue_schematic_pixels": blue_pixels}
+        center = sample.crop(
+            (
+                sample.width // 5,
+                sample.height // 5,
+                sample.width * 4 // 5,
+                sample.height * 4 // 5,
+            )
+        )
+        near_white_pixels = sum(
+            1
+            for red, green, blue in center.getdata()
+            if red > 245 and green > 245 and blue > 245
+        )
+        near_white_fraction = near_white_pixels / (center.width * center.height)
+        if near_white_fraction > 0.08:
+            raise RuntimeError("captured schematic appears obstructed by a white dialog")
+    summary = {
+        **result,
+        "blue_schematic_pixels": blue_pixels,
+        "central_near_white_fraction": near_white_fraction,
+    }
     summary_path = image_path.with_name("windows-capture-summary.json")
     summary_path.write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n",

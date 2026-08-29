@@ -282,6 +282,38 @@ if ($null -ne $changeLogElement) {
   ) | Where-Object { $_.Current.Name -like "LTspice Tool Change Log:*" }
   if ($remaining.Count -ne 0) { throw "LTspice change-log pane did not close" }
 }
+$webSyncWindow = $null
+for ($attempt = 0; $attempt -lt 20 -and $null -eq $webSyncWindow; $attempt++) {
+  $topLevelWindows = [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+    [System.Windows.Automation.TreeScope]::Children,
+    [System.Windows.Automation.Condition]::TrueCondition
+  )
+  foreach ($window in $topLevelWindows) {
+    if (
+      $window.Current.ProcessId -eq $process.Id -and
+      $window.Current.Name -eq "Web Sync"
+    ) {
+      $webSyncWindow = $window
+      break
+    }
+  }
+  if ($null -eq $webSyncWindow) { Start-Sleep -Milliseconds 100 }
+}
+if ($null -ne $webSyncWindow) {
+  $noButton = $webSyncWindow.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::NameProperty,
+      "No"
+    )
+  )
+  if ($null -eq $noButton) { throw "LTspice Web Sync No button is unavailable" }
+  $invokePattern = $noButton.GetCurrentPattern(
+    [System.Windows.Automation.InvokePattern]::Pattern
+  )
+  $invokePattern.Invoke()
+  Start-Sleep -Milliseconds 500
+}
 $keyboard.SendKeys(" ")
 Start-Sleep -Milliseconds 900
 $rect = New-Object NativeWindow+RECT
