@@ -22,6 +22,7 @@ class SchematicCaptureTests(unittest.TestCase):
         self.assertIn("UIAutomationClient", schematic_capture._WINDOWS_CAPTURE_SCRIPT)
         self.assertIn("LTspice Tool Change Log", schematic_capture._WINDOWS_CAPTURE_SCRIPT)
         self.assertIn('Name -eq "Web Sync"', schematic_capture._WINDOWS_CAPTURE_SCRIPT)
+        self.assertIn("[NativeWindow]::Click", schematic_capture._WINDOWS_CAPTURE_SCRIPT)
 
     def test_captures_content_addressed_asset_and_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

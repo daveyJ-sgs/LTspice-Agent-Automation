@@ -214,6 +214,13 @@ public static class NativeWindow {
   [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int command);
+  [DllImport("user32.dll")] private static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] private static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+  public static void Click(int x, int y) {
+    SetCursorPos(x, y);
+    mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
+    mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
+  }
 }
 "@
 $launched = Start-Process -FilePath $Executable -ArgumentList ('"' + $Source + '"') -PassThru
@@ -305,10 +312,14 @@ if ($null -ne $webSyncWindow) {
     )
   )
   if ($null -eq $noButton) { throw "LTspice Web Sync No button is unavailable" }
-  $invokePattern = $noButton.GetCurrentPattern(
-    [System.Windows.Automation.InvokePattern]::Pattern
+  $noBounds = $noButton.Current.BoundingRectangle
+  [NativeWindow]::SetForegroundWindow(
+    [IntPtr]$webSyncWindow.Current.NativeWindowHandle
+  ) | Out-Null
+  [NativeWindow]::Click(
+    [int]($noBounds.X + $noBounds.Width / 2),
+    [int]($noBounds.Y + $noBounds.Height / 2)
   )
-  $invokePattern.Invoke()
   Start-Sleep -Milliseconds 500
   $remainingWebSync = [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
     [System.Windows.Automation.TreeScope]::Children,
@@ -331,10 +342,14 @@ if ($null -ne $lateWebSync) {
     )
   )
   if ($null -eq $noButton) { throw "LTspice Web Sync No button is unavailable" }
-  $invokePattern = $noButton.GetCurrentPattern(
-    [System.Windows.Automation.InvokePattern]::Pattern
+  $noBounds = $noButton.Current.BoundingRectangle
+  [NativeWindow]::SetForegroundWindow(
+    [IntPtr]$lateWebSync.Current.NativeWindowHandle
+  ) | Out-Null
+  [NativeWindow]::Click(
+    [int]($noBounds.X + $noBounds.Width / 2),
+    [int]($noBounds.Y + $noBounds.Height / 2)
   )
-  $invokePattern.Invoke()
   Start-Sleep -Milliseconds 500
   [NativeWindow]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
   $keyboard.SendKeys(" ")
