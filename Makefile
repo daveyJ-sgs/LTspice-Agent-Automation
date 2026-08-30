@@ -1,6 +1,6 @@
 PYTHON ?= python3
 export PYTHONPATH := .
-LINT_FILES := artifacts.py adaptive_boundary.py experiment_engine.py experiment_index.py optimization_comparison.py optimization_engine.py optimization_recipe.py optimization_study.py robust_selection.py statistical_comparison.py statistical_engine.py study_recipe.py tests/support.py tests/test_artifacts.py
+LINT_FILES := artifacts.py adaptive_boundary.py experiment_engine.py experiment_index.py optimization_comparison.py optimization_engine.py optimization_recipe.py optimization_study.py robust_selection.py statistical_comparison.py statistical_engine.py study_recipe.py system_builder.py system_builder_routes tests/support.py tests/test_artifacts.py tests/test_system_builder.py
 
 .PHONY: test lint typecheck ac transient nand sallen-key mixed-signal-daq sweep statistical-yield search step dashboard api-help system-builder
 

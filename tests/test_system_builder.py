@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 
 import system_builder
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -106,6 +105,55 @@ class SystemBuilderTests(unittest.TestCase):
         examples.mkdir()
         for name in ("mixed_signal_daq_ac.cir", "mixed_signal_daq_transient.cir"):
             shutil.copyfile(PROJECT_ROOT / "examples" / name, examples / name)
+
+    def test_route_inventory_is_stable(self) -> None:
+        paths = self.client.app.openapi()["paths"]
+        actual = {
+            (method.upper(), path)
+            for path, operations in paths.items()
+            for method in operations
+        }
+        expected = {
+            ("GET", "/"),
+            ("GET", "/api/examples/mixed-signal-daq"),
+            ("GET", "/api/examples/mixed-signal-daq-optimization"),
+            ("GET", "/api/history"),
+            ("GET", "/api/jobs/{experiment_id}"),
+            ("GET", "/api/optimization/jobs"),
+            ("GET", "/api/optimization/jobs/{optimization_job_id}"),
+            ("GET", "/api/optimization/jobs/{optimization_job_id}/results"),
+            ("GET", "/api/qualification/jobs"),
+            ("GET", "/api/qualification/jobs/{job_id}"),
+            ("GET", "/api/qualification/jobs/{job_id}/results"),
+            ("GET", "/api/schematic/files"),
+            ("GET", "/api/schematic/image"),
+            ("GET", "/api/session"),
+            ("GET", "/assets/app.css"),
+            ("GET", "/assets/app.js"),
+            ("GET", "/assets/daq-schematic.png"),
+            ("GET", "/assets/fonts/{font_name}"),
+            ("GET", "/assets/optimization.js"),
+            ("GET", "/evidence/{artifact_path}"),
+            ("GET", "/health"),
+            ("POST", "/api/freeze"),
+            ("POST", "/api/jobs/{experiment_id}/cancel"),
+            ("POST", "/api/jobs/{experiment_id}/finalize"),
+            ("POST", "/api/jobs/{experiment_id}/resume"),
+            ("POST", "/api/optimization/freeze"),
+            ("POST", "/api/optimization/jobs/{optimization_job_id}/cancel"),
+            ("POST", "/api/optimization/jobs/{optimization_job_id}/resume"),
+            ("POST", "/api/optimization/preview"),
+            ("POST", "/api/optimization/start"),
+            ("POST", "/api/preview"),
+            ("POST", "/api/qualification/freeze"),
+            ("POST", "/api/qualification/jobs/{job_id}/cancel"),
+            ("POST", "/api/qualification/jobs/{job_id}/resume"),
+            ("POST", "/api/qualification/preview"),
+            ("POST", "/api/qualification/start"),
+            ("POST", "/api/schematic/capture"),
+            ("POST", "/api/start"),
+        }
+        self.assertEqual(actual, expected)
 
     def test_root_establishes_a_local_session_and_security_headers(self) -> None:
         response = self.client.get("/")

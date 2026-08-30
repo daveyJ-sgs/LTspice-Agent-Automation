@@ -17,27 +17,28 @@ from pathlib import Path
 from typing import Callable
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
-from starlette.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
 
 import experiment_report
 import optimization_engine
-import optimization_recipe
 import optimization_study
-import qualification_recipe
 import qualification_study
 import robust_selection
 import schematic_capture
-import statistical_engine
-from system_builder_history import evidence_file, workspace_history
 from study_recipe import (
     MAX_RECIPE_BYTES,
     load_recipe_experiments,
     load_study_recipe,
-    preview_study_recipe,
-    publish_study_recipe_plan,
 )
-
+from system_builder_history import evidence_file
+from system_builder_routes import (
+    create_core_router,
+    create_optimization_router,
+    create_qualification_router,
+    create_schematic_router,
+    create_study_router,
+    json_error,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = PROJECT_ROOT / "system_builder_static"
@@ -61,10 +62,7 @@ def _default_manager_factory(runs_dir: Path) -> object:
 
 
 def _json_error(status: int, code: str, message: str) -> JSONResponse:
-    return JSONResponse(
-        status_code=status,
-        content={"error": {"code": code, "message": message}},
-    )
+    return json_error(status, code, message)
 
 
 def create_app(
@@ -570,8 +568,11 @@ def create_app(
                 "running_points": child.get("running_points", 0),
                 "pending_points": child.get("pending_points", 0),
             }
-            children.append(item); total += point_count
-            finished += int(item["finished_points"]); running += int(item["running_points"]); pending += int(item["pending_points"])
+            children.append(item)
+            total += point_count
+            finished += int(item["finished_points"])
+            running += int(item["running_points"])
+            pending += int(item["pending_points"])
         study_id = snapshot.get("qualification_study_id")
         plan = robust_selection.load_robust_selection_plan(
             workspace / "runs", str(snapshot["plan_id"])
@@ -645,861 +646,72 @@ def create_app(
         response.headers["X-Frame-Options"] = "DENY"
         return response
 
-    @app.get("/")
-    def index() -> Response:
-        body = (STATIC_ROOT / "index.html").read_text(encoding="utf-8")
-        response = HTMLResponse(body)
-        response.set_cookie(
-            SESSION_COOKIE,
-            session_token,
-            httponly=True,
-            samesite="strict",
-            path="/",
+    app.include_router(
+        create_core_router(
+            workspace=workspace,
+            session_token=session_token,
+            static_root=STATIC_ROOT,
+            project_root=PROJECT_ROOT,
+            session_cookie=SESSION_COOKIE,
+            font_assets=FONT_ASSETS,
+            example_recipe=EXAMPLE_RECIPE,
+            example_optimization_recipe=EXAMPLE_OPTIMIZATION_RECIPE,
+            authorize_read=authorize_read,
         )
-        return response
-
-    @app.get("/assets/app.css")
-    def stylesheet() -> FileResponse:
-        return FileResponse(STATIC_ROOT / "app.css", media_type="text/css")
-
-    @app.get("/assets/app.js")
-    def javascript() -> FileResponse:
-        return FileResponse(
-            STATIC_ROOT / "app.js", media_type="text/javascript; charset=utf-8"
+    )
+    app.include_router(
+        create_schematic_router(
+            workspace=workspace,
+            authorize_read=authorize_read,
+            authorize_mutation=authorize_mutation,
+            read_json_body=read_json_body,
+            capture_builder=capture_builder,
         )
-
-    @app.get("/assets/optimization.js")
-    def optimization_javascript() -> FileResponse:
-        return FileResponse(
-            STATIC_ROOT / "optimization.js",
-            media_type="text/javascript; charset=utf-8",
+    )
+    app.include_router(
+        create_study_router(
+            workspace=workspace,
+            authorize_read=authorize_read,
+            authorize_mutation=authorize_mutation,
+            read_json_body=read_json_body,
+            get_execution_manager=get_execution_manager,
+            job_payload=job_payload,
+            build_completed_report=build_completed_report,
+            postprocess_states=postprocess_states,
+            execution_lock=execution_lock,
+            frozen_launches=frozen_launches,
+            managed_jobs=managed_jobs,
         )
-
-    @app.get("/assets/fonts/{font_name}")
-    def font(font_name: str) -> Response:
-        if font_name not in FONT_ASSETS:
-            return _json_error(404, "font_not_found", "font asset was not found")
-        return FileResponse(
-            STATIC_ROOT / "fonts" / font_name,
-            media_type="font/woff2",
+    )
+    app.include_router(
+        create_optimization_router(
+            workspace=workspace,
+            authorize_read=authorize_read,
+            authorize_mutation=authorize_mutation,
+            read_json_body=read_json_body,
+            optimization_experiments=optimization_experiments,
+            validate_optimization_experiments=validate_optimization_experiments,
+            get_optimization_manager=get_optimization_manager,
+            optimization_job_payload=optimization_job_payload,
+            optimization_results_payload=optimization_results_payload,
+            execution_lock=execution_lock,
+            frozen_optimization_launches=frozen_optimization_launches,
         )
-
-    @app.get("/assets/daq-schematic.png")
-    def schematic() -> FileResponse:
-        return FileResponse(
-            PROJECT_ROOT / "docs/images/mixed-signal-daq-schematic.png",
-            media_type="image/png",
+    )
+    app.include_router(
+        create_qualification_router(
+            workspace=workspace,
+            authorize_read=authorize_read,
+            authorize_mutation=authorize_mutation,
+            read_json_body=read_json_body,
+            optimization_experiments=optimization_experiments,
+            get_qualification_manager=get_qualification_manager,
+            qualification_job_payload=qualification_job_payload,
+            qualification_results_payload=qualification_results_payload,
+            execution_lock=execution_lock,
+            frozen_qualification_launches=frozen_qualification_launches,
         )
-
-    @app.get("/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok", "mode": "local-only"}
-
-    @app.get("/api/session")
-    def session(request: Request) -> Response:
-        denied = authorize_read(request)
-        if denied is not None:
-            return denied
-        return JSONResponse(
-            {
-                "product": "LTspice System Builder",
-                "mode": "local-only",
-                "remote_execution": False,
-                "workspace": str(workspace),
-            }
-        )
-
-    @app.get("/api/examples/mixed-signal-daq")
-    def mixed_signal_daq(request: Request) -> Response:
-        denied = authorize_read(request)
-        if denied is not None:
-            return denied
-        return JSONResponse(load_study_recipe(EXAMPLE_RECIPE))
-
-    @app.get("/api/examples/mixed-signal-daq-optimization")
-    def mixed_signal_daq_optimization(request: Request) -> Response:
-        denied = authorize_read(request)
-        if denied is not None:
-            return denied
-        return JSONResponse(
-            optimization_recipe.load_optimization_recipe(EXAMPLE_OPTIMIZATION_RECIPE)
-        )
-
-    @app.get("/api/history")
-    def history(request: Request, limit: int = 12) -> Response:
-        denied = authorize_read(request)
-        if denied is not None:
-            return denied
-        try:
-            return JSONResponse(workspace_history(workspace, limit=limit))
-        except ValueError as exc:
-            return _json_error(400, "history_limit", str(exc))
-
-    @app.get("/api/schematic/files")
-    def schematic_files(request: Request) -> Response:
-        denied = authorize_read(request)
-        if denied is not None:
-            return denied
-        try:
-            return JSONResponse(schematic_capture.list_schematic_files(workspace))
-        except (OSError, ValueError) as exc:
-            return _json_error(409, "schematic_files_failed", str(exc))
-
-    @app.get("/api/schematic/image")
-    def schematic_image(request: Request, path: str) -> Response:
-        denied = authorize_read(request)
-        if denied is not None:
-            return denied
-        try:
-            image = schematic_capture.resolve_schematic_image(workspace, path)
-        except ValueError:
-            return _json_error(
-                404,
-                "schematic_image_not_found",
-                "schematic image was not found inside the workspace",
-            )
-        media_type = {
-            ".png": "image/png",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-        }[image.suffix.lower()]
-        return FileResponse(image, media_type=media_type)
-
-    @app.post("/api/schematic/capture")
-    async def capture_schematic_image(request: Request) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None:
-            return denied
-        payload, error = await read_json_body(request, maximum=4096)
-        if error is not None:
-            return error
-        if not isinstance(payload, dict) or set(payload) != {"source_path"}:
-            return _json_error(
-                400,
-                "invalid_schematic_capture",
-                "capture requires exactly one source_path field",
-            )
-        try:
-            result = await run_in_threadpool(
-                capture_builder,
-                workspace,
-                payload["source_path"],
-            )
-            return JSONResponse(result)
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return _json_error(409, "schematic_capture_failed", str(exc))
-
-    @app.get("/api/jobs/{experiment_id}")
-    def job(request: Request, experiment_id: str) -> Response:
-        denied = authorize_read(request)
-        if denied is not None:
-            return denied
-        try:
-            snapshot = get_execution_manager().snapshot(experiment_id)  # type: ignore[attr-defined]
-            return JSONResponse(job_payload(snapshot))
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return _json_error(404, "job_not_found", str(exc))
-
-    @app.post("/api/jobs/{experiment_id}/cancel")
-    def cancel_job(request: Request, experiment_id: str) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None:
-            return denied
-        try:
-            snapshot = get_execution_manager().cancel(experiment_id)  # type: ignore[attr-defined]
-            return JSONResponse(job_payload(snapshot))
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return _json_error(409, "cancel_failed", str(exc))
-
-    @app.post("/api/jobs/{experiment_id}/resume")
-    def resume_job(request: Request, experiment_id: str) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None:
-            return denied
-        try:
-            snapshot = get_execution_manager().resume(experiment_id)  # type: ignore[attr-defined]
-            return JSONResponse(job_payload(snapshot), status_code=202)
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return _json_error(409, "resume_failed", str(exc))
-
-    @app.post("/api/jobs/{experiment_id}/finalize")
-    def finalize_job(request: Request, experiment_id: str) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None:
-            return denied
-        try:
-            postprocess_states.pop(experiment_id, None)
-            result = build_completed_report(experiment_id)
-            return JSONResponse(
-                {
-                    "status": "complete",
-                    "experiment_id": experiment_id,
-                    "report_url": f"/evidence/{experiment_id}/report.html",
-                    "plot_count": result["plot_count"],
-                    "trace_count": result["trace_count"],
-                }
-            )
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return _json_error(409, "finalize_failed", str(exc))
-
-    @app.get("/evidence/{artifact_path:path}")
-    def evidence(request: Request, artifact_path: str) -> Response:
-        denied = authorize_read(request)
-        if denied is not None:
-            return denied
-        try:
-            path = evidence_file(workspace / "runs", artifact_path)
-        except ValueError:
-            return _json_error(404, "evidence_not_found", "evidence file was not found")
-        return FileResponse(path)
-
-    @app.post("/api/preview")
-    async def preview(request: Request) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None:
-            return denied
-        recipe, error = await read_json_body(request, maximum=MAX_RECIPE_BYTES)
-        if error is not None:
-            return error
-        return JSONResponse(preview_study_recipe(recipe, workspace))
-
-    @app.post("/api/optimization/preview")
-    async def preview_optimization(request: Request) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None:
-            return denied
-        recipe, error = await read_json_body(
-            request,
-            maximum=optimization_recipe.MAX_OPTIMIZATION_RECIPE_BYTES,
-        )
-        if error is not None:
-            return error
-        return JSONResponse(optimization_recipe.preview_optimization_recipe(recipe))
-
-    @app.post("/api/optimization/freeze")
-    async def freeze_optimization(request: Request) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None:
-            return denied
-        payload, error = await read_json_body(
-            request,
-            maximum=optimization_recipe.MAX_OPTIMIZATION_RECIPE_BYTES + 8192,
-        )
-        if error is not None:
-            return error
-        if not isinstance(payload, dict):
-            return _json_error(
-                400, "invalid_optimization_freeze", "freeze request must be an object"
-            )
-        recipe = payload.get("recipe")
-        expected_recipe_sha256 = payload.get("expected_recipe_sha256")
-        expected_plan_id = payload.get("expected_plan_id")
-        expected_point_count = payload.get("expected_point_count")
-        expected_total_run_count = payload.get("expected_total_run_count")
-        if (
-            not isinstance(expected_recipe_sha256, str)
-            or not isinstance(expected_plan_id, str)
-            or not isinstance(expected_point_count, int)
-            or isinstance(expected_point_count, bool)
-            or not isinstance(expected_total_run_count, int)
-            or isinstance(expected_total_run_count, bool)
-        ):
-            return _json_error(
-                400,
-                "invalid_optimization_freeze",
-                "freeze requires the previewed recipe, plan, point, and run identities",
-            )
-        current = optimization_recipe.preview_optimization_recipe(recipe)
-        if not current.get("valid"):
-            return JSONResponse(current, status_code=422)
-        try:
-            experiments, execution, execution_sha256 = optimization_experiments()
-            validate_optimization_experiments(recipe, experiments)
-            preview_experiments = current["execution"]
-            assert isinstance(preview_experiments, dict)
-            if set(experiments) != set(preview_experiments["experiments"]):
-                raise ValueError(
-                    "optimization objectives do not match the paired circuit analyses"
-                )
-            preview_result, published = (
-                optimization_recipe.publish_optimization_recipe_plan(
-                    recipe,
-                    workspace / "runs",
-                    expected_recipe_sha256,
-                    expected_plan_id,
-                    expected_point_count,
-                    expected_total_run_count,
-                )
-            )
-        except (OSError, ValueError) as exc:
-            return _json_error(409, "optimization_freeze_failed", str(exc))
-        launch_token = secrets.token_urlsafe(32)
-        with execution_lock:
-            while len(frozen_optimization_launches) >= 32:
-                frozen_optimization_launches.pop(
-                    next(iter(frozen_optimization_launches))
-                )
-            frozen_optimization_launches[launch_token] = {
-                "state": "ready",
-                "recipe_sha256": expected_recipe_sha256,
-                "plan_id": expected_plan_id,
-                "point_count": expected_point_count,
-                "total_run_count": expected_total_run_count,
-                "execution_sha256": execution_sha256,
-                "response": None,
-            }
-        return JSONResponse(
-            {
-                "status": "frozen",
-                "launch_token": launch_token,
-                "recipe_sha256": expected_recipe_sha256,
-                "plan": {
-                    "plan_id": published["plan_id"],
-                    "plan_sha256": published["plan_sha256"],
-                    "candidate_count": published["candidate_count"],
-                    "point_count": published["point_count"],
-                    "artifact": (
-                        f"runs/optimization-plans/{published['plan_id']}/"
-                        "optimization_plan.json"
-                    ),
-                },
-                "execution": {
-                    **preview_result["execution"],  # type: ignore[dict-item]
-                    "max_concurrency": execution.get("max_concurrency", 2),
-                    "reuse_cache": execution.get("reuse_cache", False),
-                },
-            }
-        )
-
-    @app.post("/api/optimization/start")
-    async def start_optimization(request: Request) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None:
-            return denied
-        payload, error = await read_json_body(
-            request,
-            maximum=optimization_recipe.MAX_OPTIMIZATION_RECIPE_BYTES + 8192,
-        )
-        if error is not None:
-            return error
-        if not isinstance(payload, dict):
-            return _json_error(
-                400, "invalid_optimization_start", "start request must be an object"
-            )
-        launch_token = payload.get("launch_token")
-        recipe = payload.get("recipe")
-        confirmed_point_count = payload.get("confirmed_point_count")
-        confirmed_run_count = payload.get("confirmed_run_count")
-        acknowledged = payload.get("acknowledged")
-        if (
-            not isinstance(launch_token, str)
-            or not isinstance(confirmed_point_count, int)
-            or isinstance(confirmed_point_count, bool)
-            or not isinstance(confirmed_run_count, int)
-            or isinstance(confirmed_run_count, bool)
-            or acknowledged is not True
-        ):
-            return _json_error(
-                400,
-                "invalid_optimization_start",
-                "start requires the launch token, exact workload, and acknowledgement",
-            )
-        with execution_lock:
-            frozen = frozen_optimization_launches.get(launch_token)
-            if frozen is None:
-                return _json_error(
-                    409,
-                    "optimization_freeze_required",
-                    "publish a fresh immutable optimization plan before starting",
-                )
-            if frozen["state"] == "started":
-                response = frozen["response"]
-                assert isinstance(response, dict)
-                return JSONResponse(response)
-            if frozen["state"] != "ready":
-                return _json_error(
-                    409,
-                    "optimization_launch_unavailable",
-                    "this frozen optimization launch is already in progress or failed",
-                )
-            current = optimization_recipe.preview_optimization_recipe(recipe)
-            if not current.get("valid"):
-                return JSONResponse(current, status_code=422)
-            current_recipe = current["recipe"]
-            current_plan = current["plan"]
-            current_execution = current["execution"]
-            assert isinstance(current_recipe, dict)
-            assert isinstance(current_plan, dict)
-            assert isinstance(current_execution, dict)
-            if (
-                current_recipe.get("sha256") != frozen["recipe_sha256"]
-                or current_plan.get("plan_id") != frozen["plan_id"]
-            ):
-                return _json_error(
-                    409,
-                    "frozen_optimization_changed",
-                    "the recipe no longer matches the immutable optimization plan",
-                )
-            if (
-                confirmed_point_count != frozen["point_count"]
-                or confirmed_point_count != current_plan.get("point_count")
-                or confirmed_run_count != frozen["total_run_count"]
-                or confirmed_run_count != current_execution.get("total_run_count")
-            ):
-                return _json_error(
-                    409,
-                    "optimization_workload_changed",
-                    "confirmed workload does not match the frozen optimization plan",
-                )
-            frozen["state"] = "starting"
-            try:
-                experiments, _execution, execution_sha256 = optimization_experiments()
-                validate_optimization_experiments(recipe, experiments)
-                if execution_sha256 != frozen["execution_sha256"]:
-                    raise ValueError(
-                        "paired circuit analyses changed after plan publication"
-                    )
-                manager = get_optimization_manager()
-                defined = manager.define(str(frozen["plan_id"]), experiments)
-                started = manager.start(defined["optimization_job_id"])
-                response = optimization_job_payload(started)
-                frozen["state"] = "started"
-                frozen["response"] = response
-                return JSONResponse(response, status_code=202)
-            except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-                frozen["state"] = "failed"
-                return _json_error(409, "optimization_launch_failed", str(exc))
-
-    @app.get("/api/optimization/jobs")
-    def optimization_jobs(request: Request, limit: int = 8) -> Response:
-        denied = authorize_read(request)
-        if denied is not None:
-            return denied
-        if not isinstance(limit, int) or not 1 <= limit <= 32:
-            return _json_error(400, "optimization_job_limit", "limit must be 1 to 32")
-        root = workspace / "runs" / "optimization-jobs"
-        if not root.is_dir() or root.is_symlink():
-            return JSONResponse({"jobs": []})
-        paths = sorted(
-            (
-                path
-                for path in root.glob("optimization-job-*")
-                if path.is_dir() and not path.is_symlink()
-            ),
-            key=lambda path: path.stat().st_mtime_ns,
-            reverse=True,
-        )[:limit]
-        jobs = []
-        for path in paths:
-            try:
-                jobs.append(
-                    optimization_job_payload(
-                        get_optimization_manager().snapshot(path.name)
-                    )
-                )
-            except (FileNotFoundError, OSError, RuntimeError, ValueError):
-                continue
-        return JSONResponse({"jobs": jobs})
-
-    @app.get("/api/optimization/jobs/{optimization_job_id}")
-    def optimization_job(request: Request, optimization_job_id: str) -> Response:
-        denied = authorize_read(request)
-        if denied is not None:
-            return denied
-        try:
-            return JSONResponse(
-                optimization_job_payload(
-                    get_optimization_manager().snapshot(optimization_job_id)
-                )
-            )
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return _json_error(404, "optimization_job_not_found", str(exc))
-
-    @app.get("/api/optimization/jobs/{optimization_job_id}/results")
-    def optimization_job_results(
-        request: Request, optimization_job_id: str
-    ) -> Response:
-        denied = authorize_read(request)
-        if denied is not None:
-            return denied
-        try:
-            snapshot = get_optimization_manager().snapshot(optimization_job_id)
-            return JSONResponse(optimization_results_payload(snapshot))
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return _json_error(404, "optimization_results_not_found", str(exc))
-
-    @app.post("/api/optimization/jobs/{optimization_job_id}/cancel")
-    def cancel_optimization_job(
-        request: Request, optimization_job_id: str
-    ) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None:
-            return denied
-        try:
-            return JSONResponse(
-                optimization_job_payload(
-                    get_optimization_manager().cancel(optimization_job_id)
-                )
-            )
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return _json_error(409, "optimization_cancel_failed", str(exc))
-
-    @app.post("/api/optimization/jobs/{optimization_job_id}/resume")
-    def resume_optimization_job(
-        request: Request, optimization_job_id: str
-    ) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None:
-            return denied
-        try:
-            snapshot = get_optimization_manager().resume(optimization_job_id)
-            return JSONResponse(optimization_job_payload(snapshot), status_code=202)
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return _json_error(409, "optimization_resume_failed", str(exc))
-
-    @app.post("/api/qualification/preview")
-    async def preview_qualification(request: Request) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None: return denied
-        payload, error = await read_json_body(request, maximum=16384)
-        if error is not None: return error
-        if not isinstance(payload, dict): return _json_error(400, "invalid_qualification_preview", "preview request must be an object")
-        try:
-            return JSONResponse(qualification_recipe.preview_qualification(
-                workspace / "runs", str(payload.get("study_id")), payload.get("candidate_index"),
-                payload.get("sample_count", qualification_recipe.DEFAULT_SAMPLE_COUNT),
-                payload.get("seed", qualification_recipe.DEFAULT_SEED),
-            ))
-        except (OSError, TypeError, ValueError) as exc:
-            return _json_error(422, "invalid_qualification", str(exc))
-
-    @app.post("/api/qualification/freeze")
-    async def freeze_qualification(request: Request) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None: return denied
-        payload, error = await read_json_body(request, maximum=16384)
-        if error is not None: return error
-        if not isinstance(payload, dict): return _json_error(400, "invalid_qualification_freeze", "freeze request must be an object")
-        required = ("study_id", "candidate_index", "sample_count", "seed", "expected_qualification_id", "expected_statistical_plan_id", "expected_total_run_count")
-        if any(name not in payload for name in required):
-            return _json_error(400, "invalid_qualification_freeze", "freeze requires the exact preview identities and workload")
-        try:
-            preview, published = qualification_recipe.publish_qualification(
-                workspace / "runs", str(payload["study_id"]), payload["candidate_index"],
-                payload["sample_count"], payload["seed"], str(payload["expected_qualification_id"]),
-                str(payload["expected_statistical_plan_id"]), payload["expected_total_run_count"],
-            )
-            experiments, execution, execution_sha256 = optimization_experiments()
-        except (OSError, TypeError, ValueError) as exc:
-            return _json_error(409, "qualification_freeze_failed", str(exc))
-        launch_token = secrets.token_urlsafe(32)
-        with execution_lock:
-            while len(frozen_qualification_launches) >= 32: frozen_qualification_launches.pop(next(iter(frozen_qualification_launches)))
-            frozen_qualification_launches[launch_token] = {
-                "state": "ready", "study_id": payload["study_id"], "candidate_index": payload["candidate_index"],
-                "sample_count": payload["sample_count"], "seed": payload["seed"],
-                "qualification_id": preview["qualification_id"], "plan_id": published["plan_id"],
-                "total_run_count": payload["expected_total_run_count"], "execution_sha256": execution_sha256,
-            }
-        return JSONResponse({
-            "status": "frozen", "launch_token": launch_token,
-            "plan": {"plan_id": published["plan_id"], "plan_sha256": published["plan_sha256"], "point_count": published["point_count"], "artifact": f"runs/robust-selection-plans/{published['plan_id']}/robust_selection_plan.json"},
-            "execution": {**preview["execution"], "max_concurrency": execution.get("max_concurrency", 2), "reuse_cache": execution.get("reuse_cache", False)},
-        })
-
-    @app.post("/api/qualification/start")
-    async def start_qualification(request: Request) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None: return denied
-        payload, error = await read_json_body(request, maximum=8192)
-        if error is not None: return error
-        if not isinstance(payload, dict) or payload.get("acknowledged") is not True or not isinstance(payload.get("launch_token"), str):
-            return _json_error(400, "invalid_qualification_start", "start requires the launch token and explicit acknowledgement")
-        token = payload["launch_token"]
-        with execution_lock:
-            frozen = frozen_qualification_launches.get(token)
-            if isinstance(frozen, dict) and frozen.get("state") == "started" and isinstance(frozen.get("response"), dict):
-                return JSONResponse(frozen["response"])
-            if not isinstance(frozen, dict) or frozen.get("state") != "ready":
-                return _json_error(409, "qualification_freeze_required", "publish a fresh immutable qualification plan before starting")
-            if payload.get("confirmed_total_run_count") != frozen.get("total_run_count"):
-                return _json_error(409, "qualification_workload_changed", "confirmed workload does not match the frozen plan")
-            frozen["state"] = "starting"
-        try:
-            experiments, _execution, execution_sha256 = optimization_experiments()
-            if execution_sha256 != frozen["execution_sha256"]: raise ValueError("paired circuit definitions changed after publication")
-            manager = get_qualification_manager()
-            defined = manager.define(str(frozen["plan_id"]), experiments)
-            started = manager.start(defined["qualification_job_id"])
-            response = qualification_job_payload(started)
-            frozen["state"] = "started"; frozen["response"] = response
-            return JSONResponse(response, status_code=202)
-        except (OSError, RuntimeError, ValueError) as exc:
-            frozen["state"] = "failed"
-            return _json_error(409, "qualification_launch_failed", str(exc))
-
-    @app.get("/api/qualification/jobs")
-    def qualification_jobs(request: Request, limit: int = 8) -> Response:
-        denied = authorize_read(request)
-        if denied is not None: return denied
-        if not 1 <= limit <= 32: return _json_error(400, "qualification_job_limit", "limit must be 1 to 32")
-        root = workspace / "runs" / "qualification-jobs"
-        if not root.is_dir(): return JSONResponse({"jobs": []})
-        jobs = []
-        for path in sorted(root.glob("qualification-job-*"), key=lambda item: item.stat().st_mtime_ns, reverse=True)[:limit]:
-            try: jobs.append(qualification_job_payload(get_qualification_manager().snapshot(path.name)))
-            except (OSError, ValueError): continue
-        return JSONResponse({"jobs": jobs})
-
-    @app.get("/api/qualification/jobs/{job_id}")
-    def qualification_job(request: Request, job_id: str) -> Response:
-        denied = authorize_read(request)
-        if denied is not None: return denied
-        try: return JSONResponse(qualification_job_payload(get_qualification_manager().snapshot(job_id)))
-        except (FileNotFoundError, OSError, ValueError) as exc: return _json_error(404, "qualification_job_not_found", str(exc))
-
-    @app.get("/api/qualification/jobs/{job_id}/results")
-    def qualification_results(request: Request, job_id: str) -> Response:
-        denied = authorize_read(request)
-        if denied is not None: return denied
-        try:
-            snapshot = get_qualification_manager().snapshot(job_id)
-            return JSONResponse(qualification_results_payload(snapshot))
-        except (FileNotFoundError, OSError, ValueError) as exc: return _json_error(404, "qualification_results_not_found", str(exc))
-
-    @app.post("/api/qualification/jobs/{job_id}/cancel")
-    def cancel_qualification(request: Request, job_id: str) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None: return denied
-        try: return JSONResponse(qualification_job_payload(get_qualification_manager().cancel(job_id)))
-        except (OSError, RuntimeError, ValueError) as exc: return _json_error(409, "qualification_cancel_failed", str(exc))
-
-    @app.post("/api/qualification/jobs/{job_id}/resume")
-    def resume_qualification(request: Request, job_id: str) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None: return denied
-        try: return JSONResponse(qualification_job_payload(get_qualification_manager().resume(job_id)), status_code=202)
-        except (OSError, RuntimeError, ValueError) as exc: return _json_error(409, "qualification_resume_failed", str(exc))
-
-    @app.post("/api/freeze")
-    async def freeze(request: Request) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None:
-            return denied
-        payload, error = await read_json_body(request)
-        if error is not None:
-            return error
-        if not isinstance(payload, dict):
-            return _json_error(400, "invalid_freeze", "freeze request must be an object")
-        recipe = payload.get("recipe")
-        expected_recipe_sha256 = payload.get("expected_recipe_sha256")
-        expected_plan_id = payload.get("expected_plan_id")
-        if not isinstance(expected_recipe_sha256, str) or not isinstance(
-            expected_plan_id, str
-        ):
-            return _json_error(
-                400,
-                "invalid_freeze",
-                "freeze requires the previewed recipe hash and plan ID",
-            )
-        current = preview_study_recipe(recipe, workspace)
-        if not current.get("valid"):
-            return JSONResponse(current, status_code=422)
-        current_recipe = current["recipe"]
-        current_plan = current["plan"]
-        assert isinstance(current_recipe, dict)
-        assert isinstance(current_plan, dict)
-        if (
-            current_recipe.get("sha256") != expected_recipe_sha256
-            or current_plan.get("plan_id") != expected_plan_id
-        ):
-            return _json_error(
-                409,
-                "preview_stale",
-                "the recipe changed; resolve a fresh Preview before freezing",
-            )
-        try:
-            preview_result, published = publish_study_recipe_plan(
-                recipe,
-                workspace,
-                expected_recipe_sha256,
-                expected_plan_id,
-            )
-        except (OSError, ValueError) as exc:
-            return _json_error(409, "freeze_failed", str(exc))
-        launch_token = secrets.token_urlsafe(32)
-        execution = preview_result["execution"]
-        assert isinstance(execution, dict)
-        with execution_lock:
-            while len(frozen_launches) >= 32:
-                frozen_launches.pop(next(iter(frozen_launches)))
-            frozen_launches[launch_token] = {
-                "state": "ready",
-                "recipe_sha256": expected_recipe_sha256,
-                "plan_id": expected_plan_id,
-                "total_run_count": execution["total_run_count"],
-                "response": None,
-            }
-        return JSONResponse(
-            {
-                "status": "frozen",
-                "launch_token": launch_token,
-                "recipe_sha256": expected_recipe_sha256,
-                "plan": {
-                    "plan_id": published["plan_id"],
-                    "plan_sha256": published["plan_sha256"],
-                    "point_count": published["point_count"],
-                    "artifact": (
-                        f"runs/statistical-plans/{published['plan_id']}/"
-                        "statistical_plan.json"
-                    ),
-                },
-                "execution": execution,
-            }
-        )
-
-    @app.post("/api/start")
-    async def start(request: Request) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None:
-            return denied
-        payload, error = await read_json_body(request)
-        if error is not None:
-            return error
-        if not isinstance(payload, dict):
-            return _json_error(400, "invalid_start", "start request must be an object")
-        launch_token = payload.get("launch_token")
-        recipe = payload.get("recipe")
-        confirmed_runs = payload.get("confirmed_run_count")
-        if (
-            not isinstance(launch_token, str)
-            or not isinstance(confirmed_runs, int)
-            or isinstance(confirmed_runs, bool)
-        ):
-            return _json_error(
-                400,
-                "invalid_start",
-                "start requires a launch token and confirmed integer run count",
-            )
-        with execution_lock:
-            frozen = frozen_launches.get(launch_token)
-            if frozen is None:
-                return _json_error(
-                    409,
-                    "freeze_required",
-                    "create a fresh immutable plan before starting",
-                )
-            if frozen["state"] == "started":
-                response = frozen["response"]
-                assert isinstance(response, dict)
-                return JSONResponse(response)
-            if frozen["state"] != "ready":
-                return _json_error(
-                    409,
-                    "launch_unavailable",
-                    "this frozen launch is already in progress or failed",
-                )
-            current = preview_study_recipe(recipe, workspace)
-            if not current.get("valid"):
-                return JSONResponse(current, status_code=422)
-            current_recipe = current["recipe"]
-            current_plan = current["plan"]
-            current_execution = current["execution"]
-            assert isinstance(current_recipe, dict)
-            assert isinstance(current_plan, dict)
-            assert isinstance(current_execution, dict)
-            if (
-                current_recipe.get("sha256") != frozen["recipe_sha256"]
-                or current_plan.get("plan_id") != frozen["plan_id"]
-            ):
-                return _json_error(
-                    409,
-                    "frozen_recipe_changed",
-                    "the recipe no longer matches the immutable plan",
-                )
-            if (
-                confirmed_runs != frozen["total_run_count"]
-                or confirmed_runs != current_execution.get("total_run_count")
-            ):
-                return _json_error(
-                    409,
-                    "run_count_changed",
-                    "confirmed run count does not match the frozen workload",
-                )
-            frozen["state"] = "starting"
-            try:
-                plan_id = str(frozen["plan_id"])
-                plan = statistical_engine.load_statistical_plan(
-                    workspace / "runs", plan_id
-                )
-                plan_result = statistical_engine.inspect_statistical_plan(
-                    workspace / "runs", plan_id
-                )
-                from mcp_server import _statistical_plan_source
-
-                source = _statistical_plan_source(plan_id, plan, plan_result)
-                manager = get_execution_manager()
-                experiments = load_recipe_experiments(recipe, workspace)
-                snapshots: list[dict[str, object]] = []
-                execution_definition = recipe.get("execution", {})
-                assert isinstance(execution_definition, dict)
-                for experiment in experiments:
-                    report_context = dict(recipe.get("report_context", {}))
-                    report_context.setdefault(
-                        "simulation_summary",
-                        f"The {experiment['name']} analysis evaluates every immutable "
-                        "statistical point and named operating corner in this recipe.",
-                    )
-                    report_context.setdefault(
-                        "mcp_context",
-                        "System Builder uses the same immutable plan, durable execution, "
-                        "waveform analysis, and portable evidence contracts as the MCP.",
-                    )
-                    experiment_source = dict(source)
-                    experiment_source["system_builder"] = {
-                        "recipe_sha256": frozen["recipe_sha256"],
-                        "experiment_name": experiment["name"],
-                        "report_context": report_context,
-                    }
-                    snapshot = manager.define_explicit(  # type: ignore[attr-defined]
-                        experiment["netlist_template"],
-                        plan["parameter_order"],
-                        [point["parameters"] for point in plan["points"]],
-                        plan["parameter_units"],
-                        experiment_source,
-                        experiment["waveform_analyses"],
-                        experiment["filename"],
-                        False,
-                        120,
-                        execution_definition.get("max_concurrency", 2),
-                        execution_definition.get("reuse_cache", False),
-                    )
-                    snapshots.append(snapshot)
-                    managed_jobs.add(str(snapshot["experiment_id"]))
-                started = [
-                    manager.start(str(snapshot["experiment_id"]))  # type: ignore[attr-defined]
-                    for snapshot in snapshots
-                ]
-                response = {
-                    "status": "queued",
-                    "plan_id": plan_id,
-                    "total_run_count": confirmed_runs,
-                    "experiments": [
-                        {
-                            "name": definition["name"],
-                            "experiment_id": snapshot["experiment_id"],
-                            "status": snapshot["status"],
-                            "point_count": snapshot["point_count"],
-                        }
-                        for definition, snapshot in zip(experiments, started)
-                    ],
-                }
-                frozen["state"] = "started"
-                frozen["response"] = response
-                return JSONResponse(response, status_code=202)
-            except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-                frozen["state"] = "failed"
-                return _json_error(409, "launch_failed", str(exc))
+    )
 
     return app
 

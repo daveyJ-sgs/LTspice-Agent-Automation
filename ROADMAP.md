@@ -1332,9 +1332,46 @@ GUI-C4 verification gate:
   finalist planning, manifest integrity, restart recovery, terminal evaluation,
   guarded mutation, and existing System Builder contracts
 
+#### Post-GUI-C4 hardening bridge — in progress (H1 complete)
+
+Complete three behavior-preserving maintenance slices before GUI-D adds more
+routes and execution policy:
+
+1. **H1 — System Builder router split**
+   - Extract the static/session, study, optimization, qualification,
+     schematic, history, and evidence endpoints from `create_app` into focused
+     `APIRouter` modules
+   - Inject manager providers and shared state explicitly while preserving the
+     current loopback, cookie, origin, request-marker, path-confinement, and
+     immutable-plan contracts
+   - Keep every URL, response shape, status code, and lifecycle transition
+     unchanged; verify with the complete API/unit suite and local browser pass
+   - Complete: the entry point now composes focused core, schematic, study,
+     optimization, and qualification routers; a committed route-inventory test
+     guards all 38 method/path contracts, and the full 343-test suite passes
+2. **H2 — Waveform metric registry**
+   - Replace the two large metric dispatch conditionals with explicit
+     name-to-handler registries while preserving the public `measure_metric`
+     signatures and all numerical behavior
+   - Add registry completeness, unsupported-metric, and parameter-routing
+     regression coverage before migrating callers
+3. **H3 — Documentation front-door split**
+   - Keep `README.md` as a concise human on-ramp and move detailed reference
+     material into linked documents under `docs/`
+   - Preserve `LEARNINGS.md` as institutional compatibility history
+
+Hardening-bridge verification gate:
+
+- The full unittest suite, scoped Ruff and Mypy gates, and both macOS and
+  Windows CI jobs remain green after each isolated slice
+- Existing System Builder route inventory and OpenAPI-independent HTTP
+  contracts remain unchanged through H1
+- Retained simulation artifacts and immutable plan identities remain untouched
+
 Next System Builder slices:
 
-1. GUI-D — Windows packaging and deliberately gated remote GitHub execution
+1. Complete the post-GUI-C4 hardening bridge
+2. GUI-D — Windows packaging and deliberately gated remote GitHub execution
 
 ### Phase 5: Flagship portable mixed-signal DAQ/scope
 
@@ -1481,7 +1518,10 @@ expensive evaluation.
 
 ## Immediate next milestone
 
-Build System Builder GUI-D as a Windows-first packaging and deliberately gated
-remote-execution layer. Preserve the local-only default, make every external
-action explicit and reviewable, and reuse the same immutable plans and portable
-evidence contracts rather than adding a second execution model.
+Complete H2 by replacing duplicate waveform-metric dispatch conditionals with
+an explicit, regression-tested registry. Then complete the documentation
+front-door slice before building GUI-D as a
+Windows-first packaging and deliberately gated remote-execution layer. Preserve
+the local-only default, make every external action explicit and reviewable, and
+reuse the same immutable plans and portable evidence contracts rather than
+adding a second execution model.
