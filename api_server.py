@@ -272,7 +272,7 @@ def create_server(
     if host != "127.0.0.1":
         raise ValueError("the REST bridge only supports 127.0.0.1 binding")
     server = ThreadingHTTPServer((host, port), SimulationHandler)
-    server.job_manager = JobManager(workers)  # type: ignore[attr-defined]
+    server.job_manager = JobManager(workers, JOB_DB)  # type: ignore[attr-defined]
     return server
 
 

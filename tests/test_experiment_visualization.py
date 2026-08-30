@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -9,20 +8,17 @@ from unittest.mock import patch
 import experiment_visualization
 import experiment_index
 from raw_parser import RawData
+from support import TemporaryRunsTestCase
 
 
-class ExperimentVisualizationTests(unittest.TestCase):
+class ExperimentVisualizationTests(TemporaryRunsTestCase):
     def setUp(self) -> None:
-        self.temporary_directory = tempfile.TemporaryDirectory()
-        self.runs = Path(self.temporary_directory.name) / "runs"
+        super().setUp()
         self.runs.mkdir()
         self.baseline_id = "mcp-experiment-20260824-180000-000000-a1b2c3d4"
         self.candidate_id = "mcp-experiment-20260824-180100-000000-b1c2d3e4"
         self._write_experiment(self.baseline_id, gain=-2.0, passed=True)
         self._write_experiment(self.candidate_id, gain=-4.0, passed=False)
-
-    def tearDown(self) -> None:
-        self.temporary_directory.cleanup()
 
     def _write_experiment(self, experiment_id: str, *, gain: float, passed: bool) -> None:
         directory = self.runs / experiment_id

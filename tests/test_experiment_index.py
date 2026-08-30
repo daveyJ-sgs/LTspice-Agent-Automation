@@ -3,23 +3,19 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import experiment_index
 import statistical_engine
+from support import TemporaryRunsTestCase
 
 
-class ExperimentIndexTests(unittest.TestCase):
+class ExperimentIndexTests(TemporaryRunsTestCase):
     def setUp(self) -> None:
-        self.temporary_directory = tempfile.TemporaryDirectory()
-        self.runs = Path(self.temporary_directory.name) / "runs"
+        super().setUp()
         self.runs.mkdir()
-
-    def tearDown(self) -> None:
-        self.temporary_directory.cleanup()
 
     @staticmethod
     def point(

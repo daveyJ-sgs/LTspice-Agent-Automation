@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import hashlib
 import os
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -11,12 +10,12 @@ from unittest.mock import patch
 import experiment_report
 import experiment_index
 from raw_parser import RawData
+from support import TemporaryRunsTestCase
 
 
-class ExperimentReportTests(unittest.TestCase):
+class ExperimentReportTests(TemporaryRunsTestCase):
     def setUp(self) -> None:
-        self.temporary_directory = tempfile.TemporaryDirectory()
-        self.runs = Path(self.temporary_directory.name) / "runs"
+        super().setUp()
         self.runs.mkdir()
         self.experiment_id = "mcp-experiment-20260824-180000-000000-a1b2c3d4"
         self.experiment_dir = self.runs / self.experiment_id
@@ -25,9 +24,6 @@ class ExperimentReportTests(unittest.TestCase):
         self.raw_path = self.batch_dir / "circuit.raw"
         self.raw_path.write_bytes(b"raw-placeholder")
         self._write_artifacts()
-
-    def tearDown(self) -> None:
-        self.temporary_directory.cleanup()
 
     def test_display_sampling_preserves_endpoints_and_narrow_extrema(self) -> None:
         values = [0.0] * 10_000

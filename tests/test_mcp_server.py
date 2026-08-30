@@ -6,12 +6,13 @@ import csv
 import json
 import math
 import os
-import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
+
+from support import TemporaryRunsTestCase
 
 try:
     import mcp_server
@@ -24,11 +25,9 @@ except ModuleNotFoundError as exc:
 
 
 @unittest.skipIf(mcp_server is None, "optional mcp package is not installed")
-class MCPServerTests(unittest.TestCase):
+class MCPServerTests(TemporaryRunsTestCase):
     def setUp(self) -> None:
-        self.temporary_directory = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary_directory.name)
-        self.runs = self.root / "runs"
+        super().setUp()
         self.examples = self.root / "examples"
         self.runs.mkdir()
         self.examples.mkdir()
@@ -40,7 +39,6 @@ class MCPServerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.examples_patch.stop()
         self.runs_patch.stop()
-        self.temporary_directory.cleanup()
 
     def test_experiment_timeout_has_a_finite_upper_bound(self) -> None:
         mcp_server._validate_timeout(mcp_server.experiment_engine.MAX_TIMEOUT_SECONDS)

@@ -6,20 +6,33 @@ import time
 import unittest
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from unittest.mock import patch
 
-from api_server import create_server
+import api_server
 from ltspice_wrapper import LTSPICE
+from support import TemporaryRunsTestCase
 
 
-class ApiTests(unittest.TestCase):
+class ApiTests(TemporaryRunsTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        for name, value in (
+            ("RUNS_DIR", self.runs),
+            ("INPUT_DIR", self.runs / "api-inputs"),
+            ("JOB_DB", self.runs / "api_jobs.sqlite3"),
+        ):
+            patcher = patch.object(api_server, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_rejects_non_loopback_binding(self) -> None:
         for host in ("0.0.0.0", "::1", "localhost"):
             with self.subTest(host=host), self.assertRaisesRegex(ValueError, "127.0.0.1"):
-                create_server(host=host, port=0)
+                api_server.create_server(host=host, port=0)
 
     @unittest.skipUnless(LTSPICE.is_file(), "LTspice integration test requires an installed simulator")
     def test_health_and_simulate(self) -> None:
-        server = create_server(port=0)
+        server = api_server.create_server(port=0)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         base_url = f"http://127.0.0.1:{server.server_address[1]}"
@@ -88,7 +101,7 @@ C1 out 0 1u
             server.server_close()
             thread.join(timeout=5)
 
-        restarted = create_server(port=0)
+        restarted = api_server.create_server(port=0)
         restarted_thread = threading.Thread(target=restarted.serve_forever, daemon=True)
         restarted_thread.start()
         restarted_url = f"http://127.0.0.1:{restarted.server_address[1]}"

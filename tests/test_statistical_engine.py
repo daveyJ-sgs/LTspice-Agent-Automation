@@ -3,22 +3,16 @@ from __future__ import annotations
 import json
 import hashlib
 import statistics
-import tempfile
 import unittest
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
 import statistical_engine
+from support import TemporaryRunsTestCase
 
 
-class StatisticalEngineTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temporary_directory = tempfile.TemporaryDirectory()
-        self.runs = Path(self.temporary_directory.name) / "runs"
-
-    def tearDown(self) -> None:
-        self.temporary_directory.cleanup()
+class StatisticalEngineTests(TemporaryRunsTestCase):
 
     @staticmethod
     def variables() -> list[statistical_engine.StatisticalVariable]:

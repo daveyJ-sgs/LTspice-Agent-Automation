@@ -2,21 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import optimization_engine
+from support import TemporaryRunsTestCase
 
 
-class OptimizationEngineTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temporary_directory = tempfile.TemporaryDirectory()
-        self.runs = Path(self.temporary_directory.name) / "runs"
-
-    def tearDown(self) -> None:
-        self.temporary_directory.cleanup()
+class OptimizationEngineTests(TemporaryRunsTestCase):
 
     @staticmethod
     def parameters() -> list[optimization_engine.OptimizationParameter]:

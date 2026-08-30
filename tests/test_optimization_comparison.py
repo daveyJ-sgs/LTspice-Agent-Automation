@@ -2,26 +2,22 @@ from __future__ import annotations
 
 import copy
 import json
-import tempfile
 import unittest
 from pathlib import Path
 
 import optimization_comparison
 import optimization_engine
+from support import TemporaryRunsTestCase
 
 
-class OptimizationComparisonTests(unittest.TestCase):
+class OptimizationComparisonTests(TemporaryRunsTestCase):
     def setUp(self) -> None:
-        self.temporary_directory = tempfile.TemporaryDirectory()
-        self.runs = Path(self.temporary_directory.name) / "runs"
+        super().setUp()
         self.baseline = self._result()
         self.tolerances = {
             "alias_gain": {"absolute": 0.05, "relative": 0.0},
             "settling_time": {"absolute": 25e-9, "relative": 0.0},
         }
-
-    def tearDown(self) -> None:
-        self.temporary_directory.cleanup()
 
     @staticmethod
     def _result() -> dict[str, object]:
