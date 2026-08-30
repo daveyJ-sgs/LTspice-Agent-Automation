@@ -6,8 +6,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import artifacts
 import optimization_engine
-
 
 MAX_OPTIMIZATION_RECIPE_BYTES = 256 * 1024
 RECIPE_FIELDS = {
@@ -23,14 +23,7 @@ RECIPE_FIELDS = {
 }
 
 
-def _canonical_json(value: object) -> str:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        ensure_ascii=False,
-        allow_nan=False,
-        separators=(",", ":"),
-    )
+_canonical_json = artifacts.canonical_json
 
 
 def load_optimization_recipe(path: Path) -> dict[str, object]:
