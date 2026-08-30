@@ -9,15 +9,13 @@ import io
 import itertools
 import json
 import math
-import os
 import re
-import uuid
 from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 from typing import NotRequired, TypedDict
 
+import artifacts
 import experiment_index
-
 
 OPTIMIZATION_PLAN_SCHEMA_VERSION = 1
 OPTIMIZATION_RESULT_SCHEMA_VERSION = 1
@@ -155,17 +153,7 @@ class OptimizationStudyResult(TypedDict):
     selection_explanation: str
 
 
-def _canonical_json(value: object, *, pretty: bool = False) -> str:
-    options: dict[str, object] = {
-        "sort_keys": True,
-        "ensure_ascii": False,
-        "allow_nan": False,
-    }
-    if pretty:
-        options["indent"] = 2
-    else:
-        options["separators"] = (",", ":")
-    return json.dumps(value, **options)  # type: ignore[arg-type]
+_canonical_json = artifacts.canonical_json
 
 
 def _humanize(value: object) -> str:
@@ -887,9 +875,7 @@ def build_optimization_plan(
             points.append(point)
     parameter_units = {**units, **fixed_units, **corner_units}
     parameter_order = sorted(parameter_units)
-    definition_hash = hashlib.sha256(
-        _canonical_json(definition).encode("utf-8")
-    ).hexdigest()
+    definition_hash = artifacts.definition_hash(definition)
     return {
         "schema_version": OPTIMIZATION_PLAN_SCHEMA_VERSION,
         "generator_version": (
@@ -914,8 +900,7 @@ def _plan_bytes(plan: OptimizationPlan) -> bytes:
 
 
 def _optimization_plan_identity(artifact: bytes) -> tuple[str, str]:
-    digest = hashlib.sha256(artifact).hexdigest()
-    return f"optimization-plan-{digest[:16]}", digest
+    return artifacts.content_address("optimization-plan", artifact)
 
 
 def optimization_plan_identity(plan: OptimizationPlan) -> tuple[str, str]:
@@ -936,23 +921,7 @@ def _confined_root(runs_dir: Path, name: str) -> Path:
     return resolved
 
 
-def _write_once(path: Path, content: bytes) -> None:
-    if path.exists() or path.is_symlink():
-        if path.is_symlink() or not path.is_file():
-            raise ValueError(f"artifact is not a regular file: {path.name}")
-        if path.read_bytes() != content:
-            raise ValueError(f"existing artifact differs: {path.name}")
-        return
-    temporary = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
-    try:
-        with temporary.open("xb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+_write_once = artifacts.write_once
 
 
 def _plan_result(
@@ -1053,9 +1022,7 @@ def load_optimization_plan(runs_dir: Path, plan_id: str) -> OptimizationPlan:
         TOLERANCE_SELECTION_POLICY,
     }:
         raise ValueError("unsupported optimization selection policy")
-    expected_hash = hashlib.sha256(
-        _canonical_json(definition).encode("utf-8")
-    ).hexdigest()
+    expected_hash = artifacts.definition_hash(definition)
     if value.get("definition_hash") != expected_hash:
         raise ValueError("optimization definition hash does not match")
     rebuilt = build_optimization_plan(
