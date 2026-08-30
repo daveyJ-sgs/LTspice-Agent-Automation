@@ -14,6 +14,7 @@ from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 from typing import TypedDict
 
+import artifacts
 import experiment_index
 import sensitivity_analysis
 import statistical_engine
@@ -46,17 +47,7 @@ class PreparedLocalSensitivityStudy(TypedDict):
     timeout_seconds: int
 
 
-def _canonical_json(value: object, *, pretty: bool = False) -> str:
-    options: dict[str, object] = {
-        "sort_keys": True,
-        "ensure_ascii": False,
-        "allow_nan": False,
-    }
-    if pretty:
-        options["indent"] = 2
-    else:
-        options["separators"] = (",", ":")
-    return json.dumps(value, **options)  # type: ignore[arg-type]
+_canonical_json = artifacts.canonical_json
 
 
 def _decimal(value: object, field: str) -> Decimal:
