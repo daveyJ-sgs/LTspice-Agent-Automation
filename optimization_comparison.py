@@ -10,8 +10,8 @@ import re
 from pathlib import Path
 from typing import TypedDict
 
+import artifacts
 import optimization_engine
-
 
 COMPARISON_SCHEMA_VERSION = 1
 COMPARISON_GENERATOR_VERSION = "optimization-platform-comparison-v1"
@@ -35,15 +35,7 @@ class OptimizationComparisonResult(TypedDict):
     selected_candidate_index: int | None
 
 
-def _canonical_json(value: object, *, pretty: bool = False) -> str:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        ensure_ascii=False,
-        allow_nan=False,
-        indent=2 if pretty else None,
-        separators=None if pretty else (",", ":"),
-    )
+_canonical_json = artifacts.canonical_json
 
 
 def _document(value: object, label: str) -> dict[str, object]:
@@ -271,8 +263,9 @@ def write_optimization_comparison(
         baseline_label=baseline_label,
         candidate_label=candidate_label,
     )
-    digest = hashlib.sha256(_canonical_json(document).encode("utf-8")).hexdigest()
-    comparison_id = f"optimization-comparison-{digest[:16]}"
+    comparison_id, _ = artifacts.content_address(
+        "optimization-comparison", artifacts.canonical_bytes(document)
+    )
     root = optimization_engine._confined_root(output_root, "optimization-comparisons")
     comparison_dir = root / comparison_id
     comparison_dir.mkdir(exist_ok=True)
