@@ -11,9 +11,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, NotRequired, TypedDict
 
+import artifacts
 import experiment_engine
 import optimization_engine
-
 
 OPTIMIZATION_STUDY_SCHEMA_VERSION = 1
 OPTIMIZATION_STUDY_ENGINE_VERSION = "durable-optimization-study-v1"
@@ -44,14 +44,7 @@ class OptimizationJobSnapshot(TypedDict):
     error: str | None
 
 
-def _canonical_json(value: object) -> str:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        ensure_ascii=False,
-        allow_nan=False,
-        separators=(",", ":"),
-    )
+_canonical_json = artifacts.canonical_json
 
 
 def _plan_source(
@@ -139,8 +132,7 @@ class OptimizationStudyManager:
             or manifest.get("engine_version") != OPTIMIZATION_STUDY_ENGINE_VERSION
             or manifest.get("optimization_job_id") != optimization_job_id
             or not isinstance(definition, dict)
-            or manifest.get("definition_hash")
-            != hashlib.sha256(_canonical_json(definition).encode("utf-8")).hexdigest()
+            or manifest.get("definition_hash") != artifacts.definition_hash(definition)
         ):
             raise ValueError("optimization study manifest integrity check failed")
         plan_id = definition.get("plan_id")
@@ -225,9 +217,7 @@ class OptimizationStudyManager:
             "created_at": now,
             "updated_at": now,
             "definition": definition,
-            "definition_hash": hashlib.sha256(
-                _canonical_json(definition).encode("utf-8")
-            ).hexdigest(),
+            "definition_hash": artifacts.definition_hash(definition),
             "experiment_statuses": {name: "defined" for name in children},
             "result": None,
             "error": None,
