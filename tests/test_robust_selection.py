@@ -122,6 +122,25 @@ class RobustSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "content address"):
             robust_selection.load_robust_selection_plan(self.runs, first["plan_id"])
 
+    def test_single_finalist_plan_is_a_qualification_not_a_fake_comparison(self) -> None:
+        finalist = {"label": "selected-design", "study_id": "ignored", "candidate_index": 1}
+
+        with patch.object(
+            robust_selection,
+            "_source_finalist",
+            return_value=self._source("coarse", 0) | {"label": "selected-design"},
+        ):
+            saved = robust_selection.generate_robust_selection_plan(
+                self.runs,
+                [finalist],
+                {"selected-design": self._variables(100)},
+                4,
+                42,
+            )
+
+        self.assertEqual(saved["finalist_count"], 1)
+        self.assertEqual(saved["point_count"], 4)
+
     def test_joint_selection_requires_both_analyses_and_uses_source_tie_break(self) -> None:
         saved = self._plan()
         plan = robust_selection.load_robust_selection_plan(self.runs, saved["plan_id"])

@@ -24,6 +24,9 @@ import experiment_report
 import optimization_engine
 import optimization_recipe
 import optimization_study
+import qualification_recipe
+import qualification_study
+import robust_selection
 import schematic_capture
 import statistical_engine
 from system_builder_history import evidence_file, workspace_history
@@ -80,6 +83,7 @@ def create_app(
     capture_builder = schematic_capturer or schematic_capture.capture_schematic
     execution_manager: object | None = None
     optimization_manager: optimization_study.OptimizationStudyManager | None = None
+    qualification_manager: qualification_study.QualificationStudyManager | None = None
     execution_lock = threading.Lock()
     report_lock = threading.Lock()
     postprocess_stop = threading.Event()
@@ -88,6 +92,7 @@ def create_app(
     managed_jobs: set[str] = set()
     frozen_launches: dict[str, dict[str, object]] = {}
     frozen_optimization_launches: dict[str, dict[str, object]] = {}
+    frozen_qualification_launches: dict[str, dict[str, object]] = {}
 
     def get_execution_manager() -> object:
         nonlocal execution_manager
@@ -102,6 +107,14 @@ def create_app(
                 workspace / "runs", get_execution_manager()  # type: ignore[arg-type]
             )
         return optimization_manager
+
+    def get_qualification_manager() -> qualification_study.QualificationStudyManager:
+        nonlocal qualification_manager
+        if qualification_manager is None:
+            qualification_manager = qualification_study.QualificationStudyManager(
+                workspace / "runs", get_execution_manager()  # type: ignore[arg-type]
+            )
+        return qualification_manager
 
     def shutdown_execution_manager() -> None:
         nonlocal execution_manager
@@ -537,6 +550,75 @@ def create_app(
                     f"/evidence/optimization-plans/{snapshot['plan_id']}/"
                     "optimization_plan.json"
                 ),
+            },
+        }
+
+    def qualification_job_payload(snapshot: dict[str, object]) -> dict[str, object]:
+        experiments = snapshot.get("experiments", {})
+        if not isinstance(experiments, dict):
+            raise ValueError("qualification job experiments are invalid")
+        children: list[dict[str, object]] = []
+        finished = running = pending = total = 0
+        for name, child in sorted(experiments.items()):
+            if not isinstance(child, dict):
+                raise ValueError("qualification child snapshot is invalid")
+            point_count = int(child.get("point_count", 0))
+            item = {
+                "name": name, "experiment_id": child.get("experiment_id"),
+                "status": child.get("status"), "point_count": point_count,
+                "finished_points": child.get("finished_points", 0),
+                "running_points": child.get("running_points", 0),
+                "pending_points": child.get("pending_points", 0),
+            }
+            children.append(item); total += point_count
+            finished += int(item["finished_points"]); running += int(item["running_points"]); pending += int(item["pending_points"])
+        study_id = snapshot.get("qualification_study_id")
+        plan = robust_selection.load_robust_selection_plan(
+            workspace / "runs", str(snapshot["plan_id"])
+        )
+        plan_definition = plan["definition"]
+        assert isinstance(plan_definition, dict)
+        finalists = plan_definition["finalists"]
+        assert isinstance(finalists, list) and len(finalists) == 1
+        source = finalists[0]
+        assert isinstance(source, dict)
+        return {
+            "qualification_job_id": snapshot["qualification_job_id"], "plan_id": snapshot["plan_id"],
+            "status": snapshot["status"], "experiments": children,
+            "progress": {"total_runs": total, "finished_points": finished, "running_points": running, "pending_points": pending},
+            "qualification_study_id": study_id,
+            "source_study_id": source["source_study_id"],
+            "source_candidate_index": source["source_candidate_index"],
+            "results_url": f"/api/qualification/jobs/{snapshot['qualification_job_id']}/results" if study_id else None,
+            "resumable": snapshot["status"] == "cancelled", "error": snapshot.get("error"),
+        }
+
+    def qualification_results_payload(snapshot: dict[str, object]) -> dict[str, object]:
+        study_id = snapshot.get("qualification_study_id")
+        if snapshot.get("status") != "completed" or not isinstance(study_id, str):
+            raise ValueError("qualification results are not complete")
+        path = evidence_file(workspace / "runs", f"robust-selection-studies/{study_id}/robust_selection_results.json")
+        if path.stat().st_size > 8 * 1024 * 1024:
+            raise ValueError("qualification results exceed the read budget")
+        result = json.loads(path.read_text(encoding="utf-8"))
+        finalists = result.get("finalists") if isinstance(result, dict) else None
+        if not isinstance(finalists, list) or len(finalists) != 1 or not isinstance(finalists[0], dict):
+            raise ValueError("qualification result is invalid")
+        finalist = finalists[0]
+        return {
+            "study_id": study_id, "plan_id": snapshot["plan_id"],
+            "complete_evidence": finalist.get("complete_evidence"),
+            "worst_corner_yield": finalist.get("worst_corner_yield"),
+            "worst_corner_confidence_low": finalist.get("worst_corner_confidence_low"),
+            "corner_results": finalist.get("corner_results", []),
+            "worst_requirements": finalist.get("worst_requirements", []),
+            "dominant_sensitivities": finalist.get("dominant_sensitivities", []),
+            "failed_points": [point for point in finalist.get("points", []) if isinstance(point, dict) and point.get("classification") != "pass"],
+            "evidence": {
+                "report": f"/evidence/robust-selection-studies/{study_id}/report.html",
+                "json": f"/evidence/robust-selection-studies/{study_id}/robust_selection_results.json",
+                "csv": f"/evidence/robust-selection-studies/{study_id}/robust_selection_results.csv",
+                "plan": f"/evidence/robust-selection-plans/{snapshot['plan_id']}/robust_selection_plan.json",
             },
         }
 
@@ -1074,6 +1156,130 @@ def create_app(
             return JSONResponse(optimization_job_payload(snapshot), status_code=202)
         except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
             return _json_error(409, "optimization_resume_failed", str(exc))
+
+    @app.post("/api/qualification/preview")
+    async def preview_qualification(request: Request) -> Response:
+        denied = authorize_mutation(request)
+        if denied is not None: return denied
+        payload, error = await read_json_body(request, maximum=16384)
+        if error is not None: return error
+        if not isinstance(payload, dict): return _json_error(400, "invalid_qualification_preview", "preview request must be an object")
+        try:
+            return JSONResponse(qualification_recipe.preview_qualification(
+                workspace / "runs", str(payload.get("study_id")), payload.get("candidate_index"),
+                payload.get("sample_count", qualification_recipe.DEFAULT_SAMPLE_COUNT),
+                payload.get("seed", qualification_recipe.DEFAULT_SEED),
+            ))
+        except (OSError, TypeError, ValueError) as exc:
+            return _json_error(422, "invalid_qualification", str(exc))
+
+    @app.post("/api/qualification/freeze")
+    async def freeze_qualification(request: Request) -> Response:
+        denied = authorize_mutation(request)
+        if denied is not None: return denied
+        payload, error = await read_json_body(request, maximum=16384)
+        if error is not None: return error
+        if not isinstance(payload, dict): return _json_error(400, "invalid_qualification_freeze", "freeze request must be an object")
+        required = ("study_id", "candidate_index", "sample_count", "seed", "expected_qualification_id", "expected_statistical_plan_id", "expected_total_run_count")
+        if any(name not in payload for name in required):
+            return _json_error(400, "invalid_qualification_freeze", "freeze requires the exact preview identities and workload")
+        try:
+            preview, published = qualification_recipe.publish_qualification(
+                workspace / "runs", str(payload["study_id"]), payload["candidate_index"],
+                payload["sample_count"], payload["seed"], str(payload["expected_qualification_id"]),
+                str(payload["expected_statistical_plan_id"]), payload["expected_total_run_count"],
+            )
+            experiments, execution, execution_sha256 = optimization_experiments()
+        except (OSError, TypeError, ValueError) as exc:
+            return _json_error(409, "qualification_freeze_failed", str(exc))
+        launch_token = secrets.token_urlsafe(32)
+        with execution_lock:
+            while len(frozen_qualification_launches) >= 32: frozen_qualification_launches.pop(next(iter(frozen_qualification_launches)))
+            frozen_qualification_launches[launch_token] = {
+                "state": "ready", "study_id": payload["study_id"], "candidate_index": payload["candidate_index"],
+                "sample_count": payload["sample_count"], "seed": payload["seed"],
+                "qualification_id": preview["qualification_id"], "plan_id": published["plan_id"],
+                "total_run_count": payload["expected_total_run_count"], "execution_sha256": execution_sha256,
+            }
+        return JSONResponse({
+            "status": "frozen", "launch_token": launch_token,
+            "plan": {"plan_id": published["plan_id"], "plan_sha256": published["plan_sha256"], "point_count": published["point_count"], "artifact": f"runs/robust-selection-plans/{published['plan_id']}/robust_selection_plan.json"},
+            "execution": {**preview["execution"], "max_concurrency": execution.get("max_concurrency", 2), "reuse_cache": execution.get("reuse_cache", False)},
+        })
+
+    @app.post("/api/qualification/start")
+    async def start_qualification(request: Request) -> Response:
+        denied = authorize_mutation(request)
+        if denied is not None: return denied
+        payload, error = await read_json_body(request, maximum=8192)
+        if error is not None: return error
+        if not isinstance(payload, dict) or payload.get("acknowledged") is not True or not isinstance(payload.get("launch_token"), str):
+            return _json_error(400, "invalid_qualification_start", "start requires the launch token and explicit acknowledgement")
+        token = payload["launch_token"]
+        with execution_lock:
+            frozen = frozen_qualification_launches.get(token)
+            if isinstance(frozen, dict) and frozen.get("state") == "started" and isinstance(frozen.get("response"), dict):
+                return JSONResponse(frozen["response"])
+            if not isinstance(frozen, dict) or frozen.get("state") != "ready":
+                return _json_error(409, "qualification_freeze_required", "publish a fresh immutable qualification plan before starting")
+            if payload.get("confirmed_total_run_count") != frozen.get("total_run_count"):
+                return _json_error(409, "qualification_workload_changed", "confirmed workload does not match the frozen plan")
+            frozen["state"] = "starting"
+        try:
+            experiments, _execution, execution_sha256 = optimization_experiments()
+            if execution_sha256 != frozen["execution_sha256"]: raise ValueError("paired circuit definitions changed after publication")
+            manager = get_qualification_manager()
+            defined = manager.define(str(frozen["plan_id"]), experiments)
+            started = manager.start(defined["qualification_job_id"])
+            response = qualification_job_payload(started)
+            frozen["state"] = "started"; frozen["response"] = response
+            return JSONResponse(response, status_code=202)
+        except (OSError, RuntimeError, ValueError) as exc:
+            frozen["state"] = "failed"
+            return _json_error(409, "qualification_launch_failed", str(exc))
+
+    @app.get("/api/qualification/jobs")
+    def qualification_jobs(request: Request, limit: int = 8) -> Response:
+        denied = authorize_read(request)
+        if denied is not None: return denied
+        if not 1 <= limit <= 32: return _json_error(400, "qualification_job_limit", "limit must be 1 to 32")
+        root = workspace / "runs" / "qualification-jobs"
+        if not root.is_dir(): return JSONResponse({"jobs": []})
+        jobs = []
+        for path in sorted(root.glob("qualification-job-*"), key=lambda item: item.stat().st_mtime_ns, reverse=True)[:limit]:
+            try: jobs.append(qualification_job_payload(get_qualification_manager().snapshot(path.name)))
+            except (OSError, ValueError): continue
+        return JSONResponse({"jobs": jobs})
+
+    @app.get("/api/qualification/jobs/{job_id}")
+    def qualification_job(request: Request, job_id: str) -> Response:
+        denied = authorize_read(request)
+        if denied is not None: return denied
+        try: return JSONResponse(qualification_job_payload(get_qualification_manager().snapshot(job_id)))
+        except (FileNotFoundError, OSError, ValueError) as exc: return _json_error(404, "qualification_job_not_found", str(exc))
+
+    @app.get("/api/qualification/jobs/{job_id}/results")
+    def qualification_results(request: Request, job_id: str) -> Response:
+        denied = authorize_read(request)
+        if denied is not None: return denied
+        try:
+            snapshot = get_qualification_manager().snapshot(job_id)
+            return JSONResponse(qualification_results_payload(snapshot))
+        except (FileNotFoundError, OSError, ValueError) as exc: return _json_error(404, "qualification_results_not_found", str(exc))
+
+    @app.post("/api/qualification/jobs/{job_id}/cancel")
+    def cancel_qualification(request: Request, job_id: str) -> Response:
+        denied = authorize_mutation(request)
+        if denied is not None: return denied
+        try: return JSONResponse(qualification_job_payload(get_qualification_manager().cancel(job_id)))
+        except (OSError, RuntimeError, ValueError) as exc: return _json_error(409, "qualification_cancel_failed", str(exc))
+
+    @app.post("/api/qualification/jobs/{job_id}/resume")
+    def resume_qualification(request: Request, job_id: str) -> Response:
+        denied = authorize_mutation(request)
+        if denied is not None: return denied
+        try: return JSONResponse(qualification_job_payload(get_qualification_manager().resume(job_id)), status_code=202)
+        except (OSError, RuntimeError, ValueError) as exc: return _json_error(409, "qualification_resume_failed", str(exc))
 
     @app.post("/api/freeze")
     async def freeze(request: Request) -> Response:

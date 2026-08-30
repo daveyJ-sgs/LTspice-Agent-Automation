@@ -41,6 +41,7 @@ import ltspice_wrapper as wrapper
 import optimization_comparison
 import optimization_engine
 import optimization_study
+import qualification_study
 import raw_parser
 import report_runs
 import robust_selection
@@ -92,6 +93,7 @@ ObjectiveTolerance = optimization_comparison.ObjectiveTolerance
 OptimizationComparisonResult = optimization_comparison.OptimizationComparisonResult
 OptimizationExperimentDefinition = optimization_study.OptimizationExperimentDefinition
 OptimizationJobSnapshot = optimization_study.OptimizationJobSnapshot
+QualificationSnapshot = qualification_study.QualificationSnapshot
 RobustSelectionPlanResult = robust_selection.RobustSelectionPlanResult
 RobustSelectionStudyResult = robust_selection.RobustSelectionStudyResult
 RobustSelectionComparisonResult = robust_selection.RobustSelectionComparisonResult
@@ -1304,6 +1306,7 @@ def compare_robust_selection_studies(
 _experiment_manager: ExperimentJobManager | None = None
 _experiment_manager_lock = threading.Lock()
 _optimization_study_manager: optimization_study.OptimizationStudyManager | None = None
+_qualification_study_manager: qualification_study.QualificationStudyManager | None = None
 
 
 def _get_experiment_manager() -> ExperimentJobManager:
@@ -1329,6 +1332,20 @@ def _get_optimization_study_manager() -> optimization_study.OptimizationStudyMan
             RUNS_DIR, experiment_manager
         )
     return _optimization_study_manager
+
+
+def _get_qualification_study_manager() -> qualification_study.QualificationStudyManager:
+    global _qualification_study_manager
+    experiment_manager = _get_experiment_manager()
+    if (
+        _qualification_study_manager is None
+        or _qualification_study_manager.runs_dir != RUNS_DIR
+        or _qualification_study_manager.experiment_manager is not experiment_manager
+    ):
+        _qualification_study_manager = qualification_study.QualificationStudyManager(
+            RUNS_DIR, experiment_manager
+        )
+    return _qualification_study_manager
 
 
 @mcp.tool()
@@ -1419,6 +1436,39 @@ def cancel_optimization_study(
 ) -> OptimizationJobSnapshot:
     """Cooperatively cancel unfinished child experiments in an optimization study."""
     return _get_optimization_study_manager().cancel(optimization_job_id)
+
+
+@mcp.tool()
+def define_selected_qualification(
+    plan_id: str,
+    experiments: dict[str, OptimizationExperimentDefinition],
+) -> QualificationSnapshot:
+    """Persist paired AC/transient work for a one-finalist robust plan."""
+    return _get_qualification_study_manager().define(plan_id, experiments)
+
+
+@mcp.tool()
+def start_selected_qualification(qualification_job_id: str) -> QualificationSnapshot:
+    """Queue all unfinished experiments in a selected-design qualification."""
+    return _get_qualification_study_manager().start(qualification_job_id)
+
+
+@mcp.tool()
+def get_selected_qualification(qualification_job_id: str) -> QualificationSnapshot:
+    """Inspect progress and publish robust evidence after both analyses complete."""
+    return _get_qualification_study_manager().snapshot(qualification_job_id)
+
+
+@mcp.tool()
+def cancel_selected_qualification(qualification_job_id: str) -> QualificationSnapshot:
+    """Cooperatively cancel unfinished selected-design qualification work."""
+    return _get_qualification_study_manager().cancel(qualification_job_id)
+
+
+@mcp.tool()
+def resume_selected_qualification(qualification_job_id: str) -> QualificationSnapshot:
+    """Resume only unfinished work from a cancelled selected-design qualification."""
+    return _get_qualification_study_manager().resume(qualification_job_id)
 
 
 @mcp.tool()

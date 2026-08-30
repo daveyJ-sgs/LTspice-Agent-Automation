@@ -389,6 +389,51 @@
           <span class="label">Portable evidence</span>
           <div id="optimization-evidence-links"></div>
         </div>
+
+        <section id="qualification-panel" class="qualification-panel" hidden>
+          <div class="subsection-heading">
+            <div><p class="step">GUI-C4 / TOLERANCE QUALIFICATION</p><h3>Prove the selected design across variation</h3></div>
+            <span id="qualification-status" class="status-pill idle">Not previewed</span>
+          </div>
+          <p class="editor-note">The nominal winner is not changed here. This stage applies correlated component tolerances and both ADC-load corners, then requires each sample to pass paired AC and transient analyses.</p>
+          <div class="qualification-controls">
+            <label class="field-caption">Halton samples<input id="qualification-samples" type="number" min="2" max="4096" value="32"></label>
+            <label class="field-caption">Deterministic seed<input id="qualification-seed" type="number" min="0" value="20260827"></label>
+            <button id="qualification-preview" class="secondary-button" type="button">Preview qualification</button>
+          </div>
+          <div id="qualification-errors" class="errors" role="alert" hidden></div>
+          <section id="qualification-preview-card" hidden>
+            <dl class="confirmation-grid">
+              <div><dt>Variables</dt><dd id="qualification-variable-count">—</dd></div>
+              <div><dt>Corners</dt><dd id="qualification-corner-count">—</dd></div>
+              <div><dt>Statistical points</dt><dd id="qualification-point-count">—</dd></div>
+              <div><dt>Paired LTspice runs</dt><dd id="qualification-run-count">—</dd></div>
+              <div><dt>Sampling</dt><dd id="qualification-method">—</dd></div>
+              <div><dt>Cache</dt><dd>Reuse enabled</dd></div>
+            </dl>
+            <code id="qualification-preview-id" class="artifact-path">—</code>
+            <details class="candidate-evidence"><summary>Manufacturing model and named corners</summary><div id="qualification-model" class="qualification-model"></div></details>
+            <button id="qualification-freeze" class="primary-button" type="button">Publish immutable qualification</button>
+          </section>
+          <section id="qualification-confirmation" class="execution-confirmation" hidden>
+            <div class="subsection-heading"><div><p class="step">EXECUTION CONFIRMATION</p><h3>Paired local qualification</h3></div><span class="status-pill valid">Published</span></div>
+            <code id="qualification-plan-id" class="artifact-path">—</code>
+            <label class="execution-check"><input id="qualification-acknowledgement" type="checkbox"><span>I understand this launches the displayed AC and transient workload locally and writes durable evidence.</span></label>
+            <button id="qualification-start" class="danger-button" type="button" disabled>Start local qualification</button>
+          </section>
+          <section id="qualification-job" class="launch-result" hidden></section>
+          <section id="qualification-results" class="qualification-results" hidden>
+            <div class="subsection-heading"><div><p class="step">QUALIFICATION EVIDENCE</p><h3>Joint AC + transient yield</h3></div><span id="qualification-result-status" class="status-pill valid">Complete</span></div>
+            <div id="qualification-result-metrics" class="metric-grid"></div>
+            <div class="qualification-result-grid">
+              <div><h4>Named-corner yield</h4><div id="qualification-corner-results"></div></div>
+              <div><h4>Worst requirement margins</h4><div id="qualification-margin-results"></div></div>
+            </div>
+            <details class="candidate-evidence"><summary>Dominant rank sensitivities</summary><div id="qualification-sensitivities" class="qualification-table"></div></details>
+            <details class="candidate-evidence"><summary id="qualification-failures-summary">Failed samples</summary><div id="qualification-failures" class="qualification-table"></div></details>
+            <div class="result-evidence"><span class="label">Portable evidence</span><div id="qualification-evidence-links"></div></div>
+          </section>
+        </section>
       </section>
     </section>
 

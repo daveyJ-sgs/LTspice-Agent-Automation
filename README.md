@@ -206,8 +206,16 @@ the portable report, JSON, CSV, and immutable plan. Visible values use compact
 engineering units; exact stored values remain available on hover. Refreshing
 the view reads the existing result and does not launch or mutate a job.
 
-Selected-finalist tolerance and corner qualification remain deliberately
-reserved for GUI-C4.
+GUI-C4 carries the GUI-C3 winner into the shared statistical and robust-
+selection contracts for an explicitly confirmed tolerance proof. Preview
+shows the nine-variable manufacturing model, correlations, named ADC-load
+corners, deterministic Halton population, and paired AC/transient run cost
+without writing artifacts. Publication freezes the immutable statistical and
+qualification plans; a second acknowledgement starts a recoverable job with
+cancel/resume controls. The completed view places joint corner yield, Wilson
+confidence intervals, worst requirement margins, rank sensitivities, failed
+samples, and portable evidence beside the nominal optimization decision.
+Nominal selection and tolerance qualification remain separate claims.
 
 GUI-A2 adds a read-only workspace below the recipe preview. It reads current
 durable-job progress directly from experiment manifests, reports whether the

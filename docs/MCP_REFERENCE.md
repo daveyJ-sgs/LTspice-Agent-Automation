@@ -30,7 +30,10 @@ optimization studies, durable orchestration, and portable human-facing reports.
   `get_optimization_study`, `cancel_optimization_study`, and
   `compare_optimization_studies`, `generate_robust_selection_plan`,
   `get_robust_selection_plan`, `evaluate_robust_selection_study`, and
-  `compare_robust_selection_studies`
+  `compare_robust_selection_studies`; selected-design qualification:
+  `define_selected_qualification`, `start_selected_qualification`,
+  `get_selected_qualification`, `cancel_selected_qualification`, and
+  `resume_selected_qualification`
 - Comparison and reporting: `compare_experiments`,
   `compare_statistical_experiments`, `build_experiment_index`,
   `query_experiments`, `query_studies`, `build_experiment_report`,
@@ -595,6 +598,15 @@ Run the complete mixed-signal DAQ example with:
 ```bash
 PYTHONPATH=. .venv/bin/python examples/optimize_mixed_signal_daq_durable.py
 ```
+
+A one-finalist robust plan is a qualification contract rather than a design
+comparison. Pass it to `define_selected_qualification` with exactly `ac` and
+`transient` experiment definitions, then use the start/get/cancel/resume tools
+as for other durable jobs. Once both children complete, status inspection
+produces their statistical summaries, worst cases, sensitivities, HTML reports,
+and the joint named-corner qualification evidence. The parent manifest keeps
+only portable plan and child identities, so a restarted MCP server can recover
+the job without launching or resuming it implicitly.
 
 `compare_optimization_studies` enforces the cross-platform acceptance contract:
 candidate parameters, classifications, Pareto membership, and selected design

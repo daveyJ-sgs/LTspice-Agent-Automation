@@ -9,6 +9,12 @@ let frozenOptimizationLaunch = null;
 let trackedOptimizationJob = null;
 let optimizationPollTimer = null;
 let displayedOptimizationStudy = null;
+let selectedQualificationSource = null;
+let latestQualificationPreview = null;
+let frozenQualificationLaunch = null;
+let trackedQualificationJob = null;
+let qualificationPollTimer = null;
+let displayedQualificationStudy = null;
 
 const optId = (id) => document.getElementById(id);
 const OPT_UNITS = {
@@ -665,6 +671,8 @@ function renderOptimizationResults(result) {
   });
   optId("optimization-result-metrics").replaceChildren(...metrics);
   const selected = (result.candidates || []).find((candidate) => candidate.selected) || null;
+  selectedQualificationSource = selected ? {study_id: result.study_id, candidate_index: selected.candidate_index} : null;
+  optId("qualification-panel").hidden = selectedQualificationSource === null;
   renderSelectedOptimizationCandidate(result, selected);
   renderOptimizationParetoPlot(result);
   renderOptimizationCandidates(result);
@@ -678,6 +686,158 @@ function renderOptimizationResults(result) {
   });
   optId("optimization-evidence-links").replaceChildren(...links);
   optId("optimization-results").hidden = false;
+  recoverQualificationJob().catch(() => {});
+}
+
+function qualificationRequest() {
+  return {
+    ...selectedQualificationSource,
+    sample_count: Number(optId("qualification-samples").value),
+    seed: Number(optId("qualification-seed").value),
+  };
+}
+
+function qualificationErrors(messages) {
+  const box = optId("qualification-errors");
+  box.hidden = messages.length === 0;
+  box.replaceChildren(...messages.map((message) => {
+    const item = document.createElement("p"); item.textContent = message; return item;
+  }));
+}
+
+function renderQualificationModel(result) {
+  const rows = result.plan.variables.map((variable) => {
+    const row = document.createElement("div");
+    const name = document.createElement("strong"); name.textContent = variable.name;
+    const value = document.createElement("span");
+    value.textContent = `${optimizationEngineeringValue(variable.nominal, variable.unit)} nominal · σ ${optimizationEngineeringValue(variable.sigma, variable.unit)} · ${optimizationEngineeringValue(variable.minimum, variable.unit)} to ${optimizationEngineeringValue(variable.maximum, variable.unit)}`;
+    row.append(name, value); return row;
+  });
+  const corner = document.createElement("div");
+  const cornerName = document.createElement("strong"); cornerName.textContent = "ADC load";
+  const cornerValues = document.createElement("span");
+  cornerValues.textContent = result.plan.corner_axes[0].values.map((item) => `${optimizationLabel(item.name)} ${optimizationEngineeringValue(item.value, result.plan.corner_axes[0].unit)}`).join(" · ");
+  corner.append(cornerName, cornerValues); rows.push(corner);
+  optId("qualification-model").replaceChildren(...rows);
+}
+
+async function previewQualification() {
+  if (!selectedQualificationSource) return;
+  frozenQualificationLaunch = null;
+  optId("qualification-confirmation").hidden = true;
+  const button = optId("qualification-preview"); button.disabled = true; button.textContent = "Resolving…";
+  try {
+    const response = await fetch("/api/qualification/preview", {method: "POST", headers: {"Content-Type": "application/json", "X-LTspice-System-Builder": "1"}, body: JSON.stringify(qualificationRequest())});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Qualification preview failed");
+    latestQualificationPreview = result;
+    optId("qualification-variable-count").textContent = result.plan.variable_count;
+    optId("qualification-corner-count").textContent = result.plan.corner_count;
+    optId("qualification-point-count").textContent = result.plan.point_count;
+    optId("qualification-run-count").textContent = result.execution.total_run_count;
+    optId("qualification-method").textContent = "Digit-scrambled Halton";
+    optId("qualification-preview-id").textContent = `${result.qualification_id} · ${result.plan.statistical_plan_id}`;
+    renderQualificationModel(result);
+    optId("qualification-preview-card").hidden = false;
+    optId("qualification-status").className = "status-pill valid"; optId("qualification-status").textContent = "Valid preview";
+    qualificationErrors([]);
+  } catch (error) {
+    latestQualificationPreview = null; optId("qualification-preview-card").hidden = true;
+    optId("qualification-status").className = "status-pill invalid"; optId("qualification-status").textContent = "Invalid";
+    qualificationErrors([error.message]);
+  } finally { button.disabled = false; button.textContent = "Preview qualification"; }
+}
+
+async function freezeQualification() {
+  if (!latestQualificationPreview || !selectedQualificationSource) return;
+  const button = optId("qualification-freeze"); button.disabled = true; button.textContent = "Publishing…";
+  try {
+    const request = qualificationRequest();
+    const response = await fetch("/api/qualification/freeze", {method: "POST", headers: {"Content-Type": "application/json", "X-LTspice-System-Builder": "1"}, body: JSON.stringify({
+      ...request, expected_qualification_id: latestQualificationPreview.qualification_id,
+      expected_statistical_plan_id: latestQualificationPreview.plan.statistical_plan_id,
+      expected_total_run_count: latestQualificationPreview.execution.total_run_count,
+    })});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Qualification publication failed");
+    frozenQualificationLaunch = result;
+    optId("qualification-plan-id").textContent = `${result.plan.plan_id} · ${result.plan.artifact}`;
+    optId("qualification-acknowledgement").checked = false; optId("qualification-start").disabled = true;
+    optId("qualification-confirmation").hidden = false; qualificationErrors([]);
+  } catch (error) { qualificationErrors([error.message]); }
+  finally { button.disabled = false; button.textContent = "Publish immutable qualification"; }
+}
+
+function renderQualificationJob(job) {
+  trackedQualificationJob = job;
+  const box = optId("qualification-job");
+  const title = document.createElement("strong"); title.textContent = `${job.qualification_job_id} · ${optimizationLabel(job.status)}`;
+  const progress = document.createElement("div"); progress.className = "optimization-progress";
+  progress.append(optimizationProgressRow("Paired LTspice runs", job.progress.finished_points, job.progress.total_runs));
+  for (const child of job.experiments) progress.append(optimizationProgressRow(`${child.name.toUpperCase()} · ${child.status}`, child.finished_points, child.point_count));
+  const actions = document.createElement("div"); actions.className = "job-actions";
+  if (["defined", "queued", "running", "cancelling"].includes(job.status)) {
+    const cancel = document.createElement("button"); cancel.className = "secondary-button"; cancel.textContent = "Cancel remaining runs"; cancel.addEventListener("click", () => mutateQualificationJob("cancel")); actions.append(cancel);
+  } else if (job.resumable) {
+    const resume = document.createElement("button"); resume.className = "secondary-button"; resume.textContent = "Resume unfinished runs"; resume.addEventListener("click", () => mutateQualificationJob("resume")); actions.append(resume);
+  }
+  if (job.error) { const error = document.createElement("p"); error.className = "job-error"; error.textContent = job.error; actions.append(error); }
+  box.replaceChildren(title, progress, actions); box.hidden = false;
+  if (job.results_url) loadQualificationResults(job);
+  window.clearTimeout(qualificationPollTimer);
+  if (["defined", "queued", "running", "cancelling"].includes(job.status)) qualificationPollTimer = window.setTimeout(pollQualificationJob, 750);
+}
+
+async function startQualification() {
+  if (!frozenQualificationLaunch || !optId("qualification-acknowledgement").checked) return;
+  const button = optId("qualification-start"); button.disabled = true; button.textContent = "Queuing…";
+  try {
+    const response = await fetch("/api/qualification/start", {method: "POST", headers: {"Content-Type": "application/json", "X-LTspice-System-Builder": "1"}, body: JSON.stringify({launch_token: frozenQualificationLaunch.launch_token, confirmed_total_run_count: frozenQualificationLaunch.execution.total_run_count, acknowledged: true})});
+    const result = await response.json(); if (!response.ok) throw new Error(result.error?.message || "Qualification launch failed");
+    button.textContent = "Qualification queued"; renderQualificationJob(result);
+  } catch (error) { qualificationErrors([error.message]); button.disabled = false; button.textContent = "Start local qualification"; }
+}
+
+async function pollQualificationJob() {
+  if (!trackedQualificationJob) return;
+  try { const response = await fetch(`/api/qualification/jobs/${trackedQualificationJob.qualification_job_id}`); const result = await response.json(); if (!response.ok) throw new Error(result.error?.message || "Qualification status is unavailable"); renderQualificationJob(result); }
+  catch (error) { qualificationErrors([error.message]); }
+}
+
+async function mutateQualificationJob(action) {
+  if (!trackedQualificationJob) return;
+  try { const response = await fetch(`/api/qualification/jobs/${trackedQualificationJob.qualification_job_id}/${action}`, {method: "POST", headers: {"Content-Type": "application/json", "X-LTspice-System-Builder": "1"}, body: "{}"}); const result = await response.json(); if (!response.ok) throw new Error(result.error?.message || `Qualification ${action} failed`); renderQualificationJob(result); }
+  catch (error) { qualificationErrors([error.message]); }
+}
+
+function qualificationRows(containerId, records, render) {
+  const rows = records.map((record) => { const row = document.createElement("div"); const values = render(record); for (const value of values) { const cell = document.createElement("span"); cell.textContent = value; row.append(cell); } return row; });
+  optId(containerId).replaceChildren(...rows);
+}
+
+async function loadQualificationResults(job) {
+  if (!job.results_url || displayedQualificationStudy === job.qualification_study_id) return;
+  try {
+    const response = await fetch(job.results_url); const result = await response.json(); if (!response.ok) throw new Error(result.error?.message || "Qualification results unavailable");
+    displayedQualificationStudy = result.study_id;
+    const corners = result.corner_results || []; const evaluated = corners.reduce((sum, item) => sum + Number(item.evaluated), 0); const passed = corners.reduce((sum, item) => sum + Number(item.passed), 0);
+    const metrics = [["Joint yield", evaluated ? `${(100 * passed / evaluated).toFixed(2)}%` : "n/a"], ["Worst corner", result.worst_corner_yield === null ? "n/a" : `${(100 * result.worst_corner_yield).toFixed(2)}%`], ["Evaluated", evaluated], ["Failed / invalid", `${evaluated - passed} / ${corners.reduce((sum, item) => sum + Number(item.invalid), 0)}`]].map(([labelText, valueText]) => { const item = document.createElement("div"); const label = document.createElement("span"); label.textContent = labelText; const value = document.createElement("strong"); value.textContent = valueText; item.append(label, value); return item; });
+    optId("qualification-result-metrics").replaceChildren(...metrics);
+    qualificationRows("qualification-corner-results", corners, (item) => [Object.entries(item.corners).map(([key, value]) => `${key}=${value}`).join(", "), `${item.passed}/${item.evaluated}`, item.observed_yield === null ? "n/a" : `${(100 * item.observed_yield).toFixed(2)}%`, `${(100 * item.confidence_low).toFixed(2)}–${(100 * item.confidence_high).toFixed(2)}%`]);
+    qualificationRows("qualification-margin-results", (result.worst_requirements || []).slice().sort((a, b) => Number(a.margin) - Number(b.margin)), (item) => [`${item.experiment} / ${item.metric}`, `${optimizationEngineeringValue(item.value, item.unit)} ${item.operator} ${optimizationEngineeringValue(item.target, item.unit)}`, `${item.margin >= 0 ? "+" : ""}${optimizationEngineeringValue(item.margin, item.unit)}`]);
+    qualificationRows("qualification-sensitivities", result.dominant_sensitivities || [], (item) => [`${item.experiment} / ${item.metric}`, String(item.variable), `ρ ${Number(item.rho).toFixed(3)}`]);
+    qualificationRows("qualification-failures", result.failed_points || [], (item) => [`Sample ${item.sample_index}`, Object.entries(item.corners).map(([key, value]) => `${key}=${value}`).join(", "), optimizationLabel(item.classification)]);
+    optId("qualification-failures-summary").textContent = `Failed samples (${(result.failed_points || []).length})`;
+    const links = Object.entries(result.evidence || {}).map(([name, url]) => { const link = document.createElement("a"); link.href = url; link.target = "_blank"; link.rel = "noopener"; link.textContent = name === "report" ? "Full HTML report" : name.toUpperCase(); return link; });
+    optId("qualification-evidence-links").replaceChildren(...links); optId("qualification-results").hidden = false;
+  } catch (error) { qualificationErrors([error.message]); }
+}
+
+async function recoverQualificationJob() {
+  const response = await fetch("/api/qualification/jobs?limit=1"); if (!response.ok) return;
+  const result = await response.json();
+  const job = result.jobs.find((item) => item.source_study_id === selectedQualificationSource?.study_id && Number(item.source_candidate_index) === Number(selectedQualificationSource?.candidate_index));
+  if (job) renderQualificationJob(job);
 }
 
 async function loadOptimizationResults(job) {
@@ -899,6 +1059,12 @@ optId("optimization-reset").addEventListener("click", () => {
     limits: {maximum_candidates: 512, maximum_points: 1000},
   }));
 });
+optId("qualification-preview").addEventListener("click", previewQualification);
+optId("qualification-freeze").addEventListener("click", freezeQualification);
+optId("qualification-acknowledgement").addEventListener("change", () => {
+  optId("qualification-start").disabled = !optId("qualification-acknowledgement").checked;
+});
+optId("qualification-start").addEventListener("click", startQualification);
 
 loadOptimizationReference().catch((error) => renderOptimizationPreview({
   valid: false,

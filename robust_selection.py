@@ -186,8 +186,8 @@ def generate_robust_selection_plan(
     sampling_method: str = "halton",
 ) -> RobustSelectionPlanResult:
     """Freeze source finalists and one paired statistical plan per finalist."""
-    if not isinstance(finalists, list) or not 2 <= len(finalists) <= MAX_FINALISTS:
-        raise ValueError(f"finalists must contain 2 to {MAX_FINALISTS} entries")
+    if not isinstance(finalists, list) or not 1 <= len(finalists) <= MAX_FINALISTS:
+        raise ValueError(f"finalists must contain 1 to {MAX_FINALISTS} entries")
     sources = [
         _source_finalist(runs_dir, finalist, rank)
         for rank, finalist in enumerate(finalists)
@@ -823,6 +823,11 @@ def build_robust_selection_result(
     explanation = (
         "No finalist had complete paired AC and transient evidence."
         if selected is None
+        else (
+            f"{selected_label} completed paired AC and transient tolerance "
+            "qualification at every named corner."
+        )
+        if len(records) == 1
         else (
             f"{selected_label} was selected by worst named-corner joint yield; "
             "the frozen nominal source rank resolves exact statistical ties."

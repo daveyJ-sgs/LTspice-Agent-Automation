@@ -1296,10 +1296,45 @@ GUI-C3 verification gate:
 - Backend and static-contract tests cover session guarding, identity mismatch,
   path sanitization, result controls, engineering formatting, and plot wiring
 
+#### System Builder GUI-C4: Selected-finalist qualification — complete
+
+- Carries the engine-selected GUI-C3 candidate into the existing statistical
+  and robust-selection contracts; the robust engine now accepts one finalist
+  as a qualification case without inventing a comparison candidate
+- Pure preview resolves nine correlated manufacturing variables, two named
+  ADC-load corners, 32 deterministic Halton samples, 64 statistical points,
+  and 128 paired AC/transient LTspice executions
+- Publication verifies the preview identity before writing content-addressed
+  statistical and robust qualification plans; a separate acknowledgement is
+  required before local execution
+- A portable parent job retains child identities and supports cancellation,
+  resume, passive refresh recovery, terminal postprocessing, and fail-closed
+  result evaluation
+- The decision view reports joint corner yield and Wilson intervals, worst
+  requirement margins, dominant rank sensitivities, failed samples, and links
+  to HTML, JSON, CSV, immutable plans, manifests, and representative RAW data
+
+GUI-C4 verification gate:
+
+- Real local qualification job `qualification-job-dd96911d6e2ea21a` completed
+  64 AC and 64 transient runs with zero simulator or analysis errors
+- Qualification study `robust-selection-study-b4395b455a6df94b` produced
+  complete paired evidence: 32/32 joint passes at both heavy and light ADC-load
+  corners, 100% observed yield, and an 89.28% Wilson 95% lower bound per corner
+- The tightest retained requirements include +0.470 dB passband-gain margin,
+  +115.7 kHz minimum-bandwidth margin, and +298 ns settling-time margin; no
+  statistical sample failed
+- Local API verification confirmed passive discovery, complete progress,
+  sanitized results, and every portable evidence URL. Automated browser
+  attachment was unavailable for this gate, so the final workspace was opened
+  in Chrome for human inspection without substituting another browser driver
+- Unit, orchestration, API, and static checks cover pure preview, single-
+  finalist planning, manifest integrity, restart recovery, terminal evaluation,
+  guarded mutation, and existing System Builder contracts
+
 Next System Builder slices:
 
-1. GUI-C4 — selected-finalist tolerance and corner qualification
-2. GUI-D — Windows packaging and deliberately gated remote GitHub execution
+1. GUI-D — Windows packaging and deliberately gated remote GitHub execution
 
 ### Phase 5: Flagship portable mixed-signal DAQ/scope
 
@@ -1446,16 +1481,7 @@ expensive evaluation.
 
 ## Immediate next milestone
 
-Build System Builder GUI-C4 as an explicitly confirmed qualification of the
-engine-selected finalist:
-
-1. Carry the selected candidate values into the existing statistical and
-   operating-corner study contracts without creating a GUI-only evaluator.
-2. Preview the tolerance model, corners, sample count, run cost, and exact
-   immutable plan before publishing anything.
-3. Require a separate acknowledgement before launching the durable finalist
-   qualification, with cancellation, resume, and refresh recovery.
-4. Present yield, confidence intervals, worst cases, sensitivities, and failed
-   samples beside the GUI-C3 nominal decision evidence.
-5. Preserve direct links to the portable manifests, JSON, CSV, RAW, and HTML
-   reports; stop before GUI-D packaging or remote execution.
+Build System Builder GUI-D as a Windows-first packaging and deliberately gated
+remote-execution layer. Preserve the local-only default, make every external
+action explicit and reviewable, and reuse the same immutable plans and portable
+evidence contracts rather than adding a second execution model.

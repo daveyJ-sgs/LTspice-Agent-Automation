@@ -347,6 +347,18 @@ td:first-child { color: var(--text); font-weight: 600; }
 .result-evidence { display: flex; align-items: center; gap: 14px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
 .result-evidence > div { display: flex; flex-wrap: wrap; gap: 7px 14px; }
 .result-evidence a { color: var(--info); font: 600 10px "IBM Plex Mono", monospace; }
+.qualification-panel { margin-top: 24px; padding-top: 20px; border-top: 2px solid var(--accent); }
+.qualification-controls { display: grid; grid-template-columns: 160px 190px auto; gap: 8px; align-items: end; margin: 14px 0; }
+.qualification-controls input { min-width: 0; }
+.qualification-model, .qualification-table, #qualification-corner-results, #qualification-margin-results { display: grid; gap: 1px; margin-top: 10px; background: var(--border); }
+.qualification-model > div, .qualification-table > div, #qualification-corner-results > div, #qualification-margin-results > div { display: grid; grid-template-columns: minmax(130px, .55fr) minmax(220px, 1.45fr); gap: 12px; background: var(--surface); padding: 8px 9px; font: 400 10px/1.45 "IBM Plex Mono", monospace; }
+.qualification-model strong { color: var(--text); }
+.qualification-model span, .qualification-table span, #qualification-corner-results span, #qualification-margin-results span { color: var(--muted); }
+#qualification-corner-results > div { grid-template-columns: 1.3fr .6fr .7fr 1.2fr; }
+#qualification-margin-results > div { grid-template-columns: 1.1fr 1.3fr .8fr; }
+.qualification-result-grid { display: grid; grid-template-columns: .8fr 1.2fr; gap: 16px; }
+.qualification-result-grid h4 { font-size: 12px; margin-bottom: 8px; }
+.qualification-results { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
 .progress-track { grid-column: 1 / -1; height: 5px; overflow: hidden; background: var(--border); }
 .progress-track span { display: block; height: 100%; background: var(--accent); transition: width .2s linear; }
 .section-actions { margin: 0; justify-content: flex-end; }
@@ -409,4 +421,5 @@ td:first-child { color: var(--text); font-weight: 600; }
   .optimization-row, .optimization-row.constraint { grid-template-columns: 1fr 1fr; }
   .optimization-row .field-caption:first-child { grid-column: 1 / -1; }
   .optimization-decision-grid { grid-template-columns: 1fr; }
+  .qualification-controls, .qualification-result-grid { grid-template-columns: 1fr; }
 }
