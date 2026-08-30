@@ -150,6 +150,7 @@ class SystemBuilderTests(unittest.TestCase):
             ("POST", "/api/qualification/jobs/{job_id}/resume"),
             ("POST", "/api/qualification/preview"),
             ("POST", "/api/qualification/start"),
+            ("POST", "/api/remote/preview"),
             ("POST", "/api/schematic/capture"),
             ("POST", "/api/start"),
         }
@@ -705,6 +706,92 @@ class SystemBuilderTests(unittest.TestCase):
             self.assertTrue(artifact.is_file())
             self.assertEqual(list((workspace / "runs").glob("mcp-experiment-*")), [])
 
+    def test_remote_preview_is_frozen_local_and_side_effect_free(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            recipe = self._workspace_recipe(workspace)
+            client = TestClient(
+                system_builder.create_app(workspace, testing=True),
+                base_url="http://testserver",
+            )
+            client.get("/")
+            preview = client.post(
+                "/api/preview", json=recipe, headers=self._headers()
+            ).json()
+            frozen = client.post(
+                "/api/freeze",
+                json={
+                    "recipe": recipe,
+                    "expected_recipe_sha256": preview["recipe"]["sha256"],
+                    "expected_plan_id": preview["plan"]["plan_id"],
+                },
+                headers=self._headers(),
+            ).json()
+            before = {
+                path.relative_to(workspace): path.read_bytes()
+                for path in workspace.rglob("*")
+                if path.is_file()
+            }
+            payload = {
+                "launch_token": frozen["launch_token"],
+                "confirmed_plan_id": frozen["plan"]["plan_id"],
+                "confirmed_run_count": frozen["execution"]["total_run_count"],
+                "repository": "daveyJ-sgs/LTspice-Agent-Automation",
+                "ref": "main",
+            }
+            with patch(
+                "socket.create_connection",
+                side_effect=AssertionError("remote preview attempted a network call"),
+            ), patch(
+                "subprocess.Popen",
+                side_effect=AssertionError("remote preview attempted a process launch"),
+            ):
+                response = client.post(
+                    "/api/remote/preview", json=payload, headers=self._headers()
+                )
+            after = {
+                path.relative_to(workspace): path.read_bytes()
+                for path in workspace.rglob("*")
+                if path.is_file()
+            }
+
+            self.assertEqual(response.status_code, 200)
+            result = response.json()
+            self.assertEqual(result["plan"]["plan_id"], frozen["plan"]["plan_id"])
+            self.assertEqual(
+                result["plan"]["plan_sha256"], frozen["plan"]["plan_sha256"]
+            )
+            self.assertEqual(result["workload"]["total_run_count"], 48)
+            self.assertFalse(result["safety"]["dispatch_enabled"])
+            self.assertFalse(result["safety"]["external_request_made"])
+            self.assertFalse(result["safety"]["credentials_requested"])
+            self.assertEqual(before, after)
+
+            changed = client.post(
+                "/api/remote/preview",
+                json={**payload, "confirmed_run_count": 47},
+                headers=self._headers(),
+            )
+            invalid_target = client.post(
+                "/api/remote/preview",
+                json={**payload, "repository": "https://github.com/owner/repo"},
+                headers=self._headers(),
+            )
+            unknown = client.post(
+                "/api/remote/preview",
+                json={**payload, "launch_token": "unknown"},
+                headers=self._headers(),
+            )
+
+            self.assertEqual(changed.status_code, 409)
+            self.assertEqual(changed.json()["error"]["code"], "remote_preview_changed")
+            self.assertEqual(invalid_target.status_code, 422)
+            self.assertEqual(
+                invalid_target.json()["error"]["code"], "remote_preview_invalid"
+            )
+            self.assertEqual(unknown.status_code, 409)
+            self.assertEqual(unknown.json()["error"]["code"], "freeze_required")
+
     def test_start_requires_exact_confirmation_and_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
@@ -1027,6 +1114,7 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertIn("schedulePreview", javascript)
         self.assertIn("renderScopedErrors", javascript)
         self.assertIn('fetch("/api/freeze"', javascript)
+        self.assertIn('fetch("/api/remote/preview"', javascript)
         self.assertIn('fetch("/api/start"', javascript)
         self.assertIn('mutateJob(job.experiment_id, "finalize")', javascript)
         self.assertIn('mutateJob(job.experiment_id, "cancel")', javascript)
@@ -1044,6 +1132,9 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertIn("function studyUnitFactor", javascript)
         self.assertNotIn("function unitFactor(", javascript)
         self.assertIn('id="execution-acknowledgement"', html)
+        self.assertIn('id="remote-preview-controls"', html)
+        self.assertIn('id="remote-repository"', html)
+        self.assertIn('id="remote-ref"', html)
         self.assertIn('id="optimization-domains"', html)
         self.assertIn('id="optimization-file"', html)
         self.assertIn('id="optimization-save"', html)

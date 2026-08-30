@@ -11,6 +11,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
 import statistical_engine
+from remote_execution import build_remote_preview
 from study_recipe import (
     MAX_RECIPE_BYTES,
     load_recipe_experiments,
@@ -156,6 +157,13 @@ def create_study_router(
                 "state": "ready",
                 "recipe_sha256": expected_recipe_sha256,
                 "plan_id": expected_plan_id,
+                "plan_sha256": published["plan_sha256"],
+                "plan_artifact": (
+                    f"runs/statistical-plans/{published['plan_id']}/"
+                    "statistical_plan.json"
+                ),
+                "point_count": published["point_count"],
+                "experiment_count": execution["experiment_count"],
                 "total_run_count": execution["total_run_count"],
                 "response": None,
             }
@@ -176,6 +184,74 @@ def create_study_router(
                 "execution": execution,
             }
         )
+
+    @router.post("/api/remote/preview")
+    async def remote_preview(request: Request) -> Response:
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        payload, error = await read_json_body(request)
+        if error is not None:
+            return error
+        if not isinstance(payload, dict):
+            return json_error(
+                400,
+                "invalid_remote_preview",
+                "remote preview request must be an object",
+            )
+        launch_token = payload.get("launch_token")
+        confirmed_plan_id = payload.get("confirmed_plan_id")
+        confirmed_run_count = payload.get("confirmed_run_count")
+        if (
+            not isinstance(launch_token, str)
+            or not isinstance(confirmed_plan_id, str)
+            or isinstance(confirmed_run_count, bool)
+            or not isinstance(confirmed_run_count, int)
+        ):
+            return json_error(
+                400,
+                "invalid_remote_preview",
+                "remote preview requires the frozen plan identity and run count",
+            )
+        with execution_lock:
+            frozen = frozen_launches.get(launch_token)
+            if frozen is None:
+                return json_error(
+                    409,
+                    "freeze_required",
+                    "create a fresh immutable plan before remote preview",
+                )
+            if frozen["state"] != "ready":
+                return json_error(
+                    409,
+                    "remote_preview_unavailable",
+                    "only an unstarted frozen plan can be previewed remotely",
+                )
+            if (
+                confirmed_plan_id != frozen["plan_id"]
+                or confirmed_run_count != frozen["total_run_count"]
+            ):
+                return json_error(
+                    409,
+                    "remote_preview_changed",
+                    "confirmed identity or workload does not match the frozen plan",
+                )
+            frozen_snapshot = dict(frozen)
+        try:
+            preview = build_remote_preview(
+                repository=payload.get("repository"),
+                ref=payload.get("ref"),
+                plan_id=frozen_snapshot["plan_id"],
+                plan_sha256=frozen_snapshot["plan_sha256"],
+                recipe_sha256=frozen_snapshot["recipe_sha256"],
+                plan_artifact=frozen_snapshot["plan_artifact"],
+                point_count=frozen_snapshot["point_count"],
+                experiment_count=frozen_snapshot["experiment_count"],
+                total_run_count=frozen_snapshot["total_run_count"],
+            )
+        except ValueError as exc:
+            return json_error(422, "remote_preview_invalid", str(exc))
+        return JSONResponse(preview)
 
     @router.post("/api/start")
     async def start(request: Request) -> Response:

@@ -136,8 +136,9 @@ make system-builder
 The application opens on a random loopback-only `127.0.0.1` port. It supports
 durable statistical and optimization jobs, cancel/resume recovery, native
 LTspice schematic capture, completed-run decision views, and linked portable
-evidence. Preview never publishes a plan or launches LTspice. Remote execution
-remains disabled.
+evidence. Preview never publishes a plan or launches LTspice. A credential-free
+GitHub workload preview can bind an unstarted frozen plan to a proposed Windows
+target and evidence contract; remote dispatch remains disabled.
 
 Read the [System Builder guide](docs/SYSTEM_BUILDER.md) for setup, security,
 schematic capture, optimization, tolerance qualification, and recovery.

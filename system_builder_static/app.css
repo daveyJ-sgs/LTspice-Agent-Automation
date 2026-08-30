@@ -242,6 +242,9 @@ td:first-child { color: var(--text); font-weight: 600; }
 .execution-actions { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
 .execution-actions p { color: var(--muted); font-size: 10px; line-height: 1.4; margin: 0; }
 .execution-confirmation { margin-top: 14px; border: 1px solid var(--accent); background: var(--surface); padding: 13px; }
+.remote-preview { margin-top: 14px; border: 1px solid var(--border-strong); background: var(--surface); padding: 13px; }
+.compact-fields { margin: 10px 0; }
+.remote-safety-note { color: var(--muted); font-size: 10px; line-height: 1.45; margin: 9px 0 0; }
 .confirmation-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin: 10px 0; background: var(--border); }
 .confirmation-grid div { min-width: 0; background: var(--surface-raised); padding: 8px; }
 .confirmation-grid dt { color: var(--subtle); font: 600 9px "IBM Plex Mono", monospace; text-transform: uppercase; }

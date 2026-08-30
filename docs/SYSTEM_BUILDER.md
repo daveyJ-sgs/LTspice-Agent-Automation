@@ -67,6 +67,22 @@ agent-authored definition produce byte-identical statistical plans. Its default
 preview resolves 12 manufacturing samples across two ADC-load corners into 24
 points and two paired experiments: 48 prospective LTspice runs.
 
+## Remote execution preview
+
+After freezing a statistical study, **Preview GitHub workload** binds that exact
+plan ID, complete plan SHA-256, recipe SHA-256, point count, and run count to a
+proposed GitHub repository and ref. The resulting preview has its own
+content-derived ID and SHA-256 and forecasts the Windows runner, candidate
+workflow, seven-day retention, and expected RAW, log, manifest, JSON, CSV, and
+HTML evidence.
+
+This is a local calculation only. It creates no file, launches no process,
+makes no network request, and neither requests nor stores a credential. The
+candidate real-LTspice workflow still requires the GUI-D4 frozen-plan input
+contract before it can accept a System Builder dispatch. A changed recipe
+invalidates the frozen launch and its remote preview; a plan already started
+locally cannot be newly previewed for remote dispatch.
+
 ## Durable local execution
 
 Execution is server-owned. The interface follows point-level progress, can

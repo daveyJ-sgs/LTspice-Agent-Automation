@@ -157,6 +157,9 @@ function invalidateFrozenPlan() {
   frozenLaunch = null;
   byId("freeze-button").disabled = true;
   byId("execution-confirmation").hidden = true;
+  byId("remote-preview-controls").hidden = true;
+  byId("remote-preview-result").hidden = true;
+  byId("remote-preview-button").disabled = true;
   if (trackedJobs.size === 0) byId("launch-result").hidden = true;
   byId("execution-acknowledgement").checked = false;
   byId("execution-acknowledgement").disabled = false;
@@ -1275,6 +1278,9 @@ async function freezePlan() {
     byId("execution-acknowledgement").checked = false;
     byId("start-button").disabled = true;
     byId("execution-confirmation").hidden = false;
+    byId("remote-preview-controls").hidden = false;
+    byId("remote-preview-result").hidden = true;
+    byId("remote-preview-button").disabled = false;
     byId("launch-result").hidden = true;
     renderErrors([]);
   } catch (error) {
@@ -1282,6 +1288,47 @@ async function freezePlan() {
     button.disabled = latestPreview === null;
   } finally {
     button.textContent = "Create immutable plan";
+  }
+}
+
+async function previewRemoteExecution() {
+  if (!frozenLaunch) return;
+  const button = byId("remote-preview-button");
+  button.disabled = true;
+  button.textContent = "Resolving…";
+  try {
+    const response = await fetch("/api/remote/preview", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({
+        launch_token: frozenLaunch.launch_token,
+        confirmed_plan_id: frozenLaunch.plan.plan_id,
+        confirmed_run_count: frozenLaunch.execution.total_run_count,
+        repository: byId("remote-repository").value.trim(),
+        ref: byId("remote-ref").value.trim(),
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Remote preview failed");
+    byId("remote-target-repository").textContent = result.target.repository;
+    byId("remote-target-ref").textContent = result.target.ref;
+    byId("remote-target-runner").textContent = result.target.runner;
+    byId("remote-plan-id").textContent = result.plan.plan_id;
+    byId("remote-run-count").textContent = result.workload.total_run_count.toLocaleString();
+    byId("remote-retention").textContent = `${result.evidence.retention_days} days`;
+    byId("remote-preview-id").textContent = `${result.preview_id} · ${result.preview_sha256}`;
+    byId("remote-evidence-formats").textContent = `Expected evidence: ${result.evidence.formats.join(", ")}. Dispatch and credentials remain disabled.`;
+    byId("remote-preview-result").hidden = false;
+    renderErrors([]);
+  } catch (error) {
+    renderErrors([{path: "remote_preview", message: error.message}]);
+    byId("remote-preview-result").hidden = true;
+  } finally {
+    button.disabled = frozenLaunch === null;
+    button.textContent = "Preview GitHub workload";
   }
 }
 
@@ -1351,6 +1398,12 @@ async function loadInitialState() {
 
 byId("preview-button").addEventListener("click", preview);
 byId("freeze-button").addEventListener("click", freezePlan);
+byId("remote-preview-button").addEventListener("click", previewRemoteExecution);
+for (const id of ["remote-repository", "remote-ref"]) {
+  byId(id).addEventListener("input", () => {
+    byId("remote-preview-result").hidden = true;
+  });
+}
 byId("execution-acknowledgement").addEventListener("change", () => {
   byId("start-button").disabled = !byId("execution-acknowledgement").checked;
 });

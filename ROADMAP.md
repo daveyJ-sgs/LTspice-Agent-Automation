@@ -1395,9 +1395,16 @@ Next System Builder slices:
      a separate SHA-256; Windows CI extracts that exact ZIP, removes Python
      from `PATH`, starts the packaged executable against a clean workspace,
      and requires a healthy loopback-only response before artifact upload
-3. **GUI-D3 — Remote execution preview**
+3. **GUI-D3 — Remote execution preview — complete**
    - Preview repository, immutable plan identity, run count, and retained
      evidence without dispatching work or collecting credentials
+   - Complete: an origin-guarded local endpoint binds a validated GitHub
+     repository/ref to the unstarted frozen statistical plan, full plan and
+     recipe hashes, resolved workload, candidate Windows workflow, and
+     seven-day RAW/log/manifest/JSON/CSV/HTML evidence forecast
+   - Each preview receives a deterministic content-derived identity; tests
+     prove malformed targets and changed workloads fail closed while preview
+     creates no files, processes, network requests, credentials, or GitHub run
 4. **GUI-D4 — Explicit remote dispatch and recovery**
    - Require a separate acknowledgement, dispatch only the frozen plan, and
      retrieve verified evidence while keeping local-only mode the default
@@ -1547,8 +1554,8 @@ expensive evaluation.
 
 ## Immediate next milestone
 
-Begin GUI-D3 with a deliberately gated remote-execution preview, then add the
-explicit dispatch and recovery layer. Preserve
+Begin GUI-D4 with explicit acknowledgement, frozen-plan dispatch, remote status,
+and verified evidence retrieval. Preserve
 the local-only default, make every external action explicit and reviewable, and
 reuse the same immutable plans and portable evidence contracts rather than
 adding a second execution model.

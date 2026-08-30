@@ -22,7 +22,7 @@
         <span class="status-dot" aria-hidden="true"></span>
         Local only
         <span id="local-security-detail" class="security-tooltip" role="tooltip">
-          This session is bound to this computer. Circuit access is confined to the displayed workspace, and remote execution is disabled.
+          This session is bound to this computer. Remote preview is local and credential-free; dispatch remains disabled.
         </span>
       </div>
       <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch color theme" aria-pressed="false">
@@ -35,7 +35,7 @@
   <main>
     <section class="tool-intro">
       <div>
-        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-C3</p>
+        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-D3</p>
         <h1>1 MHz acquisition-channel engineering</h1>
         <p class="intro-copy">Configure tolerance qualification or inspect a deterministic optimization design space. Every Preview is non-mutating; confirmed work uses the existing durable evidence engines.</p>
       </div>
@@ -57,7 +57,7 @@
       </div>
       <div>
         <span class="label">Remote execution</span>
-        <strong>Off</strong>
+        <strong>Preview only</strong>
       </div>
       <div>
         <span class="label">Current action</span>
@@ -211,6 +211,40 @@
               <span>I understand this will launch LTspice locally and write durable evidence.</span>
             </label>
             <button id="start-button" class="danger-button" type="button" disabled>Start local study</button>
+          </section>
+
+          <section id="remote-preview-controls" class="remote-preview" hidden>
+            <div class="subsection-heading">
+              <div>
+                <p class="step">REMOTE EXECUTION PREVIEW</p>
+                <h3>GitHub Windows qualification</h3>
+              </div>
+              <span class="status-pill idle">No dispatch</span>
+            </div>
+            <div class="field-grid compact-fields">
+              <label>
+                <span>Repository</span>
+                <input id="remote-repository" type="text" spellcheck="false" value="daveyJ-sgs/LTspice-Agent-Automation">
+              </label>
+              <label>
+                <span>Git ref</span>
+                <input id="remote-ref" type="text" spellcheck="false" value="main">
+              </label>
+            </div>
+            <button id="remote-preview-button" class="secondary-button" type="button" disabled>Preview GitHub workload</button>
+            <p class="remote-safety-note">Local calculation only. No credential, process, network request, or GitHub run is created.</p>
+            <div id="remote-preview-result" hidden>
+              <dl class="confirmation-grid">
+                <div><dt>Repository</dt><dd id="remote-target-repository">—</dd></div>
+                <div><dt>Ref</dt><dd id="remote-target-ref">—</dd></div>
+                <div><dt>Runner</dt><dd id="remote-target-runner">—</dd></div>
+                <div><dt>Plan</dt><dd id="remote-plan-id">—</dd></div>
+                <div><dt>Total runs</dt><dd id="remote-run-count">—</dd></div>
+                <div><dt>Retention</dt><dd id="remote-retention">—</dd></div>
+              </dl>
+              <code id="remote-preview-id" class="artifact-path">—</code>
+              <p id="remote-evidence-formats" class="remote-safety-note"></p>
+            </div>
           </section>
 
           <section id="launch-result" class="launch-result" aria-live="polite" hidden></section>
