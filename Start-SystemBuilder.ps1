@@ -109,8 +109,9 @@ $installedFingerprint = if (Test-Path -LiteralPath $requirementsMarker -PathType
     ""
 }
 
-& $venvPython -c "import fastapi, httpx, mcp, uvicorn" 2>$null
-$importsAvailable = $LASTEXITCODE -eq 0
+$importsAvailable = (& $venvPython -c `
+    "import importlib.util; names=('fastapi','httpx','mcp','uvicorn'); print('1' if all(importlib.util.find_spec(name) for name in names) else '0')"
+).Trim() -eq "1"
 if (-not $importsAvailable -or $installedFingerprint -ne $requirementsFingerprint) {
     Write-Host "Installing System Builder dependencies into .venv..."
     & $venvPython -m pip install --disable-pip-version-check `
