@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 
+import artifacts
 import optimization_engine
 import robust_selection
 import statistical_engine
@@ -19,8 +19,7 @@ DEFAULT_SEED = 20260827
 FINALIST_LABEL = "selected-design"
 
 
-def _canonical(value: object) -> str:
-    return json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+_canonical = artifacts.canonical_json
 
 
 def _candidate(runs_dir: Path, study_id: str, candidate_index: int) -> dict[str, object]:
@@ -79,7 +78,9 @@ def preview_qualification(
         "sample_count": sample_count, "seed": seed, "correlations": CORRELATIONS,
         "corner_axes": CORNERS, "sampling_method": "halton",
     }
-    qualification_id = f"qualification-preview-{hashlib.sha256(_canonical(identity).encode()).hexdigest()[:16]}"
+    qualification_id, _ = artifacts.content_address(
+        "qualification-preview", artifacts.canonical_bytes(identity)
+    )
     return {
         "valid": True, "qualification_id": qualification_id,
         "source": {"study_id": study_id, "candidate_index": candidate_index, "parameters": candidate["parameters"]},
