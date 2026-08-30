@@ -5,10 +5,9 @@ from __future__ import annotations
 
 import math
 from bisect import bisect_left
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, NotRequired, TypedDict, get_args
-
 
 Number = float | complex
 MetricName = Literal[
@@ -117,6 +116,40 @@ class MetricMeasurement:
     parameters: dict[str, float | int | str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class _MetricSpec:
+    handler: Callable[["_WaveformMetricRequest"], MetricMeasurement]
+    parameters: frozenset[str]
+
+
+@dataclass(frozen=True)
+class _WaveformMetricRequest:
+    metric: str
+    axis: list[float]
+    values: list[float]
+    secondary_values: list[float] | None
+    origins: list[tuple[int, int]]
+    window_parameters: dict[str, float]
+    signal_unit: str
+    axis_unit: str
+    initial_value: float | None
+    final_value: float | None
+    low_fraction: float
+    high_fraction: float
+    settling_tolerance: float
+    threshold_value: float | None
+    polarity: str
+    primary_threshold: float | None
+    secondary_threshold: float | None
+    primary_edge: str | None
+    secondary_edge: str | None
+    forbidden_min: float | None
+    forbidden_max: float | None
+    secondary_forbidden_min: float | None
+    secondary_forbidden_max: float | None
+    direction: str | None
+
+
 def _real_vector(values: Sequence[Number], name: str) -> list[float]:
     if not values:
         raise ValueError(f"{name} must not be empty")
@@ -134,7 +167,9 @@ def _real_vector(values: Sequence[Number], name: str) -> list[float]:
     return result
 
 
-def _vectors(axis: Sequence[Number], values: Sequence[Number]) -> tuple[list[float], list[float]]:
+def _vectors(
+    axis: Sequence[Number], values: Sequence[Number]
+) -> tuple[list[float], list[float]]:
     x = _real_vector(axis, "axis")
     y = _real_vector(values, "waveform")
     if len(x) != len(y):
@@ -189,7 +224,9 @@ def _window(
     if secondary_values is not None:
         secondary = _real_vector(secondary_values, "secondary waveform")
         if len(secondary) != len(x):
-            raise ValueError("axis and secondary waveform must have the same number of points")
+            raise ValueError(
+                "axis and secondary waveform must have the same number of points"
+            )
 
     parameters: dict[str, float] = {}
     if window_start is None and window_end is None:
@@ -229,14 +266,17 @@ def _window(
     window_origins = [start_point[3], *((index, index) for index in interior)]
     window_secondary = None
     if secondary is not None:
+        assert start_point[2] is not None
         window_secondary = [
-            float(start_point[2]), *(secondary[index] for index in interior)
+            float(start_point[2]),
+            *(secondary[index] for index in interior),
         ]
     if end > start:
         window_axis.append(end_point[0])
         window_values.append(end_point[1])
         window_origins.append(end_point[3])
         if window_secondary is not None:
+            assert end_point[2] is not None
             window_secondary.append(float(end_point[2]))
     if window_start is not None:
         parameters["window_start"] = start
@@ -315,6 +355,564 @@ def _ratio_unit(signal_unit: str, axis_unit: str) -> str:
     return ""
 
 
+def _measurement(
+    request: _WaveformMetricRequest,
+    value: float,
+    unit: str,
+    evidence: dict[str, float | int],
+    parameters: Mapping[str, float | int | str] | None = None,
+) -> MetricMeasurement:
+    return MetricMeasurement(
+        request.metric,
+        value,
+        unit,
+        evidence,
+        {**request.window_parameters, **(parameters or {})},
+    )
+
+
+def _measure_minimum(request: _WaveformMetricRequest) -> MetricMeasurement:
+    index = min(range(len(request.values)), key=request.values.__getitem__)
+    return _measurement(
+        request,
+        request.values[index],
+        request.signal_unit,
+        _point(index, request.axis, request.origins),
+    )
+
+
+def _measure_maximum(request: _WaveformMetricRequest) -> MetricMeasurement:
+    index = max(range(len(request.values)), key=request.values.__getitem__)
+    return _measurement(
+        request,
+        request.values[index],
+        request.signal_unit,
+        _point(index, request.axis, request.origins),
+    )
+
+
+def _measure_mean(request: _WaveformMetricRequest) -> MetricMeasurement:
+    return _measurement(
+        request,
+        math.fsum(request.values) / len(request.values),
+        request.signal_unit,
+        _region(request.axis, request.origins),
+    )
+
+
+def _measure_rms(request: _WaveformMetricRequest) -> MetricMeasurement:
+    value = math.sqrt(
+        math.fsum(number * number for number in request.values) / len(request.values)
+    )
+    return _measurement(
+        request,
+        value,
+        request.signal_unit,
+        _region(request.axis, request.origins),
+    )
+
+
+def _measure_span(request: _WaveformMetricRequest) -> MetricMeasurement:
+    minimum_index = min(range(len(request.values)), key=request.values.__getitem__)
+    maximum_index = max(range(len(request.values)), key=request.values.__getitem__)
+    evidence = {
+        **_source_fields("minimum_", request.origins[minimum_index]),
+        "minimum_axis": request.axis[minimum_index],
+        **_source_fields("maximum_", request.origins[maximum_index]),
+        "maximum_axis": request.axis[maximum_index],
+    }
+    return _measurement(
+        request,
+        request.values[maximum_index] - request.values[minimum_index],
+        request.signal_unit,
+        evidence,
+    )
+
+
+def _measure_slew_rate(request: _WaveformMetricRequest) -> MetricMeasurement:
+    _require_increasing(request.axis)
+    if len(request.axis) < 2:
+        raise ValueError("slew_rate requires at least two waveform points")
+    slopes = [
+        abs((after - before) / (request.axis[index] - request.axis[index - 1]))
+        for index, (before, after) in enumerate(
+            zip(request.values, request.values[1:]), start=1
+        )
+    ]
+    segment = max(range(len(slopes)), key=slopes.__getitem__)
+    evidence = {
+        **_source_fields("start_", request.origins[segment]),
+        **_source_fields("end_", request.origins[segment + 1]),
+        "start_axis": request.axis[segment],
+        "end_axis": request.axis[segment + 1],
+    }
+    return _measurement(
+        request,
+        slopes[segment],
+        _ratio_unit(request.signal_unit, request.axis_unit),
+        evidence,
+    )
+
+
+def _measure_pulse(request: _WaveformMetricRequest) -> MetricMeasurement:
+    _require_increasing(request.axis)
+    if len(request.axis) < 2:
+        raise ValueError(f"{request.metric} requires at least two waveform points")
+    threshold = _finite_parameter(request.threshold_value, "threshold_value")
+    if request.polarity not in ("high", "low"):
+        raise ValueError("polarity must be high or low")
+    entry_edge = "rising" if request.polarity == "high" else "falling"
+    exit_edge = "falling" if request.polarity == "high" else "rising"
+    parameters: dict[str, float | str] = {
+        "threshold_value": threshold,
+        "polarity": request.polarity,
+    }
+    if request.metric == "pulse_width":
+        entries = _crossings(request.axis, request.values, threshold, entry_edge)
+        exits = _crossings(request.axis, request.values, threshold, exit_edge)
+        pair = next(
+            (
+                (entry, exit_event)
+                for entry in entries
+                for exit_event in exits
+                if exit_event[0] > entry[0]
+            ),
+            None,
+        )
+        if pair is None:
+            raise ValueError("waveform has no complete pulse in the analysis window")
+        entry, exit_event = pair
+        evidence = {
+            "entry_axis": entry[0],
+            "entry_index_before": request.origins[entry[1]][0],
+            "entry_index_after": request.origins[entry[2]][1],
+            "exit_axis": exit_event[0],
+            "exit_index_before": request.origins[exit_event[1]][0],
+            "exit_index_after": request.origins[exit_event[2]][1],
+        }
+        return _measurement(
+            request,
+            exit_event[0] - entry[0],
+            request.axis_unit,
+            evidence,
+            parameters,
+        )
+
+    active_duration = 0.0
+    for index in range(1, len(request.values)):
+        before = request.values[index - 1]
+        after = request.values[index]
+        before_active = (
+            before >= threshold if request.polarity == "high" else before <= threshold
+        )
+        after_active = (
+            after >= threshold if request.polarity == "high" else after <= threshold
+        )
+        duration = request.axis[index] - request.axis[index - 1]
+        if before_active and after_active:
+            active_duration += duration
+        elif before_active != after_active:
+            fraction = (threshold - before) / (after - before)
+            active_duration += duration * (
+                fraction if before_active else 1.0 - fraction
+            )
+    total_duration = request.axis[-1] - request.axis[0]
+    evidence = {
+        **_region(request.axis, request.origins),
+        "active_duration": active_duration,
+        "total_duration": total_duration,
+    }
+    return _measurement(
+        request,
+        100.0 * active_duration / total_duration,
+        "%",
+        evidence,
+        parameters,
+    )
+
+
+def _measure_propagation_delay(
+    request: _WaveformMetricRequest,
+) -> MetricMeasurement:
+    _require_increasing(request.axis)
+    if request.secondary_values is None:
+        raise ValueError("propagation_delay requires a secondary waveform")
+    trigger_threshold = _finite_parameter(
+        request.primary_threshold, "primary_threshold"
+    )
+    response_threshold = _finite_parameter(
+        request.secondary_threshold, "secondary_threshold"
+    )
+    if request.primary_edge is None or request.secondary_edge is None:
+        raise ValueError("primary_edge and secondary_edge are required")
+    primary_edge = request.primary_edge
+    secondary_edge = request.secondary_edge
+    triggers = _crossings(request.axis, request.values, trigger_threshold, primary_edge)
+    if not triggers:
+        raise ValueError("primary waveform never crosses its threshold")
+    trigger = triggers[0]
+    responses = _crossings(
+        request.axis,
+        request.secondary_values,
+        response_threshold,
+        secondary_edge,
+    )
+    response = next((event for event in responses if event[0] >= trigger[0]), None)
+    if response is None:
+        raise ValueError(
+            "secondary waveform has no matching crossing after the primary"
+        )
+    evidence = {
+        "primary_axis": trigger[0],
+        "primary_index_before": request.origins[trigger[1]][0],
+        "primary_index_after": request.origins[trigger[2]][1],
+        "secondary_axis": response[0],
+        "secondary_index_before": request.origins[response[1]][0],
+        "secondary_index_after": request.origins[response[2]][1],
+    }
+    parameters: dict[str, float | int | str] = {
+        "primary_threshold": trigger_threshold,
+        "secondary_threshold": response_threshold,
+        "primary_edge": primary_edge,
+        "secondary_edge": secondary_edge,
+    }
+    return _measurement(
+        request,
+        response[0] - trigger[0],
+        request.axis_unit,
+        evidence,
+        parameters,
+    )
+
+
+def _measure_forbidden_region(
+    request: _WaveformMetricRequest,
+) -> MetricMeasurement:
+    lower = _finite_parameter(request.forbidden_min, "forbidden_min")
+    upper = _finite_parameter(request.forbidden_max, "forbidden_max")
+    if lower > upper:
+        raise ValueError("forbidden_min must not exceed forbidden_max")
+    has_secondary_bounds = (
+        request.secondary_forbidden_min is not None
+        or request.secondary_forbidden_max is not None
+    )
+    if has_secondary_bounds and request.secondary_values is None:
+        raise ValueError("secondary forbidden bounds require a secondary waveform")
+    secondary_lower = secondary_upper = None
+    if has_secondary_bounds:
+        secondary_lower = _finite_parameter(
+            request.secondary_forbidden_min, "secondary_forbidden_min"
+        )
+        secondary_upper = _finite_parameter(
+            request.secondary_forbidden_max, "secondary_forbidden_max"
+        )
+        if secondary_lower > secondary_upper:
+            raise ValueError(
+                "secondary_forbidden_min must not exceed secondary_forbidden_max"
+            )
+    violations = []
+    secondary_values = request.secondary_values
+    secondary_upper_value = secondary_upper
+    if secondary_lower is not None:
+        assert secondary_upper_value is not None
+        assert secondary_values is not None
+    for index, value in enumerate(request.values):
+        if request.origins[index][0] != request.origins[index][1]:
+            continue
+        if not lower <= value <= upper:
+            continue
+        if secondary_lower is not None:
+            assert secondary_values is not None
+            assert secondary_upper_value is not None
+            if not (
+                secondary_lower <= secondary_values[index] <= secondary_upper_value
+            ):
+                continue
+        violations.append(index)
+    evidence: dict[str, float | int] = {"violation_count": len(violations)}
+    if violations:
+        evidence.update(
+            {
+                "first_index": request.origins[violations[0]][0],
+                "first_axis": request.axis[violations[0]],
+                "last_index": request.origins[violations[-1]][0],
+                "last_axis": request.axis[violations[-1]],
+            }
+        )
+    parameters: dict[str, float | int | str] = {
+        "forbidden_min": lower,
+        "forbidden_max": upper,
+    }
+    if secondary_lower is not None:
+        assert secondary_upper_value is not None
+        parameters.update(
+            {
+                "secondary_forbidden_min": secondary_lower,
+                "secondary_forbidden_max": secondary_upper_value,
+            }
+        )
+    return _measurement(
+        request,
+        float(len(violations)),
+        "points",
+        evidence,
+        parameters,
+    )
+
+
+def _transition_state(
+    request: _WaveformMetricRequest,
+) -> tuple[float, float, float]:
+    _require_increasing(request.axis)
+    initial = (
+        request.values[0]
+        if request.initial_value is None
+        else float(request.initial_value)
+    )
+    final = (
+        request.values[-1]
+        if request.final_value is None
+        else float(request.final_value)
+    )
+    if not math.isfinite(initial) or not math.isfinite(final):
+        raise ValueError(f"{request.metric} requires finite initial and final values")
+    return initial, final, final - initial
+
+
+def _measure_monotonicity(request: _WaveformMetricRequest) -> MetricMeasurement:
+    initial, final, amplitude = _transition_state(request)
+    direction = request.direction
+    if direction is None:
+        if amplitude == 0.0:
+            raise ValueError(
+                "monotonicity requires direction when initial and final values are equal"
+            )
+        direction = "rising" if amplitude > 0.0 else "falling"
+    if direction not in ("rising", "falling"):
+        raise ValueError("direction must be rising or falling")
+    rising = direction == "rising"
+    reversals = [
+        max(0.0, before - after) if rising else max(0.0, after - before)
+        for before, after in zip(request.values, request.values[1:])
+    ]
+    if not reversals:
+        raise ValueError("monotonicity requires at least two waveform points")
+    segment = max(range(len(reversals)), key=reversals.__getitem__)
+    evidence = {
+        **_source_fields("start_", request.origins[segment]),
+        **_source_fields("end_", request.origins[segment + 1]),
+        "start_axis": request.axis[segment],
+        "end_axis": request.axis[segment + 1],
+    }
+    parameters: dict[str, float | int | str] = {
+        "initial_value": initial,
+        "final_value": final,
+        "direction": direction,
+    }
+    return _measurement(
+        request,
+        reversals[segment],
+        request.signal_unit,
+        evidence,
+        parameters,
+    )
+
+
+def _transition_direction(
+    request: _WaveformMetricRequest,
+) -> tuple[float, float, float, bool]:
+    initial, final, amplitude = _transition_state(request)
+    if amplitude == 0.0:
+        raise ValueError(
+            f"{request.metric} requires distinct finite initial and final values"
+        )
+    return initial, final, amplitude, amplitude > 0.0
+
+
+def _measure_transition_time(
+    request: _WaveformMetricRequest,
+) -> MetricMeasurement:
+    initial, final, amplitude, rising = _transition_direction(request)
+    if not 0.0 <= request.low_fraction < request.high_fraction <= 1.0:
+        raise ValueError("transition fractions must satisfy 0 <= low < high <= 1")
+    if request.metric == "rise_time" and not rising:
+        raise ValueError("rise_time requires final_value greater than initial_value")
+    if request.metric == "fall_time" and rising:
+        raise ValueError("fall_time requires final_value less than initial_value")
+    low_level = initial + request.low_fraction * amplitude
+    high_level = initial + request.high_fraction * amplitude
+    low_axis, low_before, low_after = _crossing(
+        request.axis, request.values, low_level, rising
+    )
+    high_axis, high_before, high_after = _crossing(
+        request.axis,
+        request.values,
+        high_level,
+        rising,
+        low_before,
+    )
+    evidence = {
+        "low_axis": low_axis,
+        "low_index_before": request.origins[low_before][0],
+        "low_index_after": request.origins[low_after][1],
+        "high_axis": high_axis,
+        "high_index_before": request.origins[high_before][0],
+        "high_index_after": request.origins[high_after][1],
+    }
+    parameters = {
+        "initial_value": initial,
+        "final_value": final,
+        "low_fraction": request.low_fraction,
+        "high_fraction": request.high_fraction,
+    }
+    return _measurement(
+        request,
+        high_axis - low_axis,
+        request.axis_unit,
+        evidence,
+        parameters,
+    )
+
+
+def _measure_overshoot(request: _WaveformMetricRequest) -> MetricMeasurement:
+    initial, final, amplitude, rising = _transition_direction(request)
+    if rising:
+        peak_index = max(range(len(request.values)), key=request.values.__getitem__)
+        excursion = max(0.0, request.values[peak_index] - final)
+    else:
+        peak_index = min(range(len(request.values)), key=request.values.__getitem__)
+        excursion = max(0.0, final - request.values[peak_index])
+    evidence = _point(peak_index, request.axis, request.origins)
+    evidence["waveform_value"] = request.values[peak_index]
+    parameters = {"initial_value": initial, "final_value": final}
+    return _measurement(
+        request,
+        100.0 * excursion / abs(amplitude),
+        "%",
+        evidence,
+        parameters,
+    )
+
+
+def _measure_undershoot(request: _WaveformMetricRequest) -> MetricMeasurement:
+    initial, final, amplitude, rising = _transition_direction(request)
+    if rising:
+        peak_index = min(range(len(request.values)), key=request.values.__getitem__)
+        excursion = max(0.0, initial - request.values[peak_index])
+    else:
+        peak_index = max(range(len(request.values)), key=request.values.__getitem__)
+        excursion = max(0.0, request.values[peak_index] - initial)
+    evidence = _point(peak_index, request.axis, request.origins)
+    evidence["waveform_value"] = request.values[peak_index]
+    parameters = {"initial_value": initial, "final_value": final}
+    return _measurement(
+        request,
+        100.0 * excursion / abs(amplitude),
+        "%",
+        evidence,
+        parameters,
+    )
+
+
+def _measure_settling_time(
+    request: _WaveformMetricRequest,
+) -> MetricMeasurement:
+    initial, final, amplitude, _ = _transition_direction(request)
+    if not 0.0 < request.settling_tolerance < 1.0:
+        raise ValueError("settling_tolerance must be between 0 and 1")
+    half_band = request.settling_tolerance * abs(amplitude)
+    lower = final - half_band
+    upper = final + half_band
+    last_outside = next(
+        (
+            index
+            for index in range(len(request.values) - 1, -1, -1)
+            if not lower <= request.values[index] <= upper
+        ),
+        None,
+    )
+    settling_index = 0 if last_outside is None else last_outside + 1
+    if settling_index >= len(request.values):
+        raise ValueError("waveform does not settle within the supplied data")
+    evidence = _point(settling_index, request.axis, request.origins)
+    evidence.update({"band_minimum": lower, "band_maximum": upper})
+    parameters = {
+        "initial_value": initial,
+        "final_value": final,
+        "settling_tolerance": request.settling_tolerance,
+    }
+    return _measurement(
+        request,
+        request.axis[settling_index] - request.axis[0],
+        request.axis_unit,
+        evidence,
+        parameters,
+    )
+
+
+_METRIC_REGISTRY = {
+    "minimum": _MetricSpec(_measure_minimum, frozenset()),
+    "maximum": _MetricSpec(_measure_maximum, frozenset()),
+    "mean": _MetricSpec(_measure_mean, frozenset()),
+    "rms": _MetricSpec(_measure_rms, frozenset()),
+    "peak_to_peak": _MetricSpec(_measure_span, frozenset()),
+    "ripple": _MetricSpec(_measure_span, frozenset()),
+    "slew_rate": _MetricSpec(_measure_slew_rate, frozenset()),
+    "pulse_width": _MetricSpec(
+        _measure_pulse, frozenset({"threshold_value", "polarity"})
+    ),
+    "duty_cycle": _MetricSpec(
+        _measure_pulse, frozenset({"threshold_value", "polarity"})
+    ),
+    "propagation_delay": _MetricSpec(
+        _measure_propagation_delay,
+        frozenset(
+            {
+                "secondary_values",
+                "primary_threshold",
+                "secondary_threshold",
+                "primary_edge",
+                "secondary_edge",
+            }
+        ),
+    ),
+    "forbidden_region_samples": _MetricSpec(
+        _measure_forbidden_region,
+        frozenset(
+            {
+                "secondary_values",
+                "forbidden_min",
+                "forbidden_max",
+                "secondary_forbidden_min",
+                "secondary_forbidden_max",
+            }
+        ),
+    ),
+    "monotonicity": _MetricSpec(
+        _measure_monotonicity,
+        frozenset({"initial_value", "final_value", "direction"}),
+    ),
+    "rise_time": _MetricSpec(
+        _measure_transition_time,
+        frozenset({"initial_value", "final_value", "low_fraction", "high_fraction"}),
+    ),
+    "fall_time": _MetricSpec(
+        _measure_transition_time,
+        frozenset({"initial_value", "final_value", "low_fraction", "high_fraction"}),
+    ),
+    "overshoot": _MetricSpec(
+        _measure_overshoot, frozenset({"initial_value", "final_value"})
+    ),
+    "undershoot": _MetricSpec(
+        _measure_undershoot, frozenset({"initial_value", "final_value"})
+    ),
+    "settling_time": _MetricSpec(
+        _measure_settling_time,
+        frozenset({"initial_value", "final_value", "settling_tolerance"}),
+    ),
+}
+
+
 def measure_metric(
     axis: Sequence[Number],
     values: Sequence[Number],
@@ -343,323 +941,39 @@ def measure_metric(
     direction: str | None = None,
 ) -> MetricMeasurement:
     """Measure one property over the complete supplied waveform."""
-    if metric not in SUPPORTED_METRICS:
+    spec = _METRIC_REGISTRY.get(metric)
+    if spec is None:
         raise ValueError(f"Unknown waveform metric: {metric}")
     x, y, secondary, origins, window_parameters = _window(
         axis, values, secondary_values, window_start, window_end
     )
-
-    def measurement(
-        value: float,
-        unit: str,
-        evidence: dict[str, float | int],
-        parameters: dict[str, float | str] | None = None,
-    ) -> MetricMeasurement:
-        return MetricMeasurement(
-            metric,
-            value,
-            unit,
-            evidence,
-            {**window_parameters, **(parameters or {})},
-        )
-
-    if metric == "minimum":
-        index = min(range(len(y)), key=y.__getitem__)
-        return measurement(y[index], signal_unit, _point(index, x, origins))
-    if metric == "maximum":
-        index = max(range(len(y)), key=y.__getitem__)
-        return measurement(y[index], signal_unit, _point(index, x, origins))
-    if metric == "mean":
-        return measurement(math.fsum(y) / len(y), signal_unit, _region(x, origins))
-    if metric == "rms":
-        value = math.sqrt(math.fsum(number * number for number in y) / len(y))
-        return measurement(value, signal_unit, _region(x, origins))
-    if metric in ("peak_to_peak", "ripple"):
-        minimum_index = min(range(len(y)), key=y.__getitem__)
-        maximum_index = max(range(len(y)), key=y.__getitem__)
-        evidence = {
-            **_source_fields("minimum_", origins[minimum_index]),
-            "minimum_axis": x[minimum_index],
-            **_source_fields("maximum_", origins[maximum_index]),
-            "maximum_axis": x[maximum_index],
-        }
-        return measurement(y[maximum_index] - y[minimum_index], signal_unit, evidence)
-
-    if metric == "slew_rate":
-        _require_increasing(x)
-        if len(x) < 2:
-            raise ValueError("slew_rate requires at least two waveform points")
-        slopes = [
-            abs((after - before) / (x[index] - x[index - 1]))
-            for index, (before, after) in enumerate(zip(y, y[1:]), start=1)
-        ]
-        segment = max(range(len(slopes)), key=slopes.__getitem__)
-        evidence = {
-            **_source_fields("start_", origins[segment]),
-            **_source_fields("end_", origins[segment + 1]),
-            "start_axis": x[segment],
-            "end_axis": x[segment + 1],
-        }
-        return measurement(slopes[segment], _ratio_unit(signal_unit, axis_unit), evidence)
-
-    if metric in ("pulse_width", "duty_cycle"):
-        _require_increasing(x)
-        if len(x) < 2:
-            raise ValueError(f"{metric} requires at least two waveform points")
-        threshold = _finite_parameter(threshold_value, "threshold_value")
-        if polarity not in ("high", "low"):
-            raise ValueError("polarity must be high or low")
-        entry_edge = "rising" if polarity == "high" else "falling"
-        exit_edge = "falling" if polarity == "high" else "rising"
-        parameters: dict[str, float | str] = {
-            "threshold_value": threshold,
-            "polarity": polarity,
-        }
-        if metric == "pulse_width":
-            entries = _crossings(x, y, threshold, entry_edge)
-            exits = _crossings(x, y, threshold, exit_edge)
-            pair = next(
-                (
-                    (entry, exit_event)
-                    for entry in entries
-                    for exit_event in exits
-                    if exit_event[0] > entry[0]
-                ),
-                None,
-            )
-            if pair is None:
-                raise ValueError("waveform has no complete pulse in the analysis window")
-            entry, exit_event = pair
-            evidence = {
-                "entry_axis": entry[0],
-                "entry_index_before": origins[entry[1]][0],
-                "entry_index_after": origins[entry[2]][1],
-                "exit_axis": exit_event[0],
-                "exit_index_before": origins[exit_event[1]][0],
-                "exit_index_after": origins[exit_event[2]][1],
-            }
-            return measurement(exit_event[0] - entry[0], axis_unit, evidence, parameters)
-
-        active_duration = 0.0
-        for index in range(1, len(y)):
-            before = y[index - 1]
-            after = y[index]
-            before_active = before >= threshold if polarity == "high" else before <= threshold
-            after_active = after >= threshold if polarity == "high" else after <= threshold
-            duration = x[index] - x[index - 1]
-            if before_active and after_active:
-                active_duration += duration
-            elif before_active != after_active:
-                fraction = (threshold - before) / (after - before)
-                active_duration += duration * (fraction if before_active else 1.0 - fraction)
-        total_duration = x[-1] - x[0]
-        evidence = {
-            **_region(x, origins),
-            "active_duration": active_duration,
-            "total_duration": total_duration,
-        }
-        return measurement(100.0 * active_duration / total_duration, "%", evidence, parameters)
-
-    if metric == "propagation_delay":
-        _require_increasing(x)
-        if secondary is None:
-            raise ValueError("propagation_delay requires a secondary waveform")
-        trigger_threshold = _finite_parameter(primary_threshold, "primary_threshold")
-        response_threshold = _finite_parameter(secondary_threshold, "secondary_threshold")
-        if primary_edge is None or secondary_edge is None:
-            raise ValueError("primary_edge and secondary_edge are required")
-        triggers = _crossings(x, y, trigger_threshold, primary_edge)
-        if not triggers:
-            raise ValueError("primary waveform never crosses its threshold")
-        trigger = triggers[0]
-        responses = _crossings(x, secondary, response_threshold, secondary_edge)
-        response = next((event for event in responses if event[0] >= trigger[0]), None)
-        if response is None:
-            raise ValueError("secondary waveform has no matching crossing after the primary")
-        evidence = {
-            "primary_axis": trigger[0],
-            "primary_index_before": origins[trigger[1]][0],
-            "primary_index_after": origins[trigger[2]][1],
-            "secondary_axis": response[0],
-            "secondary_index_before": origins[response[1]][0],
-            "secondary_index_after": origins[response[2]][1],
-        }
-        parameters = {
-            "primary_threshold": trigger_threshold,
-            "secondary_threshold": response_threshold,
-            "primary_edge": primary_edge,
-            "secondary_edge": secondary_edge,
-        }
-        return measurement(response[0] - trigger[0], axis_unit, evidence, parameters)
-
-    if metric == "forbidden_region_samples":
-        lower = _finite_parameter(forbidden_min, "forbidden_min")
-        upper = _finite_parameter(forbidden_max, "forbidden_max")
-        if lower > upper:
-            raise ValueError("forbidden_min must not exceed forbidden_max")
-        has_secondary_bounds = (
-            secondary_forbidden_min is not None or secondary_forbidden_max is not None
-        )
-        if has_secondary_bounds and secondary is None:
-            raise ValueError("secondary forbidden bounds require a secondary waveform")
-        secondary_lower = secondary_upper = None
-        if has_secondary_bounds:
-            secondary_lower = _finite_parameter(
-                secondary_forbidden_min, "secondary_forbidden_min"
-            )
-            secondary_upper = _finite_parameter(
-                secondary_forbidden_max, "secondary_forbidden_max"
-            )
-            if secondary_lower > secondary_upper:
-                raise ValueError(
-                    "secondary_forbidden_min must not exceed secondary_forbidden_max"
-                )
-        violations = []
-        for index, value in enumerate(y):
-            if origins[index][0] != origins[index][1]:
-                continue
-            if not lower <= value <= upper:
-                continue
-            if secondary_lower is not None and not (
-                secondary_lower <= secondary[index] <= secondary_upper
-            ):
-                continue
-            violations.append(index)
-        evidence: dict[str, float | int] = {"violation_count": len(violations)}
-        if violations:
-            evidence.update(
-                {
-                    "first_index": origins[violations[0]][0],
-                    "first_axis": x[violations[0]],
-                    "last_index": origins[violations[-1]][0],
-                    "last_axis": x[violations[-1]],
-                }
-            )
-        parameters = {"forbidden_min": lower, "forbidden_max": upper}
-        if secondary_lower is not None:
-            parameters.update(
-                {
-                    "secondary_forbidden_min": secondary_lower,
-                    "secondary_forbidden_max": secondary_upper,
-                }
-            )
-        return measurement(float(len(violations)), "points", evidence, parameters)
-
-    _require_increasing(x)
-    initial = y[0] if initial_value is None else float(initial_value)
-    final = y[-1] if final_value is None else float(final_value)
-    amplitude = final - initial
-    if not math.isfinite(initial) or not math.isfinite(final):
-        raise ValueError(f"{metric} requires finite initial and final values")
-
-    if metric == "monotonicity":
-        if direction is None:
-            if amplitude == 0.0:
-                raise ValueError(
-                    "monotonicity requires direction when initial and final values are equal"
-                )
-            direction = "rising" if amplitude > 0.0 else "falling"
-        if direction not in ("rising", "falling"):
-            raise ValueError("direction must be rising or falling")
-        rising = direction == "rising"
-        reversals = [
-            max(0.0, before - after) if rising else max(0.0, after - before)
-            for before, after in zip(y, y[1:])
-        ]
-        if not reversals:
-            raise ValueError("monotonicity requires at least two waveform points")
-        segment = max(range(len(reversals)), key=reversals.__getitem__)
-        evidence = {
-            **_source_fields("start_", origins[segment]),
-            **_source_fields("end_", origins[segment + 1]),
-            "start_axis": x[segment],
-            "end_axis": x[segment + 1],
-        }
-        parameters = {
-            "initial_value": initial,
-            "final_value": final,
-            "direction": direction,
-        }
-        return measurement(reversals[segment], signal_unit, evidence, parameters)
-
-    if amplitude == 0.0:
-        raise ValueError(f"{metric} requires distinct finite initial and final values")
-    rising = amplitude > 0.0
-
-    if metric in ("rise_time", "fall_time"):
-        if not 0.0 <= low_fraction < high_fraction <= 1.0:
-            raise ValueError("transition fractions must satisfy 0 <= low < high <= 1")
-        if metric == "rise_time" and not rising:
-            raise ValueError("rise_time requires final_value greater than initial_value")
-        if metric == "fall_time" and rising:
-            raise ValueError("fall_time requires final_value less than initial_value")
-        low_level = initial + low_fraction * amplitude
-        high_level = initial + high_fraction * amplitude
-        low_axis, low_before, low_after = _crossing(x, y, low_level, rising)
-        high_axis, high_before, high_after = _crossing(
-            x, y, high_level, rising, low_before
-        )
-        evidence = {
-            "low_axis": low_axis,
-            "low_index_before": origins[low_before][0],
-            "low_index_after": origins[low_after][1],
-            "high_axis": high_axis,
-            "high_index_before": origins[high_before][0],
-            "high_index_after": origins[high_after][1],
-        }
-        parameters = {
-            "initial_value": initial,
-            "final_value": final,
-            "low_fraction": low_fraction,
-            "high_fraction": high_fraction,
-        }
-        return measurement(high_axis - low_axis, axis_unit, evidence, parameters)
-
-    if metric == "overshoot":
-        if rising:
-            peak_index = max(range(len(y)), key=y.__getitem__)
-            excursion = max(0.0, y[peak_index] - final)
-        else:
-            peak_index = min(range(len(y)), key=y.__getitem__)
-            excursion = max(0.0, final - y[peak_index])
-        evidence = _point(peak_index, x, origins)
-        evidence["waveform_value"] = y[peak_index]
-        parameters = {"initial_value": initial, "final_value": final}
-        return measurement(100.0 * excursion / abs(amplitude), "%", evidence, parameters)
-
-    if metric == "undershoot":
-        if rising:
-            peak_index = min(range(len(y)), key=y.__getitem__)
-            excursion = max(0.0, initial - y[peak_index])
-        else:
-            peak_index = max(range(len(y)), key=y.__getitem__)
-            excursion = max(0.0, y[peak_index] - initial)
-        evidence = _point(peak_index, x, origins)
-        evidence["waveform_value"] = y[peak_index]
-        parameters = {"initial_value": initial, "final_value": final}
-        return measurement(100.0 * excursion / abs(amplitude), "%", evidence, parameters)
-
-    if metric == "settling_time":
-        if not 0.0 < settling_tolerance < 1.0:
-            raise ValueError("settling_tolerance must be between 0 and 1")
-        half_band = settling_tolerance * abs(amplitude)
-        lower = final - half_band
-        upper = final + half_band
-        last_outside = next(
-            (index for index in range(len(y) - 1, -1, -1) if not lower <= y[index] <= upper),
-            None,
-        )
-        settling_index = 0 if last_outside is None else last_outside + 1
-        if settling_index >= len(y):
-            raise ValueError("waveform does not settle within the supplied data")
-        evidence = _point(settling_index, x, origins)
-        evidence.update({"band_minimum": lower, "band_maximum": upper})
-        parameters = {
-            "initial_value": initial,
-            "final_value": final,
-            "settling_tolerance": settling_tolerance,
-        }
-        return measurement(x[settling_index] - x[0], axis_unit, evidence, parameters)
+    request = _WaveformMetricRequest(
+        metric=metric,
+        axis=x,
+        values=y,
+        secondary_values=secondary,
+        origins=origins,
+        window_parameters=window_parameters,
+        signal_unit=signal_unit,
+        axis_unit=axis_unit,
+        initial_value=initial_value,
+        final_value=final_value,
+        low_fraction=low_fraction,
+        high_fraction=high_fraction,
+        settling_tolerance=settling_tolerance,
+        threshold_value=threshold_value,
+        polarity=polarity,
+        primary_threshold=primary_threshold,
+        secondary_threshold=secondary_threshold,
+        primary_edge=primary_edge,
+        secondary_edge=secondary_edge,
+        forbidden_min=forbidden_min,
+        forbidden_max=forbidden_max,
+        secondary_forbidden_min=secondary_forbidden_min,
+        secondary_forbidden_max=secondary_forbidden_max,
+        direction=direction,
+    )
+    return spec.handler(request)
 
 
 def evaluate_requirement(

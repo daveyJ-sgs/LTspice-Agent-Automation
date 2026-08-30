@@ -6,16 +6,45 @@ from __future__ import annotations
 import cmath
 import math
 from bisect import bisect_left
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 
 import waveform_metrics
-
 
 Number = float | complex
 SUPPORTED_METRICS = waveform_metrics.FREQUENCY_METRICS
 MAX_SPECTRAL_BINS = 4096
 MAX_SPECTRAL_WORK = 5_000_000
 MAX_HARMONICS = 100
+
+
+@dataclass(frozen=True)
+class _FrequencyMetricSpec:
+    handler: Callable[["_FrequencyMetricRequest"], waveform_metrics.MetricMeasurement]
+    parameters: frozenset[str]
+
+
+@dataclass(frozen=True)
+class _FrequencyMetricRequest:
+    metric: str
+    axis: Sequence[Number]
+    values: Sequence[Number]
+    secondary_values: Sequence[Number] | None
+    signal_unit: str
+    axis_unit: str
+    window_start: float | None
+    window_end: float | None
+    threshold_value: float | None
+    edge: str
+    frequency_min: float | None
+    frequency_max: float | None
+    frequency_resolution: float | None
+    fundamental_frequency: float | None
+    maximum_harmonic: int
+    frequency_value: float | None
+    reference_frequency: float | None
+    cutoff_drop_db: float
+    direction: str
 
 
 def _measurement(
@@ -59,9 +88,7 @@ def _max_gap(axis: Sequence[float]) -> float:
 def _trapezoid_integral(axis: Sequence[float], values: Sequence[float]) -> float:
     return math.fsum(
         0.5 * (before + after) * (x_after - x_before)
-        for x_before, x_after, before, after in zip(
-            axis, axis[1:], values, values[1:]
-        )
+        for x_before, x_after, before, after in zip(axis, axis[1:], values, values[1:])
     )
 
 
@@ -90,7 +117,9 @@ def _spectral_samples(
         weighted.append((value - mean) * weight)
     coherent_weight = _trapezoid_integral(axis, weights)
     if coherent_weight <= 0.0:
-        raise ValueError("analysis window has insufficient points for spectral weighting")
+        raise ValueError(
+            "analysis window has insufficient points for spectral weighting"
+        )
     return weighted, coherent_weight
 
 
@@ -188,7 +217,9 @@ def _window_ac(
     frequency = waveform_metrics._real_vector(axis, "frequency axis")
     response = _complex_vector(values, "AC waveform")
     if len(frequency) != len(response):
-        raise ValueError("frequency axis and AC waveform must have the same number of points")
+        raise ValueError(
+            "frequency axis and AC waveform must have the same number of points"
+        )
     waveform_metrics._require_increasing(frequency)
     if frequency[0] <= 0.0:
         raise ValueError("AC frequency axis must be positive")
@@ -198,7 +229,9 @@ def _window_ac(
             raise ValueError("AC waveforms must have the same number of points")
         if any(value == 0.0 for value in reference):
             raise ValueError("secondary AC waveform contains a zero reference value")
-        response = [primary / secondary for primary, secondary in zip(response, reference)]
+        response = [
+            primary / secondary for primary, secondary in zip(response, reference)
+        ]
     magnitudes = [abs(value) for value in response]
     if any(value == 0.0 for value in magnitudes):
         raise ValueError("AC waveform contains a zero response magnitude")
@@ -273,11 +306,9 @@ def _crossings_log(
         before = values[index - 1]
         after = values[index]
         crossed = (
-            before < level <= after
-            or (index == 1 and before == level < after)
+            before < level <= after or (index == 1 and before == level < after)
             if direction == "rising"
-            else before > level >= after
-            or (index == 1 and before == level > after)
+            else before > level >= after or (index == 1 and before == level > after)
         )
         if not crossed:
             continue
@@ -309,6 +340,495 @@ def _crossing_evidence(
     }
 
 
+def _spectral_context(
+    request: _FrequencyMetricRequest,
+) -> tuple[
+    list[float],
+    list[float],
+    list[tuple[int, int]],
+    dict[str, float],
+    str,
+]:
+    x, y, _, origins, window_parameters = waveform_metrics._window(
+        request.axis,
+        request.values,
+        None,
+        request.window_start,
+        request.window_end,
+    )
+    waveform_metrics._require_increasing(x)
+    return x, y, origins, window_parameters, _frequency_unit(request.axis_unit)
+
+
+def _measure_frequency(
+    request: _FrequencyMetricRequest,
+) -> waveform_metrics.MetricMeasurement:
+    x, y, origins, window_parameters, frequency_unit = _spectral_context(request)
+    threshold = _finite(request.threshold_value, "threshold_value")
+    crossings = waveform_metrics._crossings(x, y, threshold, request.edge)
+    if len(crossings) < 2:
+        raise ValueError("frequency requires at least two matching crossings")
+    first = crossings[0]
+    last = crossings[-1]
+    value = (len(crossings) - 1) / (last[0] - first[0])
+    evidence = {
+        "first_crossing_axis": first[0],
+        "first_index_before": origins[first[1]][0],
+        "first_index_after": origins[first[2]][1],
+        "last_crossing_axis": last[0],
+        "last_index_before": origins[last[1]][0],
+        "last_index_after": origins[last[2]][1],
+        "cycle_count": len(crossings) - 1,
+    }
+    return _measurement(
+        request.metric,
+        value,
+        frequency_unit,
+        evidence,
+        window_parameters,
+        {"threshold_value": threshold, "edge": request.edge},
+    )
+
+
+def _measure_spectral_peak(
+    request: _FrequencyMetricRequest,
+) -> waveform_metrics.MetricMeasurement:
+    x, y, origins, window_parameters, _ = _spectral_context(request)
+    minimum = _finite(request.frequency_min, "frequency_min")
+    maximum = _finite(request.frequency_max, "frequency_max")
+    if minimum <= 0.0 or maximum <= minimum:
+        raise ValueError("spectral frequency band must satisfy 0 < minimum < maximum")
+    duration = x[-1] - x[0]
+    resolution = (
+        1.0 / duration
+        if request.frequency_resolution is None
+        else float(request.frequency_resolution)
+    )
+    if not math.isfinite(resolution) or resolution <= 0.0:
+        raise ValueError("frequency_resolution must be positive and finite")
+    count = math.floor((maximum - minimum) / resolution) + 1
+    last_candidate = minimum + (count - 1) * resolution
+    include_maximum = not math.isclose(
+        last_candidate,
+        maximum,
+        rel_tol=1e-12,
+        abs_tol=1e-15,
+    )
+    if include_maximum:
+        count += 1
+    if count > MAX_SPECTRAL_BINS:
+        raise ValueError(f"spectral analysis is limited to {MAX_SPECTRAL_BINS} bins")
+    nyquist = 1.0 / (2.0 * _max_gap(x))
+    if maximum > nyquist:
+        raise ValueError(
+            "spectral frequency band exceeds the conservative Nyquist limit"
+        )
+    _check_spectral_work(len(x), count)
+    candidates = [
+        minimum + index * resolution for index in range(count - int(include_maximum))
+    ]
+    if include_maximum:
+        candidates.append(maximum)
+    weighted, coherent_weight = _spectral_samples(x, y, hann=True)
+    amplitudes = [
+        _fourier_amplitude(x, weighted, coherent_weight, candidate)
+        for candidate in candidates
+    ]
+    peak_index = max(range(len(amplitudes)), key=amplitudes.__getitem__)
+    evidence = {
+        **waveform_metrics._region(x, origins),
+        "peak_frequency": candidates[peak_index],
+        "frequency_resolution": resolution,
+        "frequency_min": minimum,
+        "frequency_max": maximum,
+        "bin_count": len(candidates),
+    }
+    return _measurement(
+        request.metric,
+        amplitudes[peak_index],
+        request.signal_unit,
+        evidence,
+        window_parameters,
+        {
+            "frequency_min": minimum,
+            "frequency_max": maximum,
+            "frequency_resolution": resolution,
+            "spectral_window": "hann",
+        },
+    )
+
+
+def _measure_thd(
+    request: _FrequencyMetricRequest,
+) -> waveform_metrics.MetricMeasurement:
+    x, y, origins, window_parameters, _ = _spectral_context(request)
+    fundamental = _finite(request.fundamental_frequency, "fundamental_frequency")
+    if fundamental <= 0.0:
+        raise ValueError("fundamental_frequency must be positive")
+    if (
+        not isinstance(request.maximum_harmonic, int)
+        or isinstance(request.maximum_harmonic, bool)
+        or request.maximum_harmonic < 2
+        or request.maximum_harmonic > MAX_HARMONICS
+    ):
+        raise ValueError(
+            f"maximum_harmonic must be an integer from 2 through {MAX_HARMONICS}"
+        )
+    cycle_count = math.floor((x[-1] - x[0]) * fundamental)
+    if cycle_count < 1:
+        raise ValueError("THD analysis window must contain at least one full cycle")
+    effective_end = x[0] + cycle_count / fundamental
+    x, y, origins = _clip_end(x, y, origins, effective_end)
+    nyquist = 1.0 / (2.0 * _max_gap(x))
+    if request.maximum_harmonic * fundamental > nyquist:
+        raise ValueError("highest THD harmonic exceeds the conservative Nyquist limit")
+    _check_spectral_work(len(x), request.maximum_harmonic)
+    weighted, coherent_weight = _spectral_samples(x, y, hann=False)
+    amplitudes = [
+        _fourier_amplitude(
+            x,
+            weighted,
+            coherent_weight,
+            harmonic * fundamental,
+        )
+        for harmonic in range(1, request.maximum_harmonic + 1)
+    ]
+    if amplitudes[0] <= 1e-15:
+        raise ValueError("THD fundamental amplitude is zero")
+    harmonic_rss = math.sqrt(math.fsum(value * value for value in amplitudes[1:]))
+    evidence = {
+        **waveform_metrics._region(x, origins),
+        "cycle_count": cycle_count,
+        "fundamental_amplitude": amplitudes[0],
+        "harmonic_rss": harmonic_rss,
+        "maximum_harmonic": request.maximum_harmonic,
+    }
+    evidence.update(
+        {
+            f"harmonic_{index}_amplitude": amplitude
+            for index, amplitude in enumerate(amplitudes, start=1)
+        }
+    )
+    return _measurement(
+        request.metric,
+        100.0 * harmonic_rss / amplitudes[0],
+        "%",
+        evidence,
+        window_parameters,
+        {
+            "fundamental_frequency": fundamental,
+            "maximum_harmonic": request.maximum_harmonic,
+        },
+    )
+
+
+def _ac_context(
+    request: _FrequencyMetricRequest,
+    *,
+    include_phase: bool,
+) -> tuple[
+    list[float],
+    list[float],
+    list[float],
+    list[tuple[int, int]],
+    dict[str, float],
+    str,
+]:
+    frequency, gain, phase, origins, window_parameters = _window_ac(
+        request.axis,
+        request.values,
+        request.secondary_values,
+        request.window_start,
+        request.window_end,
+        include_phase=include_phase,
+    )
+    return (
+        frequency,
+        gain,
+        phase,
+        origins,
+        window_parameters,
+        request.axis_unit or "Hz",
+    )
+
+
+def _measure_ac_gain(
+    request: _FrequencyMetricRequest,
+) -> waveform_metrics.MetricMeasurement:
+    frequency, gain, _, origins, window_parameters, _ = _ac_context(
+        request, include_phase=False
+    )
+    selected_frequency = _finite(request.frequency_value, "frequency_value")
+    value, local_origin = _interpolate_log(frequency, gain, selected_frequency)
+    evidence = {
+        "frequency": selected_frequency,
+        **waveform_metrics._source_fields(
+            "",
+            (
+                origins[local_origin[0]][0],
+                origins[local_origin[1]][1],
+            ),
+        ),
+    }
+    return _measurement(
+        request.metric,
+        value,
+        "dB",
+        evidence,
+        window_parameters,
+        {"frequency_value": selected_frequency},
+    )
+
+
+def _reference_gain(
+    request: _FrequencyMetricRequest,
+) -> tuple[
+    list[float],
+    list[float],
+    list[tuple[int, int]],
+    dict[str, float],
+    str,
+    float,
+    float,
+]:
+    frequency, gain, _, origins, window_parameters, frequency_unit = _ac_context(
+        request, include_phase=False
+    )
+    reference = _finite(request.reference_frequency, "reference_frequency")
+    reference_gain, _ = _interpolate_log(frequency, gain, reference)
+    return (
+        frequency,
+        gain,
+        origins,
+        window_parameters,
+        frequency_unit,
+        reference,
+        reference_gain,
+    )
+
+
+def _measure_peaking(
+    request: _FrequencyMetricRequest,
+) -> waveform_metrics.MetricMeasurement:
+    (
+        frequency,
+        gain,
+        origins,
+        window_parameters,
+        _,
+        reference,
+        reference_gain,
+    ) = _reference_gain(request)
+    peak_index = max(range(len(gain)), key=gain.__getitem__)
+    evidence = {
+        "reference_frequency": reference,
+        "reference_gain_db": reference_gain,
+        "peak_frequency": frequency[peak_index],
+        "peak_gain_db": gain[peak_index],
+        **waveform_metrics._source_fields("peak_", origins[peak_index]),
+    }
+    return _measurement(
+        request.metric,
+        gain[peak_index] - reference_gain,
+        "dB",
+        evidence,
+        window_parameters,
+        {"reference_frequency": reference},
+    )
+
+
+def _measure_cutoff(
+    request: _FrequencyMetricRequest,
+) -> waveform_metrics.MetricMeasurement:
+    (
+        frequency,
+        gain,
+        origins,
+        window_parameters,
+        frequency_unit,
+        reference,
+        reference_gain,
+    ) = _reference_gain(request)
+    drop = float(request.cutoff_drop_db)
+    if not math.isfinite(drop) or drop <= 0.0:
+        raise ValueError("cutoff_drop_db must be positive and finite")
+    cutoff_level = reference_gain - drop
+    events = [
+        event
+        for event in _crossings_log(frequency, gain, cutoff_level, request.direction)
+        if event[0] > reference
+    ]
+    event = _single_crossing(events, "cutoff")
+    evidence = {
+        **_crossing_evidence(event, origins),
+        "reference_frequency": reference,
+        "reference_gain_db": reference_gain,
+        "cutoff_gain_db": cutoff_level,
+        "crossing_count": len(events),
+    }
+    return _measurement(
+        request.metric,
+        event[0],
+        frequency_unit,
+        evidence,
+        window_parameters,
+        {
+            "reference_frequency": reference,
+            "cutoff_drop_db": drop,
+            "direction": request.direction,
+        },
+    )
+
+
+def _gain_crossover(
+    request: _FrequencyMetricRequest,
+) -> tuple[
+    tuple[float, int, int],
+    float,
+    dict[str, float | int],
+    dict[str, float],
+    str,
+]:
+    frequency, gain, phase, origins, window_parameters, frequency_unit = _ac_context(
+        request, include_phase=True
+    )
+    gain_crossings = _crossings_log(frequency, gain, 0.0, "falling")
+    crossover = _single_crossing(gain_crossings, "gain crossover")
+    crossover_phase, _ = _interpolate_log(frequency, phase, crossover[0])
+    evidence = {
+        **_crossing_evidence(crossover, origins),
+        "gain_db": 0.0,
+        "phase_degrees": crossover_phase,
+        "crossing_count": len(gain_crossings),
+    }
+    return (
+        crossover,
+        crossover_phase,
+        evidence,
+        window_parameters,
+        frequency_unit,
+    )
+
+
+def _measure_gain_crossover(
+    request: _FrequencyMetricRequest,
+) -> waveform_metrics.MetricMeasurement:
+    crossover, _, evidence, window_parameters, frequency_unit = _gain_crossover(request)
+    return _measurement(
+        request.metric,
+        crossover[0],
+        frequency_unit,
+        evidence,
+        window_parameters,
+    )
+
+
+def _measure_phase_margin(
+    request: _FrequencyMetricRequest,
+) -> waveform_metrics.MetricMeasurement:
+    _, crossover_phase, evidence, window_parameters, _ = _gain_crossover(request)
+    return _measurement(
+        request.metric,
+        180.0 + crossover_phase,
+        "deg",
+        evidence,
+        window_parameters,
+    )
+
+
+def _measure_gain_margin(
+    request: _FrequencyMetricRequest,
+) -> waveform_metrics.MetricMeasurement:
+    frequency, gain, phase, origins, window_parameters, _ = _ac_context(
+        request, include_phase=True
+    )
+    minimum_phase = min(phase)
+    maximum_phase = max(phase)
+    first_level = math.ceil((minimum_phase + 180.0) / 360.0)
+    last_level = math.floor((maximum_phase + 180.0) / 360.0)
+    phase_crossings: list[tuple[tuple[float, int, int], float]] = []
+    for multiple in range(first_level, last_level + 1):
+        level = -180.0 + 360.0 * multiple
+        phase_crossings.extend(
+            (event, level)
+            for event in _crossings_log(frequency, phase, level, "falling")
+        )
+    if not phase_crossings:
+        raise ValueError("phase crossover was not found in the analysis window")
+    if len(phase_crossings) > 1:
+        raise ValueError(
+            "multiple phase crossover crossings; narrow the analysis window"
+        )
+    crossover, level = phase_crossings[0]
+    crossover_gain, _ = _interpolate_log(frequency, gain, crossover[0])
+    evidence = {
+        **_crossing_evidence(crossover, origins),
+        "phase_degrees": level,
+        "gain_db": crossover_gain,
+        "crossing_count": len(phase_crossings),
+    }
+    return _measurement(
+        request.metric,
+        -crossover_gain,
+        "dB",
+        evidence,
+        window_parameters,
+    )
+
+
+_METRIC_REGISTRY = {
+    "frequency": _FrequencyMetricSpec(
+        _measure_frequency,
+        frozenset({"threshold_value", "edge"}),
+    ),
+    "spectral_peak": _FrequencyMetricSpec(
+        _measure_spectral_peak,
+        frozenset(
+            {
+                "frequency_min",
+                "frequency_max",
+                "frequency_resolution",
+            }
+        ),
+    ),
+    "thd": _FrequencyMetricSpec(
+        _measure_thd,
+        frozenset({"fundamental_frequency", "maximum_harmonic"}),
+    ),
+    "ac_gain_db": _FrequencyMetricSpec(
+        _measure_ac_gain,
+        frozenset({"secondary_values", "frequency_value"}),
+    ),
+    "cutoff_frequency": _FrequencyMetricSpec(
+        _measure_cutoff,
+        frozenset(
+            {
+                "secondary_values",
+                "reference_frequency",
+                "cutoff_drop_db",
+                "direction",
+            }
+        ),
+    ),
+    "peaking_db": _FrequencyMetricSpec(
+        _measure_peaking,
+        frozenset({"secondary_values", "reference_frequency"}),
+    ),
+    "gain_crossover_frequency": _FrequencyMetricSpec(
+        _measure_gain_crossover,
+        frozenset({"secondary_values"}),
+    ),
+    "phase_margin": _FrequencyMetricSpec(
+        _measure_phase_margin,
+        frozenset({"secondary_values"}),
+    ),
+    "gain_margin": _FrequencyMetricSpec(
+        _measure_gain_margin,
+        frozenset({"secondary_values"}),
+    ),
+}
+
+
 def measure_metric(
     axis: Sequence[Number],
     values: Sequence[Number],
@@ -331,294 +851,28 @@ def measure_metric(
     cutoff_drop_db: float = 3.01029995664,
     direction: str = "falling",
 ) -> waveform_metrics.MetricMeasurement:
-    if metric not in SUPPORTED_METRICS:
+    spec = _METRIC_REGISTRY.get(metric)
+    if spec is None:
         raise ValueError(f"Unknown frequency-domain metric: {metric}")
-
-    if metric in {"frequency", "spectral_peak", "thd"}:
-        x, y, _, origins, window_parameters = waveform_metrics._window(
-            axis, values, None, window_start, window_end
-        )
-        waveform_metrics._require_increasing(x)
-        frequency_unit = _frequency_unit(axis_unit)
-
-        if metric == "frequency":
-            threshold = _finite(threshold_value, "threshold_value")
-            crossings = waveform_metrics._crossings(x, y, threshold, edge)
-            if len(crossings) < 2:
-                raise ValueError("frequency requires at least two matching crossings")
-            first = crossings[0]
-            last = crossings[-1]
-            value = (len(crossings) - 1) / (last[0] - first[0])
-            evidence = {
-                "first_crossing_axis": first[0],
-                "first_index_before": origins[first[1]][0],
-                "first_index_after": origins[first[2]][1],
-                "last_crossing_axis": last[0],
-                "last_index_before": origins[last[1]][0],
-                "last_index_after": origins[last[2]][1],
-                "cycle_count": len(crossings) - 1,
-            }
-            return _measurement(
-                metric,
-                value,
-                frequency_unit,
-                evidence,
-                window_parameters,
-                {"threshold_value": threshold, "edge": edge},
-            )
-
-        if metric == "spectral_peak":
-            minimum = _finite(frequency_min, "frequency_min")
-            maximum = _finite(frequency_max, "frequency_max")
-            if minimum <= 0.0 or maximum <= minimum:
-                raise ValueError("spectral frequency band must satisfy 0 < minimum < maximum")
-            duration = x[-1] - x[0]
-            resolution = 1.0 / duration if frequency_resolution is None else float(
-                frequency_resolution
-            )
-            if not math.isfinite(resolution) or resolution <= 0.0:
-                raise ValueError("frequency_resolution must be positive and finite")
-            count = math.floor((maximum - minimum) / resolution) + 1
-            last_candidate = minimum + (count - 1) * resolution
-            include_maximum = not math.isclose(
-                last_candidate,
-                maximum,
-                rel_tol=1e-12,
-                abs_tol=1e-15,
-            )
-            if include_maximum:
-                count += 1
-            if count > MAX_SPECTRAL_BINS:
-                raise ValueError(f"spectral analysis is limited to {MAX_SPECTRAL_BINS} bins")
-            nyquist = 1.0 / (2.0 * _max_gap(x))
-            if maximum > nyquist:
-                raise ValueError("spectral frequency band exceeds the conservative Nyquist limit")
-            _check_spectral_work(len(x), count)
-            candidates = [
-                minimum + index * resolution
-                for index in range(count - int(include_maximum))
-            ]
-            if include_maximum:
-                candidates.append(maximum)
-            weighted, coherent_weight = _spectral_samples(x, y, hann=True)
-            amplitudes = [
-                _fourier_amplitude(x, weighted, coherent_weight, candidate)
-                for candidate in candidates
-            ]
-            peak_index = max(range(len(amplitudes)), key=amplitudes.__getitem__)
-            evidence = {
-                **waveform_metrics._region(x, origins),
-                "peak_frequency": candidates[peak_index],
-                "frequency_resolution": resolution,
-                "frequency_min": minimum,
-                "frequency_max": maximum,
-                "bin_count": len(candidates),
-            }
-            return _measurement(
-                metric,
-                amplitudes[peak_index],
-                signal_unit,
-                evidence,
-                window_parameters,
-                {
-                    "frequency_min": minimum,
-                    "frequency_max": maximum,
-                    "frequency_resolution": resolution,
-                    "spectral_window": "hann",
-                },
-            )
-
-        fundamental = _finite(fundamental_frequency, "fundamental_frequency")
-        if fundamental <= 0.0:
-            raise ValueError("fundamental_frequency must be positive")
-        if (
-            not isinstance(maximum_harmonic, int)
-            or isinstance(maximum_harmonic, bool)
-            or maximum_harmonic < 2
-            or maximum_harmonic > MAX_HARMONICS
-        ):
-            raise ValueError(
-                f"maximum_harmonic must be an integer from 2 through {MAX_HARMONICS}"
-            )
-        cycle_count = math.floor((x[-1] - x[0]) * fundamental)
-        if cycle_count < 1:
-            raise ValueError("THD analysis window must contain at least one full cycle")
-        effective_end = x[0] + cycle_count / fundamental
-        x, y, origins = _clip_end(x, y, origins, effective_end)
-        nyquist = 1.0 / (2.0 * _max_gap(x))
-        if maximum_harmonic * fundamental > nyquist:
-            raise ValueError("highest THD harmonic exceeds the conservative Nyquist limit")
-        _check_spectral_work(len(x), maximum_harmonic)
-        weighted, coherent_weight = _spectral_samples(x, y, hann=False)
-        amplitudes = [
-            _fourier_amplitude(
-                x,
-                weighted,
-                coherent_weight,
-                harmonic * fundamental,
-            )
-            for harmonic in range(1, maximum_harmonic + 1)
-        ]
-        if amplitudes[0] <= 1e-15:
-            raise ValueError("THD fundamental amplitude is zero")
-        harmonic_rss = math.sqrt(math.fsum(value * value for value in amplitudes[1:]))
-        evidence = {
-            **waveform_metrics._region(x, origins),
-            "cycle_count": cycle_count,
-            "fundamental_amplitude": amplitudes[0],
-            "harmonic_rss": harmonic_rss,
-            "maximum_harmonic": maximum_harmonic,
-        }
-        evidence.update(
-            {
-                f"harmonic_{index}_amplitude": amplitude
-                for index, amplitude in enumerate(amplitudes, start=1)
-            }
-        )
-        return _measurement(
-            metric,
-            100.0 * harmonic_rss / amplitudes[0],
-            "%",
-            evidence,
-            window_parameters,
-            {
-                "fundamental_frequency": fundamental,
-                "maximum_harmonic": maximum_harmonic,
-            },
-        )
-
-    frequency, gain, phase, origins, window_parameters = _window_ac(
-        axis,
-        values,
-        secondary_values,
-        window_start,
-        window_end,
-        include_phase=metric
-        in {"gain_crossover_frequency", "gain_margin", "phase_margin"},
+    request = _FrequencyMetricRequest(
+        metric=metric,
+        axis=axis,
+        values=values,
+        secondary_values=secondary_values,
+        signal_unit=signal_unit,
+        axis_unit=axis_unit,
+        window_start=window_start,
+        window_end=window_end,
+        threshold_value=threshold_value,
+        edge=edge,
+        frequency_min=frequency_min,
+        frequency_max=frequency_max,
+        frequency_resolution=frequency_resolution,
+        fundamental_frequency=fundamental_frequency,
+        maximum_harmonic=maximum_harmonic,
+        frequency_value=frequency_value,
+        reference_frequency=reference_frequency,
+        cutoff_drop_db=cutoff_drop_db,
+        direction=direction,
     )
-    frequency_axis_unit = axis_unit or "Hz"
-
-    if metric == "ac_gain_db":
-        selected_frequency = _finite(frequency_value, "frequency_value")
-        value, local_origin = _interpolate_log(frequency, gain, selected_frequency)
-        evidence = {
-            "frequency": selected_frequency,
-            **waveform_metrics._source_fields(
-                "", (origins[local_origin[0]][0], origins[local_origin[1]][1])
-            ),
-        }
-        return _measurement(
-            metric,
-            value,
-            "dB",
-            evidence,
-            window_parameters,
-            {"frequency_value": selected_frequency},
-        )
-
-    if metric in {"cutoff_frequency", "peaking_db"}:
-        reference = _finite(reference_frequency, "reference_frequency")
-        reference_gain, _ = _interpolate_log(frequency, gain, reference)
-        if metric == "peaking_db":
-            peak_index = max(range(len(gain)), key=gain.__getitem__)
-            evidence = {
-                "reference_frequency": reference,
-                "reference_gain_db": reference_gain,
-                "peak_frequency": frequency[peak_index],
-                "peak_gain_db": gain[peak_index],
-                **waveform_metrics._source_fields("peak_", origins[peak_index]),
-            }
-            return _measurement(
-                metric,
-                gain[peak_index] - reference_gain,
-                "dB",
-                evidence,
-                window_parameters,
-                {"reference_frequency": reference},
-            )
-        drop = float(cutoff_drop_db)
-        if not math.isfinite(drop) or drop <= 0.0:
-            raise ValueError("cutoff_drop_db must be positive and finite")
-        cutoff_level = reference_gain - drop
-        events = [
-            event
-            for event in _crossings_log(frequency, gain, cutoff_level, direction)
-            if event[0] > reference
-        ]
-        event = _single_crossing(events, "cutoff")
-        evidence = {
-            **_crossing_evidence(event, origins),
-            "reference_frequency": reference,
-            "reference_gain_db": reference_gain,
-            "cutoff_gain_db": cutoff_level,
-            "crossing_count": len(events),
-        }
-        return _measurement(
-            metric,
-            event[0],
-            frequency_axis_unit,
-            evidence,
-            window_parameters,
-            {
-                "reference_frequency": reference,
-                "cutoff_drop_db": drop,
-                "direction": direction,
-            },
-        )
-
-    gain_crossings = _crossings_log(frequency, gain, 0.0, "falling")
-    if metric in {"gain_crossover_frequency", "phase_margin"}:
-        crossover = _single_crossing(gain_crossings, "gain crossover")
-        crossover_phase, _ = _interpolate_log(frequency, phase, crossover[0])
-        evidence = {
-            **_crossing_evidence(crossover, origins),
-            "gain_db": 0.0,
-            "phase_degrees": crossover_phase,
-            "crossing_count": len(gain_crossings),
-        }
-        if metric == "gain_crossover_frequency":
-            return _measurement(
-                metric,
-                crossover[0],
-                frequency_axis_unit,
-                evidence,
-                window_parameters,
-            )
-        return _measurement(
-            metric,
-            180.0 + crossover_phase,
-            "deg",
-            evidence,
-            window_parameters,
-        )
-
-    minimum_phase = min(phase)
-    maximum_phase = max(phase)
-    first_level = math.ceil((minimum_phase + 180.0) / 360.0)
-    last_level = math.floor((maximum_phase + 180.0) / 360.0)
-    phase_crossings: list[tuple[tuple[float, int, int], float]] = []
-    for multiple in range(first_level, last_level + 1):
-        level = -180.0 + 360.0 * multiple
-        phase_crossings.extend(
-            (event, level)
-            for event in _crossings_log(frequency, phase, level, "falling")
-        )
-    if not phase_crossings:
-        raise ValueError("phase crossover was not found in the analysis window")
-    if len(phase_crossings) > 1:
-        raise ValueError("multiple phase crossover crossings; narrow the analysis window")
-    crossover, level = phase_crossings[0]
-    crossover_gain, _ = _interpolate_log(frequency, gain, crossover[0])
-    evidence = {
-        **_crossing_evidence(crossover, origins),
-        "phase_degrees": level,
-        "gain_db": crossover_gain,
-        "crossing_count": len(phase_crossings),
-    }
-    return _measurement(
-        metric,
-        -crossover_gain,
-        "dB",
-        evidence,
-        window_parameters,
-    )
+    return spec.handler(request)

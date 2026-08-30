@@ -2,11 +2,53 @@ from __future__ import annotations
 
 import math
 import unittest
+from unittest.mock import patch
 
+import waveform_metrics
 from waveform_metrics import evaluate_requirement, measure_metric
 
 
 class WaveformMetricTests(unittest.TestCase):
+    def test_registry_is_complete_and_routes_metric_parameters(self) -> None:
+        self.assertEqual(
+            set(waveform_metrics._METRIC_REGISTRY),
+            waveform_metrics.SUPPORTED_METRICS,
+        )
+        specification = waveform_metrics._METRIC_REGISTRY["pulse_width"]
+        self.assertEqual(
+            specification.parameters,
+            frozenset({"threshold_value", "polarity"}),
+        )
+        captured = []
+
+        def handler(request):  # type: ignore[no-untyped-def]
+            captured.append(request)
+            return waveform_metrics.MetricMeasurement(
+                request.metric, 7.0, request.axis_unit, {}, {}
+            )
+
+        with patch.dict(
+            waveform_metrics._METRIC_REGISTRY,
+            {
+                "pulse_width": waveform_metrics._MetricSpec(
+                    handler, specification.parameters
+                )
+            },
+        ):
+            result = measure_metric(
+                [0, 1],
+                [0, 1],
+                "pulse_width",
+                threshold_value=0.4,
+                polarity="low",
+                axis_unit="s",
+            )
+
+        self.assertEqual(result.value, 7.0)
+        self.assertEqual(captured[0].threshold_value, 0.4)
+        self.assertEqual(captured[0].polarity, "low")
+        self.assertEqual(captured[0].axis_unit, "s")
+
     def test_statistical_metrics_and_evidence(self) -> None:
         axis = [0, 1, 2, 3, 4]
         values = [0, 1, 2, 3, 4]
@@ -109,9 +151,7 @@ class WaveformMetricTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must not exceed"):
             measure_metric([0, 1], [0, 1], "maximum", window_start=1, window_end=0)
         with self.assertRaisesRegex(ValueError, "captured axis"):
-            measure_metric(
-                [0, 1], [0, 1], "maximum", window_start=2, window_end=3
-            )
+            measure_metric([0, 1], [0, 1], "maximum", window_start=2, window_end=3)
 
         duty = measure_metric(
             [0, 1, 2],
@@ -177,9 +217,7 @@ class WaveformMetricTests(unittest.TestCase):
         )
         self.assertEqual(equal_endpoints.value, 1.0)
         with self.assertRaisesRegex(ValueError, "fall_time requires"):
-            measure_metric(
-                [0, 1], [0, 1], "fall_time", initial_value=0, final_value=1
-            )
+            measure_metric([0, 1], [0, 1], "fall_time", initial_value=0, final_value=1)
 
     def test_pulse_width_and_duty_cycle_use_interpolated_time(self) -> None:
         axis = [0, 1, 2, 4, 5]
@@ -219,9 +257,7 @@ class WaveformMetricTests(unittest.TestCase):
         self.assertEqual(low_width.value, 3.0)
         self.assertEqual(low_duty.value, 60.0)
         with self.assertRaisesRegex(ValueError, "complete pulse"):
-            measure_metric(
-                [0, 1, 2], [2, 2, 0], "pulse_width", threshold_value=1
-            )
+            measure_metric([0, 1, 2], [2, 2, 0], "pulse_width", threshold_value=1)
 
     def test_slew_rate_and_windowed_ripple(self) -> None:
         slew = measure_metric(
@@ -306,7 +342,9 @@ class WaveformMetricTests(unittest.TestCase):
         result = evaluate_requirement(measurement, "<=", 5.0)
 
         self.assertTrue(result["passed"])
-        self.assertEqual(result["threshold"], {"operator": "<=", "target": 5.0, "unit": "V"})
+        self.assertEqual(
+            result["threshold"], {"operator": "<=", "target": 5.0, "unit": "V"}
+        )
         with self.assertRaisesRegex(ValueError, "operator"):
             evaluate_requirement(measurement, "=", 4.0)
 

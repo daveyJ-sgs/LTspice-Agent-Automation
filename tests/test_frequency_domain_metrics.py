@@ -3,7 +3,9 @@ from __future__ import annotations
 import cmath
 import math
 import unittest
+from unittest.mock import patch
 
+import frequency_domain_metrics
 from frequency_domain_metrics import measure_metric
 
 
@@ -12,6 +14,50 @@ def response(gain_db: float, phase_degrees: float = 0.0) -> complex:
 
 
 class FrequencyDomainMetricTests(unittest.TestCase):
+    def test_registry_is_complete_and_routes_metric_parameters(self) -> None:
+        self.assertEqual(
+            set(frequency_domain_metrics._METRIC_REGISTRY),
+            frequency_domain_metrics.SUPPORTED_METRICS,
+        )
+        specification = frequency_domain_metrics._METRIC_REGISTRY["spectral_peak"]
+        self.assertEqual(
+            specification.parameters,
+            frozenset({"frequency_min", "frequency_max", "frequency_resolution"}),
+        )
+        captured = []
+
+        def handler(request):  # type: ignore[no-untyped-def]
+            captured.append(request)
+            return frequency_domain_metrics.waveform_metrics.MetricMeasurement(
+                request.metric, 11.0, request.signal_unit, {}, {}
+            )
+
+        with patch.dict(
+            frequency_domain_metrics._METRIC_REGISTRY,
+            {
+                "spectral_peak": frequency_domain_metrics._FrequencyMetricSpec(
+                    handler, specification.parameters
+                )
+            },
+        ):
+            result = measure_metric(
+                [0, 1],
+                [0, 1],
+                "spectral_peak",
+                frequency_min=10,
+                frequency_max=20,
+                frequency_resolution=0.5,
+                signal_unit="V",
+            )
+
+        self.assertEqual(result.value, 11.0)
+        self.assertEqual(captured[0].frequency_min, 10)
+        self.assertEqual(captured[0].frequency_max, 20)
+        self.assertEqual(captured[0].frequency_resolution, 0.5)
+        self.assertEqual(captured[0].signal_unit, "V")
+        with self.assertRaisesRegex(ValueError, "Unknown frequency-domain metric"):
+            measure_metric([0, 1], [0, 1], "median_frequency")
+
     def test_frequency_uses_interpolated_matching_edges(self) -> None:
         axis = [0, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
         values = [-1, 0, 1, 0, -1, 0, 1, 0, -1]
@@ -27,9 +73,7 @@ class FrequencyDomainMetricTests(unittest.TestCase):
         self.assertEqual(rising.unit, "Hz")
         self.assertEqual(rising.evidence["cycle_count"], 1)
         with self.assertRaisesRegex(ValueError, "at least two"):
-            measure_metric(
-                [0, 1, 2], [0, 1, 0], "frequency", threshold_value=0.5
-            )
+            measure_metric([0, 1, 2], [0, 1, 0], "frequency", threshold_value=0.5)
 
     def test_spectral_peak_uses_time_weighted_nonuniform_integration(self) -> None:
         uniform_axis = [index / 2000 for index in range(2001)]
