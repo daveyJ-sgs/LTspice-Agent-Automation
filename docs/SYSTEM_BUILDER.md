@@ -6,6 +6,10 @@ the MCP server. It runs locally, keeps LTspice execution behind explicit
 confirmation, and produces the same immutable plans and portable evidence as
 agent-driven workflows.
 
+Windows users who do not need the Python development environment can use the
+verified ZIP application bundle. See [Windows setup and qualification](WINDOWS.md)
+for the packaged and source-launcher paths.
+
 ## Install and launch
 
 Install the optional GUI dependencies and launch the loopback-only application:

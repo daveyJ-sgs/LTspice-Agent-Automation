@@ -3,6 +3,44 @@
 Windows is a first-class target for the wrapper, MCP server, System Builder,
 and portable evidence contracts.
 
+## Download the packaged System Builder
+
+The **System Builder Windows package** workflow produces a versioned
+`LTspice-System-Builder-*-windows-x64.zip` and matching `.sha256` file. The
+bundle includes its own Python runtime and declared application dependencies;
+it does not include LTspice.
+
+Extract the ZIP, then double-click `LTspice-System-Builder.exe`. First launch
+creates a writable starter workspace at:
+
+```text
+Documents\LTspice System Builder Workspace
+```
+
+The starter DAQ netlists, schematic, and schematic image are copied there only
+when absent. Existing user files are never replaced. The executable opens the
+same random loopback-only application as the source launcher. A console window
+remains open so startup diagnostics are visible and closing it stops the local
+server.
+
+The GitHub workflow verifies the exact uploaded ZIP after extraction, with
+Python removed from `PATH`, and requires a successful `/health` response before
+retaining the artifact. `BUILD_INFO.json` records the application version,
+source commit, target, Python version, and PyInstaller version. Verify the ZIP
+against the accompanying SHA-256 file before use.
+
+Build and download the current bundle with the GitHub CLI:
+
+```bash
+gh workflow run system-builder-windows-package.yml --ref main
+gh run list --workflow system-builder-windows-package.yml --limit 1
+gh run download RUN_ID
+```
+
+The preview bundle is not yet code-signed or wrapped in an installer. Windows
+may therefore show an unrecognized-app warning. Code signing, installer UX,
+and automatic updates remain deliberately outside GUI-D2.
+
 ## Install LTspice
 
 The baseline suite and RC AC example are verified on Windows 11 with LTspice
@@ -19,7 +57,7 @@ output or an error. See
 
 ## Start System Builder
 
-After cloning or downloading this repository, double-click
+For source development, clone or download this repository and double-click
 [`Start-SystemBuilder.cmd`](../Start-SystemBuilder.cmd). The launcher:
 
 1. Finds Python 3.13 or newer, or prints the exact `winget` installation command.

@@ -33,9 +33,11 @@ jobs:
           optimization_comparison.py optimization_engine.py optimization_recipe.py
           optimization_study.py robust_selection.py statistical_comparison.py
           statistical_engine.py study_recipe.py system_builder.py system_builder_routes
+          system_builder_windows.py
           waveform_metrics.py tests/support.py tests/test_artifacts.py
           tests/test_documentation.py tests/test_frequency_domain_metrics.py tests/test_system_builder.py
-          tests/test_waveform_metrics.py tests/test_windows_launcher.py
+          tests/test_waveform_metrics.py tests/test_windows_bundle.py
+          tests/test_windows_launcher.py
       - run: python -m mypy artifacts.py waveform_metrics.py frequency_domain_metrics.py
       - run: python -m unittest discover -s tests -v
       - name: Qualify MCP stdio client on Windows

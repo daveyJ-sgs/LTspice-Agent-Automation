@@ -141,6 +141,8 @@ remains disabled.
 
 Read the [System Builder guide](docs/SYSTEM_BUILDER.md) for setup, security,
 schematic capture, optimization, tolerance qualification, and recovery.
+Windows users can either run the source launcher or download the verified
+Python-free application bundle described in the [Windows guide](docs/WINDOWS.md).
 
 ## Common workflows
 

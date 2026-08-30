@@ -1,5 +1,7 @@
 .DS_Store
 .venv/
+build/
+dist/
 runs/*
 !runs/.gitkeep
 __pycache__/

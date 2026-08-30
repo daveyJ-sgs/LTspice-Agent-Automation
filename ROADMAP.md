@@ -1387,9 +1387,14 @@ Next System Builder slices:
    - Complete: local contract coverage and the full 347-test suite pass; Windows
      CI bootstraps the launcher from a clean checkout, discovers its random
      loopback URL, verifies `/health`, and terminates the complete process tree
-2. **GUI-D2 — Distributable Windows package**
+2. **GUI-D2 — Distributable Windows package — complete**
    - Produce a versioned application bundle in GitHub Actions without bundling
      LTspice, and verify startup on a clean Windows runner before publication
+   - Complete: a pinned PyInstaller one-folder build carries the local UI and
+     starter DAQ assets in a versioned ZIP with embedded source provenance and
+     a separate SHA-256; Windows CI extracts that exact ZIP, removes Python
+     from `PATH`, starts the packaged executable against a clean workspace,
+     and requires a healthy loopback-only response before artifact upload
 3. **GUI-D3 — Remote execution preview**
    - Preview repository, immutable plan identity, run count, and retained
      evidence without dispatching work or collecting credentials
@@ -1542,8 +1547,8 @@ expensive evaluation.
 
 ## Immediate next milestone
 
-Complete GUI-D2 as a Windows-first distributable application bundle, then add
-the deliberately gated remote-execution preview and dispatch layers. Preserve
+Begin GUI-D3 with a deliberately gated remote-execution preview, then add the
+explicit dispatch and recovery layer. Preserve
 the local-only default, make every external action explicit and reviewable, and
 reuse the same immutable plans and portable evidence contracts rather than
 adding a second execution model.

@@ -1,0 +1,50 @@
+name: System Builder Windows package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-mcp.txt
+            requirements-gui.txt
+            requirements-package.txt
+      - name: Install application and packaging dependencies
+        run: >-
+          python -m pip install
+          -r requirements.txt
+          -r requirements-mcp.txt
+          -r requirements-gui.txt
+          -r requirements-package.txt
+      - name: Build versioned Windows bundle
+        id: bundle
+        shell: pwsh
+        run: >-
+          ./packaging/build_windows_bundle.ps1
+          -OutputDirectory "$env:RUNNER_TEMP\system-builder-package"
+          -SourceRevision "$env:GITHUB_SHA"
+      - name: Verify extracted bundle without Python on PATH
+        shell: pwsh
+        run: >-
+          ./tests/windows_system_builder_bundle_smoke.ps1
+          -Archive "${{ steps.bundle.outputs.archive }}"
+      - name: Upload verified bundle
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ steps.bundle.outputs.bundle_name }}
+          path: |
+            ${{ steps.bundle.outputs.archive }}
+            ${{ steps.bundle.outputs.checksum }}
+          if-no-files-found: error
+          retention-days: 14
