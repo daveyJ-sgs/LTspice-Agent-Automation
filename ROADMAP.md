@@ -1446,15 +1446,16 @@ expensive evaluation.
 
 ## Immediate next milestone
 
-Build System Builder GUI-C3 as the read-only decision surface over a completed
-durable optimization study:
+Build System Builder GUI-C4 as an explicitly confirmed qualification of the
+engine-selected finalist:
 
-1. Read the existing `optimization_results.json` and report evidence; do not
-   recalculate candidate results in the browser.
-2. Show feasible, constraint-rejected, and invalid candidates with concise
-   rejection reasons and worst electrical margins.
-3. Plot the Pareto set and distinguish the deterministic selected candidate
-   using the engine-recorded selection policy and explanation.
-4. Link every candidate back to its exact plan point and AC/transient evidence.
-5. Stop before launching finalist tolerance/corner qualification, which remains
-   GUI-C4.
+1. Carry the selected candidate values into the existing statistical and
+   operating-corner study contracts without creating a GUI-only evaluator.
+2. Preview the tolerance model, corners, sample count, run cost, and exact
+   immutable plan before publishing anything.
+3. Require a separate acknowledgement before launching the durable finalist
+   qualification, with cancellation, resume, and refresh recovery.
+4. Present yield, confidence intervals, worst cases, sensitivities, and failed
+   samples beside the GUI-C3 nominal decision evidence.
+5. Preserve direct links to the portable manifests, JSON, CSV, RAW, and HTML
+   reports; stop before GUI-D packaging or remote execution.
