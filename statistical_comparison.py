@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 from typing import TypedDict
 
+import artifacts
 import experiment_index
 import statistical_results
 
@@ -37,14 +38,7 @@ class StatisticalComparisonResult(TypedDict):
     paired_points: int
 
 
-def _canonical(value: object) -> str:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    )
+_canonical = artifacts.canonical_json
 
 
 def _sha256(path: Path) -> str:
@@ -287,7 +281,9 @@ def build_statistical_comparison(
         "baseline_plan_sha256": baseline_source["plan_sha256"],
         "candidate_plan_sha256": candidate_source["plan_sha256"],
     }
-    digest = hashlib.sha256(_canonical(identity).encode("utf-8")).hexdigest()
+    _, digest = artifacts.content_address(
+        "statistical-comparison", artifacts.canonical_bytes(identity)
+    )
     comparison_id = digest[:16]
     root = runs_dir / "statistical-comparisons"
     if root.exists() and (root.is_symlink() or not root.is_dir()):
