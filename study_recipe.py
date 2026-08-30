@@ -6,9 +6,9 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath
 
+import artifacts
 import experiment_engine
 import statistical_engine
-
 
 STUDY_RECIPE_SCHEMA_VERSION = 1
 MAX_RECIPE_BYTES = 1024 * 1024
@@ -53,14 +53,7 @@ def _error(path: str, code: str, message: str) -> dict[str, str]:
     return {"path": path, "code": code, "message": message}
 
 
-def _canonical_json(value: object) -> str:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        ensure_ascii=False,
-        allow_nan=False,
-        separators=(",", ":"),
-    )
+_canonical_json = artifacts.canonical_json
 
 
 def _plan_error_path(message: str, variables: object) -> str:
