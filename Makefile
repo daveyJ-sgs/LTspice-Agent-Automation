@@ -1,10 +1,17 @@
 PYTHON ?= python3
 export PYTHONPATH := .
+LINT_FILES := artifacts.py adaptive_boundary.py experiment_engine.py experiment_index.py optimization_comparison.py optimization_engine.py optimization_recipe.py optimization_study.py robust_selection.py statistical_comparison.py statistical_engine.py study_recipe.py tests/support.py tests/test_artifacts.py
 
-.PHONY: test ac transient nand sallen-key mixed-signal-daq sweep statistical-yield search step dashboard api-help system-builder
+.PHONY: test lint typecheck ac transient nand sallen-key mixed-signal-daq sweep statistical-yield search step dashboard api-help system-builder
 
 test:
 	$(PYTHON) -m unittest discover -s tests -v
+
+lint:
+	$(PYTHON) -m ruff check $(LINT_FILES)
+
+typecheck:
+	$(PYTHON) -m mypy artifacts.py
 
 ac:
 	$(PYTHON) examples/analyze_rc.py

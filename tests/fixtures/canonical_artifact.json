@@ -1,0 +1,15 @@
+{
+  "value": {
+    "b": 2,
+    "a": [
+      1,
+      {
+        "z": 3
+      }
+    ],
+    "unicode": "Ω"
+  },
+  "compact": "{\"a\":[1,{\"z\":3}],\"b\":2,\"unicode\":\"Ω\"}",
+  "compact_sha256": "ae4ed71bf3c06b36b3a35d7805ef03317451911041cfe08e900ff1ca854c4251",
+  "pretty_sha256": "ccbc7027d41147710de25cb499d2a9066392a5b3b3ef63fc84f09d08cda9d55a"
+}

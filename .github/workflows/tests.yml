@@ -24,7 +24,15 @@ jobs:
             requirements.txt
             requirements-mcp.txt
             requirements-gui.txt
-      - run: python -m pip install -r requirements.txt -r requirements-mcp.txt -r requirements-gui.txt
+            requirements-dev.txt
+      - run: python -m pip install -r requirements.txt -r requirements-mcp.txt -r requirements-gui.txt -r requirements-dev.txt
+      - run: >-
+          python -m ruff check
+          artifacts.py adaptive_boundary.py experiment_engine.py experiment_index.py
+          optimization_comparison.py optimization_engine.py optimization_recipe.py
+          optimization_study.py robust_selection.py statistical_comparison.py
+          statistical_engine.py study_recipe.py tests/support.py tests/test_artifacts.py
+      - run: python -m mypy artifacts.py
       - run: python -m unittest discover -s tests -v
       - name: Qualify MCP stdio client on Windows
         if: runner.os == 'Windows'
