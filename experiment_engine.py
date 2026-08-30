@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, NotRequired, TypedDict
 
+import artifacts
 import frequency_domain_metrics
 import waveform_metrics
 
@@ -710,13 +711,7 @@ def _experiment_counts(
 
 
 def _definition_hash(definition: dict[str, object]) -> str:
-    encoded = json.dumps(
-        definition,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return artifacts.definition_hash(definition)
 
 
 def _write_text(path: Path, value: str) -> None:
@@ -725,14 +720,7 @@ def _write_text(path: Path, value: str) -> None:
     os.replace(temporary_path, path)
 
 
-def _canonical_json(value: object) -> str:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    )
+_canonical_json = artifacts.canonical_json
 
 
 def _finite_number(value: object, field: str) -> float:
