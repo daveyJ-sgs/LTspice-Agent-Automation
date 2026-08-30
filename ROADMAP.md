@@ -1332,7 +1332,7 @@ GUI-C4 verification gate:
   finalist planning, manifest integrity, restart recovery, terminal evaluation,
   guarded mutation, and existing System Builder contracts
 
-#### Post-GUI-C4 hardening bridge — in progress (H1–H2 complete)
+#### Post-GUI-C4 hardening bridge — complete (H1–H3)
 
 Complete three behavior-preserving maintenance slices before GUI-D adds more
 routes and execution policy:
@@ -1363,6 +1363,10 @@ routes and execution policy:
    - Keep `README.md` as a concise human on-ramp and move detailed reference
      material into linked documents under `docs/`
    - Preserve `LEARNINGS.md` as institutional compatibility history
+   - Complete: the README is now a 235-line project on-ramp with restrained
+     first-result previews; detailed System Builder, workflow, and Windows
+     guidance lives in focused documents, and a regression test verifies all
+     front-door relative links
 
 Hardening-bridge verification gate:
 
@@ -1374,8 +1378,7 @@ Hardening-bridge verification gate:
 
 Next System Builder slices:
 
-1. Complete the post-GUI-C4 hardening bridge
-2. GUI-D — Windows packaging and deliberately gated remote GitHub execution
+1. GUI-D — Windows packaging and deliberately gated remote GitHub execution
 
 ### Phase 5: Flagship portable mixed-signal DAQ/scope
 
@@ -1522,9 +1525,8 @@ expensive evaluation.
 
 ## Immediate next milestone
 
-Complete H3 by splitting the documentation front door while keeping the README
-as a concise human on-ramp. Then build GUI-D as a
-Windows-first packaging and deliberately gated remote-execution layer. Preserve
+Begin GUI-D as a Windows-first packaging and deliberately gated
+remote-execution layer. Preserve
 the local-only default, make every external action explicit and reviewable, and
 reuse the same immutable plans and portable evidence contracts rather than
 adding a second execution model.
