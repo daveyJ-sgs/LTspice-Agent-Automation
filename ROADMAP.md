@@ -1378,7 +1378,24 @@ Hardening-bridge verification gate:
 
 Next System Builder slices:
 
-1. GUI-D — Windows packaging and deliberately gated remote GitHub execution
+1. **GUI-D1 — Windows launch contract**
+   - Provide no-admin PowerShell and CMD entry points that create a private
+     Python 3.13+ environment, install fingerprinted GUI dependencies, diagnose
+     LTspice discovery and first-run consent, and start the loopback application
+   - Keep missing LTspice non-fatal for recipe editing and pure plan preview;
+     fail early only for unusable Python, dependencies, or workspace selection
+   - Complete: local contract coverage and the full 347-test suite pass; Windows
+     CI bootstraps the launcher from a clean checkout, discovers its random
+     loopback URL, verifies `/health`, and terminates the complete process tree
+2. **GUI-D2 — Distributable Windows package**
+   - Produce a versioned application bundle in GitHub Actions without bundling
+     LTspice, and verify startup on a clean Windows runner before publication
+3. **GUI-D3 — Remote execution preview**
+   - Preview repository, immutable plan identity, run count, and retained
+     evidence without dispatching work or collecting credentials
+4. **GUI-D4 — Explicit remote dispatch and recovery**
+   - Require a separate acknowledgement, dispatch only the frozen plan, and
+     retrieve verified evidence while keeping local-only mode the default
 
 ### Phase 5: Flagship portable mixed-signal DAQ/scope
 
@@ -1525,8 +1542,8 @@ expensive evaluation.
 
 ## Immediate next milestone
 
-Begin GUI-D as a Windows-first packaging and deliberately gated
-remote-execution layer. Preserve
+Complete GUI-D2 as a Windows-first distributable application bundle, then add
+the deliberately gated remote-execution preview and dispatch layers. Preserve
 the local-only default, make every external action explicit and reviewable, and
 reuse the same immutable plans and portable evidence contracts rather than
 adding a second execution model.

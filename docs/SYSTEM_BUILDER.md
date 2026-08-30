@@ -15,6 +15,16 @@ python3 -m pip install -r requirements-gui.txt
 make system-builder
 ```
 
+On Windows, the no-admin first-start path creates the local environment and
+performs Python/LTspice diagnostics automatically:
+
+```powershell
+.\Start-SystemBuilder.cmd
+```
+
+See [Windows setup and qualification](WINDOWS.md#start-system-builder) for
+first-run behavior, an explicit workspace example, and troubleshooting.
+
 The application opens the default browser on a random `127.0.0.1` port. The
 bundled reference recipe is
 [`examples/mixed_signal_daq.ltstudy.json`](../examples/mixed_signal_daq.ltstudy.json).

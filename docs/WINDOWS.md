@@ -17,6 +17,32 @@ LTspice Usage Data** prompt. Until it is answered, batch mode hangs without
 output or an error. See
 [`LEARNINGS.md`](../LEARNINGS.md#windows-portability) for the diagnosis.
 
+## Start System Builder
+
+After cloning or downloading this repository, double-click
+[`Start-SystemBuilder.cmd`](../Start-SystemBuilder.cmd). The launcher:
+
+1. Finds Python 3.13 or newer, or prints the exact `winget` installation command.
+2. Creates a private `.venv` inside the repository when needed.
+3. Installs the declared System Builder dependencies into that environment.
+4. Finds LTspice in the standard per-user and machine-wide locations.
+5. Opens System Builder in the default browser on a random loopback-only port.
+
+It does not request administrator privileges, change machine-wide PowerShell
+policy, or enable remote execution. If LTspice is not installed, the launcher
+warns and continues: recipe editing and pure plan preview remain available,
+while simulation and schematic capture stay unavailable.
+
+PowerShell users can select another circuit workspace explicitly:
+
+```powershell
+.\Start-SystemBuilder.ps1 -Workspace 'C:\Users\Dave\Documents\My Circuits'
+```
+
+Use `-NoBrowser` for diagnostics or automated startup checks. The launcher
+prints the local URL and workspace; open that URL manually if desired. Stop the
+server with `Ctrl+C` in the launcher window.
+
 The wrapper checks common install locations, including winget's per-user
 default at `%LOCALAPPDATA%\Programs\ADI\LTspice\LTspice.exe`. Set
 `LTSPICE_EXECUTABLE` only for a nonstandard installation:

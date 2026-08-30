@@ -35,9 +35,13 @@ jobs:
           statistical_engine.py study_recipe.py system_builder.py system_builder_routes
           waveform_metrics.py tests/support.py tests/test_artifacts.py
           tests/test_documentation.py tests/test_frequency_domain_metrics.py tests/test_system_builder.py
-          tests/test_waveform_metrics.py
+          tests/test_waveform_metrics.py tests/test_windows_launcher.py
       - run: python -m mypy artifacts.py waveform_metrics.py frequency_domain_metrics.py
       - run: python -m unittest discover -s tests -v
       - name: Qualify MCP stdio client on Windows
         if: runner.os == 'Windows'
         run: python tests/stdio_mcp_client_smoke.py
+      - name: Bootstrap and launch System Builder on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tests/windows_system_builder_launcher_smoke.ps1

@@ -742,8 +742,8 @@ def main() -> None:
     app = create_app(args.workspace)
     if not args.no_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
-    print(f"LTspice System Builder: {url}")
-    print(f"Workspace: {args.workspace.resolve()}")
+    print(f"LTspice System Builder: {url}", flush=True)
+    print(f"Workspace: {args.workspace.resolve()}", flush=True)
     try:
         uvicorn.Server(
             uvicorn.Config(app, log_level="info", access_log=False)

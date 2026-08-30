@@ -197,6 +197,10 @@ to answer its usage-data prompt, and use `make PYTHON=python test` to avoid the
 Microsoft Store `python3` alias. The wrapper discovers the standard winget and
 Program Files locations.
 
+After cloning the repository, `Start-SystemBuilder.cmd` provides the no-admin
+first-start path: it creates the private Python environment, installs GUI
+dependencies, diagnoses LTspice discovery, and opens the local interface.
+
 The opt-in real-LTspice GitHub workflow installs a pinned Analog Devices build
 on Windows Server, resolves first-run consent, and qualifies the RC, complete
 mixed-signal DAQ, optimization, and finalist-tolerance paths with retained RAW,
