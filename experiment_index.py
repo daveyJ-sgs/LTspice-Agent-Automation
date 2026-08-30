@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import TypedDict
 
+import artifacts
+
 INDEX_SCHEMA_VERSION = 3
 INDEX_BUILDER_VERSION = 3
 INDEX_FILENAME = "experiments.sqlite3"
@@ -125,13 +127,7 @@ def _load_json(path: Path) -> tuple[dict[str, object], str]:
 
 
 def _definition_hash(definition: dict[str, object]) -> str:
-    encoded = json.dumps(
-        definition,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return artifacts.definition_hash(definition)
 
 
 def _sha256_file(path: Path) -> str:
