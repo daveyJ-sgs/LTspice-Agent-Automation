@@ -8,13 +8,12 @@ import io
 import itertools
 import json
 import math
-import os
 import re
-import uuid
 from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 from typing import NotRequired, TypedDict
 
+import artifacts
 
 STATISTICAL_PLAN_SCHEMA_VERSION = 1
 UNIFORM_GENERATOR_VERSION = "sha256-counter-uniform-v1"
@@ -170,17 +169,7 @@ class StatisticalPlanResult(TypedDict):
     points: list[StatisticalPlanPoint]
 
 
-def _canonical_json(value: object, *, pretty: bool = False) -> str:
-    options: dict[str, object] = {
-        "sort_keys": True,
-        "ensure_ascii": False,
-        "allow_nan": False,
-    }
-    if pretty:
-        options["indent"] = 2
-    else:
-        options["separators"] = (",", ":")
-    return json.dumps(value, **options)  # type: ignore[arg-type]
+_canonical_json = artifacts.canonical_json
 
 
 def _decimal(value: object, field: str) -> Decimal:
@@ -1599,9 +1588,7 @@ def build_statistical_plan(
                 )
     else:
         points = sample_points
-    definition_hash = hashlib.sha256(
-        _canonical_json(definition).encode("utf-8")
-    ).hexdigest()
+    definition_hash = artifacts.definition_hash(definition)
     plan: StatisticalPlan = {
         "schema_version": STATISTICAL_PLAN_SCHEMA_VERSION,
         "generator_version": generator_version,
@@ -1651,8 +1638,7 @@ def _plans_root(runs_dir: Path) -> Path:
 def save_statistical_plan(runs_dir: Path, plan: StatisticalPlan) -> StatisticalPlanResult:
     """Publish a plan in a content-addressed, immutable directory."""
     artifact = _artifact_bytes(plan)
-    digest = hashlib.sha256(artifact).hexdigest()
-    plan_id = f"statistical-plan-{digest[:16]}"
+    plan_id, digest = artifacts.content_address("statistical-plan", artifact)
     root = _plans_root(runs_dir)
     plan_dir = root / plan_id
     try:
@@ -1663,22 +1649,7 @@ def save_statistical_plan(runs_dir: Path, plan: StatisticalPlan) -> StatisticalP
     if plan_dir.resolve().parent != root or plan_dir.resolve().name != plan_id:
         raise ValueError("statistical plan output must remain inside runs")
     plan_file = plan_dir / "statistical_plan.json"
-    if plan_file.exists() or plan_file.is_symlink():
-        if plan_file.is_symlink() or not plan_file.is_file():
-            raise ValueError("statistical plan artifact is not a regular file")
-        if plan_file.read_bytes() != artifact:
-            raise ValueError("statistical plan artifact does not match its content address")
-    else:
-        temporary = plan_dir / f".statistical_plan.{uuid.uuid4().hex}.tmp"
-        try:
-            with temporary.open("xb") as handle:
-                handle.write(artifact)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, plan_file)
-        finally:
-            if temporary.exists():
-                temporary.unlink()
+    artifacts.write_once(plan_file, artifact)
     return {
         "plan_id": plan_id,
         "plan_file": str(plan_file),
