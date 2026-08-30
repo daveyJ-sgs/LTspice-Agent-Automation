@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, TypedDict
 
+import artifacts
 import experiment_engine
 import experiment_report
 import robust_selection
@@ -39,8 +40,7 @@ class QualificationSnapshot(TypedDict):
     error: str | None
 
 
-def _canonical(value: object) -> str:
-    return json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+_canonical = artifacts.canonical_json
 
 
 class QualificationStudyManager:
@@ -93,7 +93,7 @@ class QualificationStudyManager:
             or manifest.get("engine_version") != ENGINE_VERSION
             or manifest.get("qualification_job_id") != job_id
             or not isinstance(definition, dict)
-            or manifest.get("definition_hash") != hashlib.sha256(_canonical(definition).encode()).hexdigest()
+            or manifest.get("definition_hash") != artifacts.definition_hash(definition)
         ):
             raise ValueError("qualification manifest integrity check failed")
         inspected = robust_selection.inspect_robust_selection_plan(self.runs_dir, str(definition.get("plan_id")))
@@ -178,7 +178,7 @@ class QualificationStudyManager:
             "schema_version": SCHEMA_VERSION, "engine_version": ENGINE_VERSION,
             "qualification_job_id": job_id, "status": "defined", "created_at": now,
             "updated_at": now, "definition": job_definition,
-            "definition_hash": hashlib.sha256(_canonical(job_definition).encode()).hexdigest(),
+            "definition_hash": artifacts.definition_hash(job_definition),
             "experiment_statuses": {name: "defined" for name in children}, "result": None, "error": None,
         }
         experiment_engine._write_json(job_dir / "qualification_job.json", manifest)
