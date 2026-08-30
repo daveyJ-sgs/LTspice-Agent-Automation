@@ -415,7 +415,11 @@ class SystemBuilderTests(unittest.TestCase):
             workspace = Path(temporary)
             self._copy_optimization_netlists(workspace)
             client = TestClient(
-                system_builder.create_app(workspace, testing=True),
+                system_builder.create_app(
+                    workspace,
+                    testing=True,
+                    manager_factory=lambda _runs: FakeExperimentManager(),
+                ),
                 base_url="http://testserver",
             )
             client.get("/")
@@ -506,7 +510,11 @@ class SystemBuilderTests(unittest.TestCase):
             workspace = Path(temporary)
             self._copy_optimization_netlists(workspace)
             client = TestClient(
-                system_builder.create_app(workspace, testing=True),
+                system_builder.create_app(
+                    workspace,
+                    testing=True,
+                    manager_factory=lambda _runs: FakeExperimentManager(),
+                ),
                 base_url="http://testserver",
             )
             client.get("/")
