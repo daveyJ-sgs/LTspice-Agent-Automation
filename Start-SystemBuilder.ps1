@@ -96,9 +96,12 @@ $requirementFiles = @(
     (Join-Path $projectRoot "requirements-gui.txt"),
     (Join-Path $projectRoot "requirements-mcp.txt")
 )
-$requirementsFingerprint = ($requirementFiles | ForEach-Object {
-    (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash
-}) -join ":"
+$requirementsFingerprint = (& $venvPython -c `
+    "import hashlib,pathlib,sys; print(hashlib.sha256(b''.join(pathlib.Path(p).read_bytes() for p in sys.argv[1:])).hexdigest())" `
+    @requirementFiles).Trim()
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to fingerprint the System Builder requirements"
+}
 $requirementsMarker = Join-Path $venvRoot ".system-builder-requirements"
 $installedFingerprint = if (Test-Path -LiteralPath $requirementsMarker -PathType Leaf) {
     (Get-Content -LiteralPath $requirementsMarker -Raw).Trim()
