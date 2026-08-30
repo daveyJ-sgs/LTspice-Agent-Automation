@@ -9,18 +9,16 @@ import html
 import io
 import json
 import math
-import os
 import re
-import uuid
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import TypedDict
 
+import artifacts
 import experiment_index
 import optimization_engine
 import statistical_engine
 from statistical_results import _wilson
-
 
 ROBUST_PLAN_SCHEMA_VERSION = 1
 ROBUST_PLAN_GENERATOR_VERSION = "optimization-finalist-yield-v1"
@@ -63,30 +61,8 @@ class RobustSelectionComparisonResult(TypedDict):
     numeric_mismatches: int
 
 
-def _canonical_json(value: object, *, pretty: bool = False) -> str:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        ensure_ascii=False,
-        allow_nan=False,
-        indent=2 if pretty else None,
-        separators=None if pretty else (",", ":"),
-    )
-
-
-def _write_once(path: Path, content: bytes) -> None:
-    if path.is_symlink():
-        raise ValueError(f"artifact target must not be a symlink: {path.name}")
-    if path.exists():
-        if not path.is_file() or path.read_bytes() != content:
-            raise ValueError(f"existing artifact differs: {path}")
-        return
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        temporary.write_bytes(content)
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+_canonical_json = artifacts.canonical_json
+_write_once = artifacts.write_once
 
 
 def _root(runs_dir: Path, name: str) -> Path:
@@ -249,12 +225,10 @@ def generate_robust_selection_plan(
         "required_experiments": ["ac", "transient"],
         "selection_policy": definition["selection_policy"],
     }
-    definition["portability_signature"] = hashlib.sha256(
-        _canonical_json(portability_definition).encode("utf-8")
-    ).hexdigest()
-    definition_hash = hashlib.sha256(
-        _canonical_json(definition).encode("utf-8")
-    ).hexdigest()
+    definition["portability_signature"] = artifacts.definition_hash(
+        portability_definition
+    )
+    definition_hash = artifacts.definition_hash(definition)
     plan = {
         "schema_version": ROBUST_PLAN_SCHEMA_VERSION,
         "generator_version": ROBUST_PLAN_GENERATOR_VERSION,
@@ -264,8 +238,7 @@ def generate_robust_selection_plan(
         "point_count_per_finalist": point_count,
     }
     artifact = (_canonical_json(plan, pretty=True) + "\n").encode("utf-8")
-    digest = hashlib.sha256(artifact).hexdigest()
-    plan_id = f"robust-selection-plan-{digest[:16]}"
+    plan_id, digest = artifacts.content_address("robust-selection-plan", artifact)
     root = _root(runs_dir, "robust-selection-plans")
     plan_dir = root / plan_id
     plan_dir.mkdir(exist_ok=True)
@@ -535,9 +508,7 @@ def load_robust_selection_plan(runs_dir: Path, plan_id: str) -> dict[str, object
         or not isinstance(plan.get("definition"), dict)
     ):
         raise ValueError("unsupported robust selection plan")
-    expected = hashlib.sha256(
-        _canonical_json(plan["definition"]).encode("utf-8")
-    ).hexdigest()
+    expected = artifacts.definition_hash(plan["definition"])
     if plan.get("definition_hash") != expected:
         raise ValueError("robust selection definition hash does not match")
     return plan

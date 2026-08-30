@@ -1,23 +1,18 @@
 from __future__ import annotations
 
 import json
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import robust_selection
+import artifacts
 import experiment_index
+import robust_selection
 import statistical_engine
+from support import TemporaryRunsTestCase
 
 
-class RobustSelectionTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temporary_directory = tempfile.TemporaryDirectory()
-        self.runs = Path(self.temporary_directory.name) / "runs"
-
-    def tearDown(self) -> None:
-        self.temporary_directory.cleanup()
+class RobustSelectionTests(TemporaryRunsTestCase):
 
     @staticmethod
     def _source(label: str, rank: int) -> dict[str, object]:
@@ -140,6 +135,25 @@ class RobustSelectionTests(unittest.TestCase):
 
         self.assertEqual(saved["finalist_count"], 1)
         self.assertEqual(saved["point_count"], 4)
+
+    def test_loader_rejects_spaced_definition_hash(self) -> None:
+        saved = self._plan()
+        document = json.loads(Path(saved["plan_file"]).read_text(encoding="utf-8"))
+        definition = document["definition"]
+        spaced = json.dumps(
+            definition, sort_keys=True, ensure_ascii=False, allow_nan=False
+        ).encode("utf-8")
+        document["definition_hash"] = artifacts.sha256_digest(spaced)
+        artifact = artifacts.canonical_bytes(
+            document, pretty=True, trailing_newline=True
+        )
+        plan_id, _ = artifacts.content_address("robust-selection-plan", artifact)
+        plan_dir = self.runs / "robust-selection-plans" / plan_id
+        plan_dir.mkdir()
+        (plan_dir / "robust_selection_plan.json").write_bytes(artifact)
+
+        with self.assertRaisesRegex(ValueError, "definition hash"):
+            robust_selection.load_robust_selection_plan(self.runs, plan_id)
 
     def test_joint_selection_requires_both_analyses_and_uses_source_tie_break(self) -> None:
         saved = self._plan()
