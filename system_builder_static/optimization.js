@@ -8,6 +8,7 @@ let latestOptimizationPreview = null;
 let frozenOptimizationLaunch = null;
 let trackedOptimizationJob = null;
 let optimizationPollTimer = null;
+let displayedOptimizationStudy = null;
 
 const optId = (id) => document.getElementById(id);
 const OPT_UNITS = {
@@ -445,6 +446,252 @@ function optimizationProgressRow(label, value, total) {
   return row;
 }
 
+function optimizationLabel(value) {
+  return String(value).replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function optimizationEngineeringValue(value, unit = "") {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value ?? "—");
+  const scales = unit === "F"
+    ? [[1e-6, "µF"], [1e-9, "nF"], [1e-12, "pF"]]
+    : unit === "ohm"
+      ? [[1e6, "MΩ"], [1e3, "kΩ"], [1, "Ω"]]
+      : unit === "s"
+        ? [[1, "s"], [1e-3, "ms"], [1e-6, "µs"], [1e-9, "ns"]]
+        : unit === "Hz"
+          ? [[1e9, "GHz"], [1e6, "MHz"], [1e3, "kHz"], [1, "Hz"]]
+          : null;
+  if (scales) {
+    const magnitude = Math.abs(number);
+    const [factor, label] = scales.find(([candidate]) => magnitude >= candidate) || scales.at(-1);
+    return `${Number((number / factor).toPrecision(4))} ${label}`;
+  }
+  const suffix = unit ? ` ${unit}` : "";
+  return `${Number(number.toPrecision(4))}${suffix}`;
+}
+
+function optimizationValueNode(value, unit = "") {
+  const node = document.createElement("span");
+  node.textContent = optimizationEngineeringValue(value, unit);
+  node.title = `Exact: ${value}${unit ? ` ${unit}` : ""}`;
+  return node;
+}
+
+function optimizationRecordText(records) {
+  return Object.entries(records || {}).map(([name, record]) =>
+    `${optimizationLabel(name)} ${optimizationEngineeringValue(record.value, record.unit)}`
+  ).join(" · ");
+}
+
+function renderSelectedOptimizationCandidate(result, candidate) {
+  const title = optId("optimization-selected-title");
+  if (!candidate) {
+    title.textContent = "No feasible candidate selected";
+    optId("optimization-selected-parameters").replaceChildren();
+    optId("optimization-selected-objectives").replaceChildren();
+    optId("optimization-selected-constraints").replaceChildren();
+    return;
+  }
+  title.textContent = `Candidate ${candidate.candidate_index}`;
+  const parameters = Object.entries(candidate.parameters || {}).map(([name, value]) => {
+    const item = document.createElement("div");
+    const label = document.createElement("span");
+    label.textContent = name;
+    const formatted = optimizationValueNode(value, result.parameter_units?.[name] || "");
+    item.append(label, formatted);
+    return item;
+  });
+  optId("optimization-selected-parameters").replaceChildren(...parameters);
+
+  const objectives = Object.entries(candidate.objectives || {}).map(([name, record]) => {
+    const item = document.createElement("div");
+    const label = document.createElement("span");
+    label.textContent = optimizationLabel(name);
+    const value = optimizationValueNode(record.value, record.unit);
+    item.append(label, value);
+    return item;
+  });
+  optId("optimization-selected-objectives").replaceChildren(...objectives);
+
+  const constraints = Object.entries(candidate.constraints || {}).sort((left, right) => {
+    const leftTarget = Math.max(Math.abs(Number(left[1].target)), 1e-30);
+    const rightTarget = Math.max(Math.abs(Number(right[1].target)), 1e-30);
+    return Number(left[1].margin) / leftTarget - Number(right[1].margin) / rightTarget;
+  }).map(([name, record]) => {
+    const row = document.createElement("div");
+    row.className = `constraint-result ${record.passed ? "passed" : "failed"}`;
+    const identity = document.createElement("div");
+    const label = document.createElement("strong");
+    label.textContent = optimizationLabel(name);
+    const requirement = document.createElement("small");
+    requirement.textContent = `${optimizationEngineeringValue(record.worst_value, record.unit)} ${record.operator} ${optimizationEngineeringValue(record.target, record.unit)}`;
+    identity.append(label, requirement);
+    const margin = document.createElement("span");
+    margin.textContent = `${record.passed ? "+" : ""}${optimizationEngineeringValue(record.margin, record.unit)} margin`;
+    margin.title = `Worst planned point ${record.worst_point_index}`;
+    row.append(identity, margin);
+    return row;
+  });
+  optId("optimization-selected-constraints").replaceChildren(...constraints);
+}
+
+function optimizationSvgElement(name, attributes = {}) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+  return node;
+}
+
+function renderOptimizationParetoPlot(result) {
+  const container = optId("optimization-pareto-plot");
+  const objectives = result.objectives || [];
+  const candidates = (result.candidates || []).filter((candidate) => candidate.status === "feasible");
+  if (objectives.length !== 2 || !candidates.length) {
+    const empty = document.createElement("p");
+    empty.className = "editor-empty";
+    empty.textContent = "Two complete objectives and at least one feasible candidate are required for the tradeoff plot.";
+    container.replaceChildren(empty);
+    return;
+  }
+  const [xObjective, yObjective] = objectives;
+  const points = candidates.map((candidate) => ({
+    candidate,
+    x: Number(candidate.objectives[xObjective.name].value),
+    y: Number(candidate.objectives[yObjective.name].value),
+  })).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (!points.length) return;
+  const width = 820;
+  const height = 390;
+  const bounds = {left: 78, right: 28, top: 28, bottom: 64};
+  const xValues = points.map((point) => point.x);
+  const yValues = points.map((point) => point.y);
+  let xMin = Math.min(...xValues); let xMax = Math.max(...xValues);
+  let yMin = Math.min(...yValues); let yMax = Math.max(...yValues);
+  if (xMin === xMax) { xMin -= 1; xMax += 1; }
+  if (yMin === yMax) { yMin -= 1; yMax += 1; }
+  const xPad = (xMax - xMin) * 0.08;
+  const yPad = (yMax - yMin) * 0.08;
+  xMin -= xPad; xMax += xPad; yMin -= yPad; yMax += yPad;
+  const xPosition = (value) => bounds.left + ((value - xMin) / (xMax - xMin)) * (width - bounds.left - bounds.right);
+  const yPosition = (value) => height - bounds.bottom - ((value - yMin) / (yMax - yMin)) * (height - bounds.top - bounds.bottom);
+  const svg = optimizationSvgElement("svg", {viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": "Optimization objective tradeoff plot"});
+  svg.classList.add("optimization-pareto-svg");
+  for (let index = 0; index <= 4; index += 1) {
+    const x = bounds.left + index * (width - bounds.left - bounds.right) / 4;
+    const y = bounds.top + index * (height - bounds.top - bounds.bottom) / 4;
+    svg.append(
+      optimizationSvgElement("line", {x1: x, y1: bounds.top, x2: x, y2: height - bounds.bottom, class: "plot-grid"}),
+      optimizationSvgElement("line", {x1: bounds.left, y1: y, x2: width - bounds.right, y2: y, class: "plot-grid"}),
+    );
+    const xTick = optimizationSvgElement("text", {x, y: height - bounds.bottom + 22, class: "plot-tick", "text-anchor": "middle"});
+    xTick.textContent = optimizationEngineeringValue(xMin + index * (xMax - xMin) / 4, points[0].candidate.objectives[xObjective.name].unit);
+    const yTick = optimizationSvgElement("text", {x: bounds.left - 10, y: y + 4, class: "plot-tick", "text-anchor": "end"});
+    yTick.textContent = optimizationEngineeringValue(yMax - index * (yMax - yMin) / 4, points[0].candidate.objectives[yObjective.name].unit);
+    svg.append(xTick, yTick);
+  }
+  svg.append(
+    optimizationSvgElement("line", {x1: bounds.left, y1: height - bounds.bottom, x2: width - bounds.right, y2: height - bounds.bottom, class: "plot-axis"}),
+    optimizationSvgElement("line", {x1: bounds.left, y1: bounds.top, x2: bounds.left, y2: height - bounds.bottom, class: "plot-axis"}),
+  );
+  const xLabel = optimizationSvgElement("text", {x: (bounds.left + width - bounds.right) / 2, y: height - 16, class: "plot-label", "text-anchor": "middle"});
+  xLabel.textContent = `${optimizationLabel(xObjective.name)} · ${xObjective.goal}`;
+  const yLabel = optimizationSvgElement("text", {x: 18, y: (bounds.top + height - bounds.bottom) / 2, class: "plot-label", "text-anchor": "middle", transform: `rotate(-90 18 ${(bounds.top + height - bounds.bottom) / 2})`});
+  yLabel.textContent = `${optimizationLabel(yObjective.name)} · ${yObjective.goal}`;
+  svg.append(xLabel, yLabel);
+  for (const point of points) {
+    const circle = optimizationSvgElement("circle", {
+      cx: xPosition(point.x), cy: yPosition(point.y), r: point.candidate.selected ? 7 : 5,
+      class: point.candidate.selected ? "selected" : point.candidate.pareto ? "pareto" : "feasible",
+      tabindex: "0",
+    });
+    const title = optimizationSvgElement("title");
+    title.textContent = `Candidate ${point.candidate.candidate_index}: ${optimizationRecordText(point.candidate.objectives)}`;
+    circle.append(title);
+    svg.append(circle);
+  }
+  container.replaceChildren(svg);
+}
+
+function renderOptimizationCandidates(result) {
+  const rows = (result.candidates || []).map((candidate) => {
+    const row = document.createElement("tr");
+    if (candidate.selected) row.className = "selected-row";
+    const index = document.createElement("td");
+    index.textContent = candidate.selected ? `★ ${candidate.candidate_index}` : candidate.candidate_index;
+    const status = document.createElement("td");
+    const badge = document.createElement("span");
+    badge.className = `candidate-status ${candidate.status}`;
+    badge.textContent = candidate.selected ? "Selected" : candidate.pareto ? "Pareto" : optimizationLabel(candidate.status);
+    status.append(badge);
+    const design = document.createElement("td");
+    design.textContent = Object.entries(candidate.parameters || {}).map(([name, value]) =>
+      `${name}=${optimizationEngineeringValue(value, result.parameter_units?.[name] || "")}`
+    ).join(", ");
+    const objectives = document.createElement("td");
+    objectives.textContent = optimizationRecordText(candidate.objectives);
+    const decision = document.createElement("td");
+    const failed = Object.entries(candidate.constraints || {}).filter(([, record]) => !record.passed);
+    decision.textContent = candidate.errors?.length
+      ? candidate.errors.join(" · ")
+      : failed.length
+        ? failed.map(([name, record]) => `${optimizationLabel(name)} (${optimizationEngineeringValue(record.margin, record.unit)} margin)`).join(" · ")
+        : candidate.selected
+          ? `Winner · score ${Number(candidate.selection_score).toPrecision(4)}`
+          : candidate.pareto ? "Nondominated alternative" : "Feasible; dominated in objective space";
+    row.append(index, status, design, objectives, decision);
+    return row;
+  });
+  optId("optimization-candidate-rows").replaceChildren(...rows);
+  optId("optimization-candidate-summary").textContent = `Candidate evidence (${rows.length})`;
+}
+
+function renderOptimizationResults(result) {
+  displayedOptimizationStudy = result.study_id;
+  optId("optimization-results-title").textContent = `Decision · ${result.study_id}`;
+  optId("optimization-selection-explanation").textContent = result.selection_explanation;
+  const metrics = [
+    ["Candidates", result.candidate_count],
+    ["Feasible", result.feasible_candidates],
+    ["Rejected / invalid", `${result.constraint_failed_candidates} / ${result.invalid_candidates}`],
+    ["Pareto", result.pareto_candidates],
+  ].map(([labelText, valueText]) => {
+    const item = document.createElement("div");
+    const label = document.createElement("span");
+    label.textContent = labelText;
+    const value = document.createElement("strong");
+    value.textContent = valueText;
+    item.append(label, value);
+    return item;
+  });
+  optId("optimization-result-metrics").replaceChildren(...metrics);
+  const selected = (result.candidates || []).find((candidate) => candidate.selected) || null;
+  renderSelectedOptimizationCandidate(result, selected);
+  renderOptimizationParetoPlot(result);
+  renderOptimizationCandidates(result);
+  const links = Object.entries(result.evidence || {}).map(([name, url]) => {
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = name === "report" ? "Full HTML report" : name.toUpperCase();
+    return link;
+  });
+  optId("optimization-evidence-links").replaceChildren(...links);
+  optId("optimization-results").hidden = false;
+}
+
+async function loadOptimizationResults(job) {
+  if (!job.results_url || displayedOptimizationStudy === job.optimization_study_id) return;
+  try {
+    const response = await fetch(job.results_url);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Optimization results are unavailable");
+    renderOptimizationResults(result);
+  } catch (error) {
+    renderOptimizationErrors([{path: "optimization results", message: error.message}]);
+  }
+}
+
 function renderOptimizationJob(job) {
   trackedOptimizationJob = job;
   const container = optId("optimization-job");
@@ -501,6 +748,7 @@ function renderOptimizationJob(job) {
   }
   container.replaceChildren(heading, structure, progress, evaluation, actions);
   container.hidden = false;
+  if (job.results_url) loadOptimizationResults(job);
   window.clearTimeout(optimizationPollTimer);
   if (["defined", "queued", "running", "cancelling"].includes(job.status)) {
     optimizationPollTimer = window.setTimeout(pollOptimizationJob, 750);
@@ -540,6 +788,8 @@ async function startOptimization() {
   const button = optId("optimization-start");
   button.disabled = true;
   button.textContent = "Queuing…";
+  displayedOptimizationStudy = null;
+  optId("optimization-results").hidden = true;
   try {
     const response = await fetch("/api/optimization/start", {
       method: "POST",

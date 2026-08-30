@@ -63,6 +63,14 @@ class FakeExperimentManager:
         self.shutdown_called = True
 
 
+class FakeOptimizationManager:
+    def __init__(self, snapshot: dict[str, object]) -> None:
+        self._snapshot = snapshot
+
+    def snapshot(self, _optimization_job_id: str) -> dict[str, object]:
+        return dict(self._snapshot)
+
+
 class SystemBuilderTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(
@@ -114,9 +122,13 @@ class SystemBuilderTests(unittest.TestCase):
 
     def test_api_requires_the_browser_session(self) -> None:
         response = self.client.get("/api/session")
+        optimization = self.client.get(
+            "/api/optimization/jobs/optimization-job-0123456789abcdef/results"
+        )
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["error"]["code"], "session_required")
+        self.assertEqual(optimization.status_code, 401)
 
     def test_non_loopback_host_is_rejected(self) -> None:
         client = TestClient(
@@ -397,6 +409,149 @@ class SystemBuilderTests(unittest.TestCase):
             self.assertEqual(resumed.status_code, 202)
             self.assertEqual(resumed.json()["status"], "queued")
             self.assertEqual(discovered.json()["jobs"][0]["optimization_job_id"], job_id)
+
+    def test_completed_optimization_results_are_sanitized_and_linked(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            self._copy_optimization_netlists(workspace)
+            client = TestClient(
+                system_builder.create_app(workspace, testing=True),
+                base_url="http://testserver",
+            )
+            client.get("/")
+            recipe = client.get(
+                "/api/examples/mixed-signal-daq-optimization"
+            ).json()
+            preview = client.post(
+                "/api/optimization/preview", json=recipe, headers=self._headers()
+            ).json()
+            client.post(
+                "/api/optimization/freeze",
+                json={
+                    "recipe": recipe,
+                    "expected_recipe_sha256": preview["recipe"]["sha256"],
+                    "expected_plan_id": preview["plan"]["plan_id"],
+                    "expected_point_count": preview["plan"]["point_count"],
+                    "expected_total_run_count": preview["execution"]["total_run_count"],
+                },
+                headers=self._headers(),
+            )
+            study_id = "optimization-study-0123456789abcdef"
+            study = workspace / "runs/optimization-studies" / study_id
+            study.mkdir(parents=True)
+            candidates = [
+                {
+                    "candidate_index": index,
+                    "status": "feasible",
+                    "parameters": {"CAA1": "1e-10", "ROUT": "65"},
+                    "objectives": {
+                        "alias_gain": {"value": -28.65, "unit": "dB"},
+                        "settling_time": {"value": 1.115e-6, "unit": "s"},
+                    },
+                    "constraints": {},
+                    "errors": [],
+                    "pareto": index == 15,
+                    "selected": index == 15,
+                    "selection_score": 0.5 if index == 15 else None,
+                    "local_path": str(workspace / "runs/private"),
+                }
+                for index in range(16)
+            ]
+            (study / "optimization_results.json").write_text(
+                json.dumps(
+                    {
+                        "study_id": study_id,
+                        "plan_id": preview["plan"]["plan_id"],
+                        "selection_policy": "fixture-policy",
+                        "selection_explanation": "Candidate 15 selected.",
+                        "candidate_count": 16,
+                        "feasible_candidates": 16,
+                        "constraint_failed_candidates": 0,
+                        "invalid_candidates": 0,
+                        "pareto_candidates": 1,
+                        "selected_candidate_index": 15,
+                        "candidates": candidates,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            snapshot = {
+                "optimization_job_id": "optimization-job-0123456789abcdef",
+                "plan_id": preview["plan"]["plan_id"],
+                "status": "completed",
+                "optimization_study_id": study_id,
+            }
+            with patch(
+                "system_builder.optimization_study.OptimizationStudyManager",
+                return_value=FakeOptimizationManager(snapshot),
+            ):
+                response = client.get(
+                    "/api/optimization/jobs/optimization-job-0123456789abcdef/results"
+                )
+
+            self.assertEqual(response.status_code, 200)
+            result = response.json()
+            self.assertEqual(result["selected_candidate_index"], 15)
+            self.assertEqual(result["candidates"][15]["parameters"]["ROUT"], "65")
+            self.assertEqual(result["parameter_units"]["ROUT"], "ohm")
+            self.assertNotIn("local_path", result["candidates"][15])
+            self.assertEqual(
+                result["evidence"]["report"],
+                f"/evidence/optimization-studies/{study_id}/report.html",
+            )
+            self.assertNotIn(str(workspace), response.text)
+
+    def test_optimization_results_reject_mismatched_study_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            self._copy_optimization_netlists(workspace)
+            client = TestClient(
+                system_builder.create_app(workspace, testing=True),
+                base_url="http://testserver",
+            )
+            client.get("/")
+            recipe = client.get(
+                "/api/examples/mixed-signal-daq-optimization"
+            ).json()
+            preview = client.post(
+                "/api/optimization/preview", json=recipe, headers=self._headers()
+            ).json()
+            client.post(
+                "/api/optimization/freeze",
+                json={
+                    "recipe": recipe,
+                    "expected_recipe_sha256": preview["recipe"]["sha256"],
+                    "expected_plan_id": preview["plan"]["plan_id"],
+                    "expected_point_count": preview["plan"]["point_count"],
+                    "expected_total_run_count": preview["execution"]["total_run_count"],
+                },
+                headers=self._headers(),
+            )
+            study_id = "optimization-study-0123456789abcdef"
+            study = workspace / "runs/optimization-studies" / study_id
+            study.mkdir(parents=True)
+            (study / "optimization_results.json").write_text(
+                json.dumps({"study_id": "optimization-study-wrong", "candidates": []}),
+                encoding="utf-8",
+            )
+            snapshot = {
+                "optimization_job_id": "optimization-job-0123456789abcdef",
+                "plan_id": preview["plan"]["plan_id"],
+                "status": "completed",
+                "optimization_study_id": study_id,
+            }
+            with patch(
+                "system_builder.optimization_study.OptimizationStudyManager",
+                return_value=FakeOptimizationManager(snapshot),
+            ):
+                response = client.get(
+                    "/api/optimization/jobs/optimization-job-0123456789abcdef/results"
+                )
+
+            self.assertEqual(response.status_code, 404)
+            self.assertEqual(
+                response.json()["error"]["code"], "optimization_results_not_found"
+            )
 
     def test_preview_accepts_gui_b1_variable_corner_and_requirement_edits(self) -> None:
         self._open()
@@ -843,9 +998,15 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertIn('id="optimization-freeze"', html)
         self.assertIn('id="optimization-acknowledgement"', html)
         self.assertIn('id="optimization-job"', html)
+        self.assertIn('id="optimization-results"', html)
+        self.assertIn('id="optimization-pareto-plot"', html)
+        self.assertIn('id="optimization-selected-constraints"', html)
+        self.assertIn('id="optimization-candidate-rows"', html)
         self.assertIn('fetch("/api/optimization/freeze"', optimization_javascript)
         self.assertIn('fetch("/api/optimization/start"', optimization_javascript)
         self.assertIn("recoverOptimizationJob", optimization_javascript)
+        self.assertIn("renderOptimizationResults", optimization_javascript)
+        self.assertIn("optimizationEngineeringValue", optimization_javascript)
         self.assertIn(
             '"preferred_series", "Generated E-series"', optimization_javascript
         )

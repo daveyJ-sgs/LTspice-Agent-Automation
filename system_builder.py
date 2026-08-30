@@ -397,6 +397,7 @@ def create_app(
         )
         candidate_count = int(plan["candidate_count"])
         point_count = int(plan["point_count"])
+        study_id = snapshot.get("optimization_study_id")
         return {
             "optimization_job_id": snapshot["optimization_job_id"],
             "plan_id": snapshot["plan_id"],
@@ -415,9 +416,128 @@ def create_app(
                     else "pending"
                 ),
             },
-            "optimization_study_id": snapshot.get("optimization_study_id"),
+            "optimization_study_id": study_id,
+            "results_url": (
+                f"/api/optimization/jobs/{snapshot['optimization_job_id']}/results"
+                if study_id
+                else None
+            ),
             "resumable": snapshot["status"] == "cancelled",
             "error": snapshot.get("error"),
+        }
+
+    def optimization_results_payload(snapshot: dict[str, object]) -> dict[str, object]:
+        study_id = snapshot.get("optimization_study_id")
+        if snapshot.get("status") != "completed" or not isinstance(study_id, str):
+            raise ValueError("optimization results are not complete")
+        results_file = evidence_file(
+            workspace / "runs",
+            f"optimization-studies/{study_id}/optimization_results.json",
+        )
+        if results_file.stat().st_size > 8 * 1024 * 1024:
+            raise ValueError("optimization results exceed the read budget")
+        try:
+            results = json.loads(
+                results_file.read_text(encoding="utf-8"),
+                parse_constant=lambda constant: (_ for _ in ()).throw(
+                    ValueError(f"non-finite JSON value: {constant}")
+                ),
+            )
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            raise ValueError("optimization results are invalid") from exc
+        if (
+            not isinstance(results, dict)
+            or results.get("study_id") != study_id
+            or results.get("plan_id") != snapshot.get("plan_id")
+            or not isinstance(results.get("candidates"), list)
+        ):
+            raise ValueError("optimization result identity does not match the job")
+        plan = optimization_engine.load_optimization_plan(
+            workspace / "runs", str(snapshot["plan_id"])
+        )
+        candidates = results["candidates"]
+        if len(candidates) != plan["candidate_count"] or not all(
+            isinstance(candidate, dict) for candidate in candidates
+        ):
+            raise ValueError("optimization candidate results are incomplete")
+        sanitized_candidates = []
+        for candidate in candidates:
+            parameters = candidate.get("parameters")
+            objectives = candidate.get("objectives")
+            constraints = candidate.get("constraints")
+            errors = candidate.get("errors")
+            if not all(
+                isinstance(value, dict)
+                for value in (parameters, objectives, constraints)
+            ) or not isinstance(errors, list):
+                raise ValueError("optimization candidate result is invalid")
+            sanitized_candidates.append(
+                {
+                    "candidate_index": candidate.get("candidate_index"),
+                    "status": candidate.get("status"),
+                    "parameters": parameters,
+                    "objectives": {
+                        name: {
+                            key: record.get(key)
+                            for key in ("value", "unit", "worst_point_index")
+                        }
+                        for name, record in objectives.items()
+                        if isinstance(name, str) and isinstance(record, dict)
+                    },
+                    "constraints": {
+                        name: {
+                            key: record.get(key)
+                            for key in (
+                                "passed",
+                                "worst_value",
+                                "unit",
+                                "worst_point_index",
+                                "margin",
+                                "operator",
+                                "target",
+                            )
+                        }
+                        for name, record in constraints.items()
+                        if isinstance(name, str) and isinstance(record, dict)
+                    },
+                    "errors": [error for error in errors if isinstance(error, str)],
+                    "pareto": candidate.get("pareto"),
+                    "selected": candidate.get("selected"),
+                    "selection_score": candidate.get("selection_score"),
+                }
+            )
+        definition = plan["definition"]
+        return {
+            "study_id": study_id,
+            "plan_id": snapshot["plan_id"],
+            "selection_policy": results.get("selection_policy"),
+            "selection_explanation": results.get("selection_explanation"),
+            "candidate_count": results.get("candidate_count"),
+            "feasible_candidates": results.get("feasible_candidates"),
+            "constraint_failed_candidates": results.get(
+                "constraint_failed_candidates"
+            ),
+            "invalid_candidates": results.get("invalid_candidates"),
+            "pareto_candidates": results.get("pareto_candidates"),
+            "selected_candidate_index": results.get("selected_candidate_index"),
+            "parameter_units": plan.get("parameter_units", {}),
+            "objectives": definition.get("objectives", []),
+            "candidates": sanitized_candidates,
+            "evidence": {
+                "report": f"/evidence/optimization-studies/{study_id}/report.html",
+                "json": (
+                    f"/evidence/optimization-studies/{study_id}/"
+                    "optimization_results.json"
+                ),
+                "csv": (
+                    f"/evidence/optimization-studies/{study_id}/"
+                    "optimization_results.csv"
+                ),
+                "plan": (
+                    f"/evidence/optimization-plans/{snapshot['plan_id']}/"
+                    "optimization_plan.json"
+                ),
+            },
         }
 
     @app.middleware("http")
@@ -912,6 +1032,19 @@ def create_app(
             )
         except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
             return _json_error(404, "optimization_job_not_found", str(exc))
+
+    @app.get("/api/optimization/jobs/{optimization_job_id}/results")
+    def optimization_job_results(
+        request: Request, optimization_job_id: str
+    ) -> Response:
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        try:
+            snapshot = get_optimization_manager().snapshot(optimization_job_id)
+            return JSONResponse(optimization_results_payload(snapshot))
+        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+            return _json_error(404, "optimization_results_not_found", str(exc))
 
     @app.post("/api/optimization/jobs/{optimization_job_id}/cancel")
     def cancel_optimization_job(

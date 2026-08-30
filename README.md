@@ -196,8 +196,18 @@ then defines and launches the paired DAQ AC/transient work through
 structure, per-analysis progress, aggregate LTspice progress, evaluation state,
 cooperative cancellation, and resume controls. Refreshing the page rediscovers
 the durable optimization job but never launches or resumes it automatically.
-Pareto and finalist visualization remain deliberately reserved for GUI-C3 and
-GUI-C4.
+
+GUI-C3 turns a completed job into an engineering decision view without
+re-evaluating the study. It shows the selected component values, worst-corner
+objective values, every hard-constraint margin, feasible/rejected/Pareto
+counts, and a two-objective candidate plot. The expandable candidate table
+states why each rejected design failed, while links retain direct access to
+the portable report, JSON, CSV, and immutable plan. Visible values use compact
+engineering units; exact stored values remain available on hover. Refreshing
+the view reads the existing result and does not launch or mutate a job.
+
+Selected-finalist tolerance and corner qualification remain deliberately
+reserved for GUI-C4.
 
 GUI-A2 adds a read-only workspace below the recipe preview. It reads current
 durable-job progress directly from experiment manifests, reports whether the

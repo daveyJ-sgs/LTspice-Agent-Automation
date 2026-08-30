@@ -35,7 +35,7 @@
   <main>
     <section class="tool-intro">
       <div>
-        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-C2</p>
+        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-C3</p>
         <h1>1 MHz acquisition-channel engineering</h1>
         <p class="intro-copy">Configure tolerance qualification or inspect a deterministic optimization design space. Every Preview is non-mutating; confirmed work uses the existing durable evidence engines.</p>
       </div>
@@ -342,6 +342,54 @@
           <section id="optimization-job" class="launch-result" aria-live="polite" hidden></section>
         </aside>
       </div>
+      <section id="optimization-results" class="panel optimization-results" hidden>
+        <div class="panel-heading compact">
+          <div>
+            <p class="step">GUI-C3 / ENGINEERING DECISION</p>
+            <h2 id="optimization-results-title">Optimization results</h2>
+          </div>
+          <span id="optimization-results-status" class="status-pill valid">Complete</span>
+        </div>
+        <p id="optimization-selection-explanation" class="muted-copy"></p>
+        <div id="optimization-result-metrics" class="metric-grid result-metrics"></div>
+
+        <div class="optimization-decision-grid">
+          <section class="selected-candidate">
+            <p class="step">SELECTED DESIGN</p>
+            <h3 id="optimization-selected-title">No candidate selected</h3>
+            <div id="optimization-selected-parameters" class="selected-parameters"></div>
+            <div id="optimization-selected-objectives" class="selected-objectives"></div>
+          </section>
+          <section>
+            <p class="step">WORST-CORNER MARGINS</p>
+            <div id="optimization-selected-constraints" class="constraint-results"></div>
+          </section>
+        </div>
+
+        <section class="pareto-section">
+          <div class="subsection-heading">
+            <div><p class="step">OBJECTIVE SPACE</p><h3>Feasible and Pareto candidates</h3></div>
+            <span class="read-only-badge">Read only</span>
+          </div>
+          <p class="editor-note">Each point uses the candidate's worst named-corner result. The selected design is marked in LTspice red.</p>
+          <div id="optimization-pareto-plot" class="pareto-chart"></div>
+        </section>
+
+        <details class="candidate-evidence">
+          <summary id="optimization-candidate-summary">Candidate evidence</summary>
+          <div class="table-wrap">
+            <table class="candidate-table">
+              <thead><tr><th>Candidate</th><th>Status</th><th>Design</th><th>Worst-corner objectives</th><th>Decision evidence</th></tr></thead>
+              <tbody id="optimization-candidate-rows"></tbody>
+            </table>
+          </div>
+        </details>
+
+        <div class="result-evidence">
+          <span class="label">Portable evidence</span>
+          <div id="optimization-evidence-links"></div>
+        </div>
+      </section>
     </section>
 
     <section id="history" class="history-section">

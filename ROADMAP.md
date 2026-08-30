@@ -1270,11 +1270,36 @@ GUI-C2 verification gate:
   cancellation, resume, discovery, session/origin guards, and the static
   interaction contract
 
+#### System Builder GUI-C3: Engineering optimization results — complete
+
+- Adds a dedicated read-only result endpoint for completed durable jobs; job
+  discovery remains lightweight and no local absolute paths are returned
+- Shows the deterministic winner, engineering-formatted component values,
+  worst-corner objectives, and every hard-constraint margin
+- Plots all feasible candidates in the two-objective space and distinguishes
+  feasible, Pareto, and selected designs without adding a GUI-side evaluator
+- Explains constraint failures and analysis errors in an expandable candidate
+  table, with session-protected links to the full HTML, JSON, CSV, and immutable
+  plan evidence
+- Recovers the completed result after refresh without re-evaluating, resuming,
+  or launching any simulator work
+
+GUI-C3 verification gate:
+
+- The retained 64-run DAQ study resolves to 16 candidates, 14 feasible, two
+  constraint failures, zero invalid candidates, one Pareto candidate, and
+  deterministic candidate 15
+- Candidate 15 displays CAA1/CAA2 = 100 pF, RAA1 = 1 kΩ, ROUT = 65 Ω,
+  -28.65 dB worst-corner alias gain, and 1.115 µs worst-corner settling
+- The result API confirms every portable evidence link and repeated discovery
+  leaves the durable optimization manifest unchanged
+- Backend and static-contract tests cover session guarding, identity mismatch,
+  path sanitization, result controls, engineering formatting, and plot wiring
+
 Next System Builder slices:
 
-1. GUI-C3 — Pareto, rejection, margin, and deterministic-winner results
-2. GUI-C4 — selected-finalist tolerance and corner qualification
-3. GUI-D — Windows packaging and deliberately gated remote GitHub execution
+1. GUI-C4 — selected-finalist tolerance and corner qualification
+2. GUI-D — Windows packaging and deliberately gated remote GitHub execution
 
 ### Phase 5: Flagship portable mixed-signal DAQ/scope
 
