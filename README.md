@@ -215,6 +215,15 @@ JSON, CSV, manifest, and HTML evidence.
 Read [docs/WINDOWS.md](docs/WINDOWS.md) for installation, troubleshooting,
 workflow invocation, and verified cross-platform qualification results.
 
+## macOS
+
+Double-click `Start-SystemBuilder.command` (or run it from a terminal) for the
+no-admin first-start path: it creates a private `.venv`, installs the GUI
+dependencies, finds LTspice at `/Applications/LTspice.app`, and opens System
+Builder in the default browser on a random loopback-only port. Install
+LTspice first with `brew install --cask ltspice`, then launch it once to
+answer its usage-data prompt.
+
 ## Tests and quality gates
 
 Run the same local gates used by CI:

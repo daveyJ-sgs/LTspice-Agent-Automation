@@ -29,6 +29,11 @@ performs Python/LTspice diagnostics automatically:
 See [Windows setup and qualification](WINDOWS.md#start-system-builder) for
 first-run behavior, an explicit workspace example, and troubleshooting.
 
+On macOS, double-click `Start-SystemBuilder.command` (or run it from a
+terminal). It creates the private `.venv`, installs the GUI dependencies,
+finds `/Applications/LTspice.app`, and opens the same loopback-only
+application. No administrator access or machine-wide changes.
+
 The application opens the default browser on a random `127.0.0.1` port. The
 bundled reference recipe is
 [`examples/mixed_signal_daq.ltstudy.json`](../examples/mixed_signal_daq.ltstudy.json).
