@@ -197,24 +197,29 @@ def create_qualification_router(
         denied = authorize_read(request)
         if denied is not None:
             return denied
-        if not 1 <= limit <= 32:
+        if not isinstance(limit, int) or not 1 <= limit <= 32:
             return json_error(400, "qualification_job_limit", "limit must be 1 to 32")
         root = workspace / "runs" / "qualification-jobs"
-        if not root.is_dir():
+        if not root.is_dir() or root.is_symlink():
             return JSONResponse({"jobs": []})
-        jobs = []
-        for path in sorted(
-            root.glob("qualification-job-*"),
-            key=lambda item: item.stat().st_mtime_ns,
+        paths = sorted(
+            (
+                path
+                for path in root.glob("qualification-job-*")
+                if path.is_dir() and not path.is_symlink()
+            ),
+            key=lambda path: path.stat().st_mtime_ns,
             reverse=True,
-        )[:limit]:
+        )[:limit]
+        jobs = []
+        for path in paths:
             try:
                 jobs.append(
                     qualification_job_payload(
                         get_qualification_manager().snapshot(path.name)
                     )
                 )
-            except (OSError, ValueError):
+            except (FileNotFoundError, OSError, RuntimeError, ValueError):
                 continue
         return JSONResponse({"jobs": jobs})
 
@@ -227,7 +232,7 @@ def create_qualification_router(
             return JSONResponse(
                 qualification_job_payload(get_qualification_manager().snapshot(job_id))
             )
-        except (FileNotFoundError, OSError, ValueError) as exc:
+        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
             return json_error(404, "qualification_job_not_found", str(exc))
 
     @router.get("/api/qualification/jobs/{job_id}/results")
@@ -238,7 +243,7 @@ def create_qualification_router(
         try:
             snapshot = get_qualification_manager().snapshot(job_id)
             return JSONResponse(qualification_results_payload(snapshot))
-        except (FileNotFoundError, OSError, ValueError) as exc:
+        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
             return json_error(404, "qualification_results_not_found", str(exc))
 
     @router.post("/api/qualification/jobs/{job_id}/cancel")
@@ -250,7 +255,7 @@ def create_qualification_router(
             return JSONResponse(
                 qualification_job_payload(get_qualification_manager().cancel(job_id))
             )
-        except (OSError, RuntimeError, ValueError) as exc:
+        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
             return json_error(409, "qualification_cancel_failed", str(exc))
 
     @router.post("/api/qualification/jobs/{job_id}/resume")
@@ -263,7 +268,7 @@ def create_qualification_router(
                 qualification_job_payload(get_qualification_manager().resume(job_id)),
                 status_code=202,
             )
-        except (OSError, RuntimeError, ValueError) as exc:
+        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
             return json_error(409, "qualification_resume_failed", str(exc))
 
     return router
