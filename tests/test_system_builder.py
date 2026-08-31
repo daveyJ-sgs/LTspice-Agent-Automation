@@ -70,6 +70,43 @@ class FakeOptimizationManager:
         return dict(self._snapshot)
 
 
+class FakeRemoteClient:
+    def __init__(self) -> None:
+        self.dispatched: list[tuple[dict[str, object], dict[str, object]]] = []
+        self.record: dict[str, object] = {
+            "remote_job_id": "remote-job-0123456789abcdef",
+            "status": "queued",
+            "state": "submitted",
+            "run_id": "123",
+            "run_url": "https://github.com/owner/repo/actions/runs/123",
+            "evidence_available": False,
+            "reports": [],
+        }
+
+    def auth_status(self) -> dict[str, object]:
+        return {"available": True, "provider": "github_cli"}
+
+    def dispatch(
+        self, preview: dict[str, object], envelope: dict[str, object]
+    ) -> dict[str, object]:
+        self.dispatched.append((preview, envelope))
+        return dict(self.record)
+
+    def list_jobs(self) -> list[dict[str, object]]:
+        return [dict(self.record)]
+
+    def refresh(self, _remote_job_id: str) -> dict[str, object]:
+        return {**self.record, "status": "in_progress", "state": "running"}
+
+    def download(self, _remote_job_id: str) -> dict[str, object]:
+        return {
+            **self.record,
+            "status": "completed",
+            "state": "evidence_verified",
+            "evidence_available": True,
+        }
+
+
 class SystemBuilderTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(
@@ -125,6 +162,7 @@ class SystemBuilderTests(unittest.TestCase):
             ("GET", "/api/qualification/jobs"),
             ("GET", "/api/qualification/jobs/{job_id}"),
             ("GET", "/api/qualification/jobs/{job_id}/results"),
+            ("GET", "/api/remote/jobs"),
             ("GET", "/api/schematic/files"),
             ("GET", "/api/schematic/image"),
             ("GET", "/api/session"),
@@ -150,6 +188,10 @@ class SystemBuilderTests(unittest.TestCase):
             ("POST", "/api/qualification/jobs/{job_id}/resume"),
             ("POST", "/api/qualification/preview"),
             ("POST", "/api/qualification/start"),
+            ("POST", "/api/remote/auth"),
+            ("POST", "/api/remote/dispatch"),
+            ("POST", "/api/remote/jobs/{remote_job_id}/download"),
+            ("POST", "/api/remote/jobs/{remote_job_id}/refresh"),
             ("POST", "/api/remote/preview"),
             ("POST", "/api/schematic/capture"),
             ("POST", "/api/start"),
@@ -167,7 +209,8 @@ class SystemBuilderTests(unittest.TestCase):
         session = self.client.get("/api/session")
         self.assertEqual(session.status_code, 200)
         self.assertEqual(session.json()["mode"], "local-only")
-        self.assertFalse(session.json()["remote_execution"])
+        self.assertTrue(session.json()["remote_execution"])
+        self.assertEqual(session.json()["remote_default"], "disabled")
 
     def test_api_requires_the_browser_session(self) -> None:
         response = self.client.get("/api/session")
@@ -792,6 +835,90 @@ class SystemBuilderTests(unittest.TestCase):
             self.assertEqual(unknown.status_code, 409)
             self.assertEqual(unknown.json()["error"]["code"], "freeze_required")
 
+    def test_remote_dispatch_requires_exact_preview_and_explicit_acknowledgement(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            recipe = self._workspace_recipe(workspace)
+            remote = FakeRemoteClient()
+            client = TestClient(
+                system_builder.create_app(
+                    workspace, testing=True, remote_client=remote
+                ),
+                base_url="http://testserver",
+            )
+            client.get("/")
+            preview = client.post(
+                "/api/preview", json=recipe, headers=self._headers()
+            ).json()
+            frozen = client.post(
+                "/api/freeze",
+                json={
+                    "recipe": recipe,
+                    "expected_recipe_sha256": preview["recipe"]["sha256"],
+                    "expected_plan_id": preview["plan"]["plan_id"],
+                },
+                headers=self._headers(),
+            ).json()
+            remote_preview = client.post(
+                "/api/remote/preview",
+                json={
+                    "launch_token": frozen["launch_token"],
+                    "confirmed_plan_id": frozen["plan"]["plan_id"],
+                    "confirmed_run_count": frozen["execution"]["total_run_count"],
+                    "repository": "daveyJ-sgs/LTspice-Agent-Automation",
+                    "ref": "main",
+                },
+                headers=self._headers(),
+            ).json()
+            payload = {
+                "launch_token": frozen["launch_token"],
+                "confirmed_plan_id": frozen["plan"]["plan_id"],
+                "confirmed_run_count": frozen["execution"]["total_run_count"],
+                "confirmed_preview_id": remote_preview["preview_id"],
+                "confirmed_preview_sha256": remote_preview["preview_sha256"],
+                "repository": "daveyJ-sgs/LTspice-Agent-Automation",
+                "ref": "main",
+                "recipe": recipe,
+                "acknowledged": False,
+            }
+
+            denied = client.post(
+                "/api/remote/dispatch", json=payload, headers=self._headers()
+            )
+            submitted = client.post(
+                "/api/remote/dispatch",
+                json={**payload, "acknowledged": True},
+                headers=self._headers(),
+            )
+            repeated = client.post(
+                "/api/remote/dispatch",
+                json={**payload, "acknowledged": True},
+                headers=self._headers(),
+            )
+
+            self.assertEqual(denied.status_code, 400)
+            self.assertEqual(submitted.status_code, 202)
+            self.assertEqual(repeated.status_code, 200)
+            self.assertEqual(len(remote.dispatched), 1)
+            dispatched_preview, envelope = remote.dispatched[0]
+            self.assertEqual(
+                dispatched_preview["preview_sha256"], remote_preview["preview_sha256"]
+            )
+            self.assertLessEqual(envelope["encoded_bytes"], 24 * 1024)
+            self.assertEqual(
+                client.get("/api/remote/jobs").json()["jobs"][0]["run_id"], "123"
+            )
+            refreshed = client.post(
+                "/api/remote/jobs/remote-job-0123456789abcdef/refresh",
+                headers=self._headers(),
+            )
+            downloaded = client.post(
+                "/api/remote/jobs/remote-job-0123456789abcdef/download",
+                headers=self._headers(),
+            )
+            self.assertEqual(refreshed.json()["state"], "running")
+            self.assertTrue(downloaded.json()["evidence_available"])
+
     def test_start_requires_exact_confirmation_and_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
@@ -1115,6 +1242,8 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertIn("renderScopedErrors", javascript)
         self.assertIn('fetch("/api/freeze"', javascript)
         self.assertIn('fetch("/api/remote/preview"', javascript)
+        self.assertIn('fetch("/api/remote/dispatch"', javascript)
+        self.assertIn('fetch("/api/remote/auth"', javascript)
         self.assertIn('fetch("/api/start"', javascript)
         self.assertIn('mutateJob(job.experiment_id, "finalize")', javascript)
         self.assertIn('mutateJob(job.experiment_id, "cancel")', javascript)
@@ -1135,6 +1264,9 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertIn('id="remote-preview-controls"', html)
         self.assertIn('id="remote-repository"', html)
         self.assertIn('id="remote-ref"', html)
+        self.assertIn('id="remote-acknowledgement"', html)
+        self.assertIn('id="remote-dispatch-button"', html)
+        self.assertIn('id="remote-jobs-panel"', html)
         self.assertIn('id="optimization-domains"', html)
         self.assertIn('id="optimization-file"', html)
         self.assertIn('id="optimization-save"', html)

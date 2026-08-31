@@ -245,6 +245,18 @@ td:first-child { color: var(--text); font-weight: 600; }
 .remote-preview { margin-top: 14px; border: 1px solid var(--border-strong); background: var(--surface); padding: 13px; }
 .compact-fields { margin: 10px 0; }
 .remote-safety-note { color: var(--muted); font-size: 10px; line-height: 1.45; margin: 9px 0 0; }
+.remote-dispatch-gate { margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--border); }
+.remote-dispatch-gate > p { color: var(--muted); font-size: 10px; line-height: 1.45; margin: 0 0 5px; }
+.remote-dispatch-gate > p strong { color: var(--text); font: 600 10px "IBM Plex Mono", monospace; text-transform: uppercase; }
+.remote-actions { margin: 9px 0 0; }
+.remote-job-list { display: grid; gap: 7px; margin-top: 12px; }
+.remote-job { border: 1px solid var(--border); background: var(--surface-raised); padding: 10px; }
+.remote-job-heading { display: flex; justify-content: space-between; gap: 10px; align-items: start; }
+.remote-job strong, .remote-job small, .remote-job code { display: block; }
+.remote-job small { color: var(--muted); margin-top: 3px; font-size: 10px; }
+.remote-job code { color: var(--subtle); margin-top: 7px; overflow-wrap: anywhere; font: 400 9px "IBM Plex Mono", monospace; }
+.remote-job .job-actions { margin-top: 9px; }
+.remote-job .report-link { margin-right: 10px; }
 .confirmation-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin: 10px 0; background: var(--border); }
 .confirmation-grid div { min-width: 0; background: var(--surface-raised); padding: 8px; }
 .confirmation-grid dt { color: var(--subtle); font: 600 9px "IBM Plex Mono", monospace; text-transform: uppercase; }

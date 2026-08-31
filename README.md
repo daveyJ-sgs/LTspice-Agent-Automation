@@ -47,7 +47,8 @@ feedback before and during board design.
 - MCP server exposing the toolkit as native agent tools
 - Local synchronous and asynchronous REST API
 - **LTspice System Builder**, a local-only human interface for portable study
-  definition, safe plan preview, execution, and engineering review
+  definition, safe plan preview, local or explicitly authorized GitHub Windows
+  execution, and engineering review
 - Unit and acceptance tests covering circuits from an RC divider through a
   mixed-signal DAQ acquisition channel
 
@@ -137,8 +138,10 @@ The application opens on a random loopback-only `127.0.0.1` port. It supports
 durable statistical and optimization jobs, cancel/resume recovery, native
 LTspice schematic capture, completed-run decision views, and linked portable
 evidence. Preview never publishes a plan or launches LTspice. A credential-free
-GitHub workload preview can bind an unstarted frozen plan to a proposed Windows
-target and evidence contract; remote dispatch remains disabled.
+GitHub workload preview can bind an unstarted frozen plan to a Windows target
+and evidence contract. Remote execution is separately acknowledged, uses the
+user's existing GitHub CLI login, and admits downloaded evidence only after its
+manifest and SHA-256 hashes verify.
 
 Read the [System Builder guide](docs/SYSTEM_BUILDER.md) for setup, security,
 schematic capture, optimization, tolerance qualification, and recovery.

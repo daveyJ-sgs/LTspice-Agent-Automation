@@ -87,7 +87,8 @@ def create_core_router(
             {
                 "product": "LTspice System Builder",
                 "mode": "local-only",
-                "remote_execution": False,
+                "remote_execution": True,
+                "remote_default": "disabled",
                 "workspace": str(workspace),
             }
         )

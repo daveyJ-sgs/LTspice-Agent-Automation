@@ -5,6 +5,9 @@ let previewTimer = null;
 let previewSequence = 0;
 let latestPreview = null;
 let frozenLaunch = null;
+let latestRemotePreview = null;
+let remoteAuthReady = false;
+let remoteJobs = new Map();
 let trackedJobs = new Map();
 let jobPollTimer = null;
 let variableDisplayUnits = new WeakMap();
@@ -155,11 +158,17 @@ function removeButton(label, handler) {
 function invalidateFrozenPlan() {
   latestPreview = null;
   frozenLaunch = null;
+  latestRemotePreview = null;
+  remoteAuthReady = false;
   byId("freeze-button").disabled = true;
   byId("execution-confirmation").hidden = true;
   byId("remote-preview-controls").hidden = true;
   byId("remote-preview-result").hidden = true;
   byId("remote-preview-button").disabled = true;
+  byId("remote-acknowledgement").checked = false;
+  byId("remote-auth-button").disabled = false;
+  byId("remote-dispatch-button").disabled = true;
+  byId("remote-auth-status").textContent = "GitHub access has not been checked.";
   if (trackedJobs.size === 0) byId("launch-result").hidden = true;
   byId("execution-acknowledgement").checked = false;
   byId("execution-acknowledgement").disabled = false;
@@ -1313,6 +1322,8 @@ async function previewRemoteExecution() {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error?.message || "Remote preview failed");
+    latestRemotePreview = result;
+    remoteAuthReady = false;
     byId("remote-target-repository").textContent = result.target.repository;
     byId("remote-target-ref").textContent = result.target.ref;
     byId("remote-target-runner").textContent = result.target.runner;
@@ -1320,15 +1331,200 @@ async function previewRemoteExecution() {
     byId("remote-run-count").textContent = result.workload.total_run_count.toLocaleString();
     byId("remote-retention").textContent = `${result.evidence.retention_days} days`;
     byId("remote-preview-id").textContent = `${result.preview_id} · ${result.preview_sha256}`;
-    byId("remote-evidence-formats").textContent = `Expected evidence: ${result.evidence.formats.join(", ")}. Dispatch and credentials remain disabled.`;
+    byId("remote-evidence-formats").textContent = `Expected evidence: ${result.evidence.formats.join(", ")}. Nothing is sent until the separate acknowledgement and dispatch action.`;
+    byId("remote-acknowledgement").checked = false;
+    byId("remote-dispatch-button").disabled = true;
+    byId("remote-auth-status").textContent = "GitHub access has not been checked.";
+    byId("remote-mode-status").className = "status-pill idle";
+    byId("remote-mode-status").textContent = "Awaiting authorization";
     byId("remote-preview-result").hidden = false;
     renderErrors([]);
   } catch (error) {
+    latestRemotePreview = null;
+    remoteAuthReady = false;
     renderErrors([{path: "remote_preview", message: error.message}]);
     byId("remote-preview-result").hidden = true;
   } finally {
     button.disabled = frozenLaunch === null;
     button.textContent = "Preview GitHub workload";
+  }
+}
+
+function updateRemoteDispatchGate() {
+  byId("remote-dispatch-button").disabled = !(
+    latestRemotePreview
+    && remoteAuthReady
+    && byId("remote-acknowledgement").checked
+  );
+}
+
+async function checkRemoteAuth() {
+  const button = byId("remote-auth-button");
+  button.disabled = true;
+  button.textContent = "Checking…";
+  try {
+    const response = await fetch("/api/remote/auth", {
+      method: "POST",
+      headers: {"X-LTspice-System-Builder": "1"},
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "GitHub access check failed");
+    remoteAuthReady = result.available === true;
+    byId("remote-auth-status").textContent = "GitHub CLI is authenticated. Its credential remains outside System Builder.";
+    byId("remote-mode-status").className = "status-pill valid";
+    byId("remote-mode-status").textContent = "Access verified";
+    renderErrors([]);
+  } catch (error) {
+    remoteAuthReady = false;
+    byId("remote-auth-status").textContent = error.message;
+    byId("remote-mode-status").className = "status-pill invalid";
+    byId("remote-mode-status").textContent = "Access unavailable";
+  } finally {
+    button.disabled = false;
+    button.textContent = "Check GitHub access";
+    updateRemoteDispatchGate();
+  }
+}
+
+function remoteJobStatusClass(job) {
+  if (job.state === "evidence_verified" || job.conclusion === "success") return "completed";
+  if (job.conclusion && job.conclusion !== "success") return "failed";
+  if (["queued", "in_progress", "waiting", "pending"].includes(job.status)) return "active";
+  return "defined";
+}
+
+function renderRemoteJobs() {
+  const panel = byId("remote-jobs-panel");
+  const container = byId("remote-job-list");
+  const jobs = [...remoteJobs.values()];
+  panel.hidden = jobs.length === 0;
+  const cards = jobs.map((job) => {
+    const card = document.createElement("section");
+    card.className = "remote-job";
+    const heading = document.createElement("div");
+    heading.className = "remote-job-heading";
+    const identity = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = job.preview_id || job.remote_job_id;
+    const target = document.createElement("small");
+    target.textContent = `${job.repository || "GitHub"} · ${job.ref || "—"}`;
+    identity.append(title, target);
+    const status = document.createElement("span");
+    status.className = `job-status ${remoteJobStatusClass(job)}`;
+    status.textContent = job.state || job.status || "unknown";
+    heading.append(identity, status);
+    const detail = document.createElement("code");
+    detail.textContent = `${job.remote_job_id} · run ${job.run_id || "pending"}`;
+    const actions = document.createElement("div");
+    actions.className = "job-actions";
+    if (job.run_url) {
+      const runLink = document.createElement("a");
+      runLink.className = "report-link";
+      runLink.href = job.run_url;
+      runLink.target = "_blank";
+      runLink.rel = "noreferrer";
+      runLink.textContent = "Open GitHub run";
+      actions.append(runLink);
+    }
+    const refresh = document.createElement("button");
+    refresh.type = "button";
+    refresh.className = "compact-button";
+    refresh.textContent = "Refresh";
+    refresh.addEventListener("click", () => mutateRemoteJob(job.remote_job_id, "refresh", refresh));
+    actions.append(refresh);
+    if (job.status === "completed" && job.conclusion === "success" && !job.evidence_available) {
+      const download = document.createElement("button");
+      download.type = "button";
+      download.className = "compact-button";
+      download.textContent = "Download + verify";
+      download.addEventListener("click", () => mutateRemoteJob(job.remote_job_id, "download", download));
+      actions.append(download);
+    }
+    for (const report of job.reports || []) {
+      const link = document.createElement("a");
+      link.className = "report-link";
+      link.href = report.url;
+      link.textContent = `Open ${report.name} report`;
+      actions.append(link);
+    }
+    card.append(heading, detail, actions);
+    return card;
+  });
+  container.replaceChildren(...cards);
+}
+
+async function loadRemoteJobs() {
+  try {
+    const response = await fetch("/api/remote/jobs");
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Remote jobs could not be read");
+    remoteJobs = new Map((result.jobs || []).map((job) => [job.remote_job_id, job]));
+    renderRemoteJobs();
+  } catch (error) {
+    renderErrors([{path: "remote_jobs", message: error.message}]);
+  }
+}
+
+async function mutateRemoteJob(remoteJobId, action, button) {
+  button.disabled = true;
+  const label = button.textContent;
+  button.textContent = action === "download" ? "Verifying…" : "Refreshing…";
+  try {
+    const response = await fetch(`/api/remote/jobs/${encodeURIComponent(remoteJobId)}/${action}`, {
+      method: "POST",
+      headers: {"X-LTspice-System-Builder": "1"},
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || `Remote ${action} failed`);
+    remoteJobs.set(result.remote_job_id, result);
+    renderRemoteJobs();
+    renderErrors([]);
+  } catch (error) {
+    renderErrors([{path: `remote_${action}`, message: error.message}]);
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
+async function dispatchRemoteStudy() {
+  if (!recipe || !frozenLaunch || !latestRemotePreview || !remoteAuthReady) return;
+  const button = byId("remote-dispatch-button");
+  button.disabled = true;
+  button.textContent = "Dispatching…";
+  try {
+    const response = await fetch("/api/remote/dispatch", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({
+        launch_token: frozenLaunch.launch_token,
+        confirmed_plan_id: frozenLaunch.plan.plan_id,
+        confirmed_run_count: frozenLaunch.execution.total_run_count,
+        confirmed_preview_id: latestRemotePreview.preview_id,
+        confirmed_preview_sha256: latestRemotePreview.preview_sha256,
+        repository: byId("remote-repository").value.trim(),
+        ref: byId("remote-ref").value.trim(),
+        recipe,
+        acknowledged: byId("remote-acknowledgement").checked,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Remote dispatch failed");
+    remoteJobs.set(result.job.remote_job_id, result.job);
+    renderRemoteJobs();
+    byId("security-label").textContent = "Remote active";
+    byId("remote-mode-status").className = "status-pill valid";
+    byId("remote-mode-status").textContent = "Submitted";
+    byId("remote-acknowledgement").disabled = true;
+    byId("remote-auth-button").disabled = true;
+    button.textContent = "Plan dispatched";
+    renderErrors([]);
+  } catch (error) {
+    button.textContent = "Dispatch exact plan";
+    renderErrors([{path: "remote_dispatch", message: error.message}]);
+    updateRemoteDispatchGate();
   }
 }
 
@@ -1393,15 +1589,21 @@ async function loadInitialState() {
   populateRecipeControls();
   await loadSchematicFiles();
   await preview();
-  await loadHistory();
+  await Promise.all([loadHistory(), loadRemoteJobs()]);
 }
 
 byId("preview-button").addEventListener("click", preview);
 byId("freeze-button").addEventListener("click", freezePlan);
 byId("remote-preview-button").addEventListener("click", previewRemoteExecution);
+byId("remote-auth-button").addEventListener("click", checkRemoteAuth);
+byId("remote-dispatch-button").addEventListener("click", dispatchRemoteStudy);
+byId("remote-acknowledgement").addEventListener("change", updateRemoteDispatchGate);
 for (const id of ["remote-repository", "remote-ref"]) {
   byId(id).addEventListener("input", () => {
+    latestRemotePreview = null;
+    remoteAuthReady = false;
     byId("remote-preview-result").hidden = true;
+    byId("remote-dispatch-button").disabled = true;
   });
 }
 byId("execution-acknowledgement").addEventListener("change", () => {

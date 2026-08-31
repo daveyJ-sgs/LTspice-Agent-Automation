@@ -1,7 +1,21 @@
 name: Real LTspice Windows qualification
+run-name: Real LTspice ${{ inputs.remote_preview_id || 'qualification' }}
 
 on:
   workflow_dispatch:
+    inputs:
+      remote_preview_id:
+        description: Content-addressed System Builder preview identity
+        required: false
+        type: string
+      remote_envelope_sha256:
+        description: SHA-256 of the decoded canonical remote-study envelope
+        required: false
+        type: string
+      remote_envelope:
+        description: Bounded zlib/base64 remote-study envelope
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -18,6 +32,9 @@ jobs:
       LTSPICE_VERSION: 26.0.2
       LTSPICE_MSI_SHA256: 485dabd2d7d8293de733a399719f6538efda4a54b48b181a14e07271186984d3
       PYTHONPATH: .
+      REMOTE_ENVELOPE: ${{ inputs.remote_envelope }}
+      REMOTE_ENVELOPE_SHA256: ${{ inputs.remote_envelope_sha256 }}
+      REMOTE_PREVIEW_ID: ${{ inputs.remote_preview_id }}
     steps:
       - uses: actions/checkout@v7
 
@@ -28,6 +45,31 @@ jobs:
       - name: Install Python analysis dependencies
         shell: pwsh
         run: python -m pip install -r requirements.txt -r requirements-mcp.txt
+
+      - name: Configure and verify requested qualification
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $hasPreview = -not [string]::IsNullOrWhiteSpace($env:REMOTE_PREVIEW_ID)
+          $hasHash = -not [string]::IsNullOrWhiteSpace($env:REMOTE_ENVELOPE_SHA256)
+          $hasEnvelope = -not [string]::IsNullOrWhiteSpace($env:REMOTE_ENVELOPE)
+          $providedCount = 0
+          foreach ($value in @($hasPreview, $hasHash, $hasEnvelope)) {
+            if ($value) { $providedCount += 1 }
+          }
+          if ($providedCount -notin 0, 3) {
+            throw "remote workflow inputs must be supplied together"
+          }
+          if ($hasPreview) {
+            python tests/real_ltspice_remote.py --validate-only
+            "REMOTE_MODE=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+            "REAL_LTSPICE_ARTIFACT_NAME=remote-ltspice-$env:REMOTE_PREVIEW_ID-$env:GITHUB_RUN_ID" |
+              Out-File -FilePath $env:GITHUB_ENV -Append
+          } else {
+            "REMOTE_MODE=0" | Out-File -FilePath $env:GITHUB_ENV -Append
+            "REAL_LTSPICE_ARTIFACT_NAME=real-ltspice-windows-$env:GITHUB_RUN_ID" |
+              Out-File -FilePath $env:GITHUB_ENV -Append
+          }
 
       - name: Download and verify official LTspice installer
         shell: pwsh
@@ -65,6 +107,8 @@ jobs:
           }
           "LTSPICE_EXECUTABLE=$executable" | Out-File -FilePath $env:GITHUB_ENV -Append
           "REAL_LTSPICE_EVIDENCE_DIR=$env:RUNNER_TEMP\ltspice-real-smoke" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
+          "REAL_LTSPICE_REMOTE_EVIDENCE_DIR=$env:RUNNER_TEMP\ltspice-remote-study" |
             Out-File -FilePath $env:GITHUB_ENV -Append
           (Get-Item $executable).VersionInfo |
             Select-Object FileVersion, ProductVersion, FileDescription
@@ -172,6 +216,7 @@ jobs:
           }
 
       - name: Capture the educational DAQ schematic through real LTspice
+        if: env.REMOTE_MODE == '0'
         shell: pwsh
         timeout-minutes: 2
         run: |
@@ -180,11 +225,13 @@ jobs:
             Stop-Process -Force
 
       - name: Run bounded real simulator verification
+        if: env.REMOTE_MODE == '0'
         shell: pwsh
         timeout-minutes: 3
         run: python tests/real_ltspice_smoke.py
 
       - name: Run complete structured DAQ qualification
+        if: env.REMOTE_MODE == '0'
         shell: pwsh
         timeout-minutes: 10
         env:
@@ -192,6 +239,7 @@ jobs:
         run: python tests/real_ltspice_daq.py
 
       - name: Run durable DAQ optimization and compare macOS baseline
+        if: env.REMOTE_MODE == '0'
         shell: pwsh
         timeout-minutes: 10
         env:
@@ -199,17 +247,24 @@ jobs:
         run: python tests/real_ltspice_optimization.py
 
       - name: Run DAQ finalist tolerance proof and compare macOS baseline
+        if: env.REMOTE_MODE == '0'
         shell: pwsh
         timeout-minutes: 20
         env:
           REAL_LTSPICE_OPTIMIZATION_EVIDENCE_DIR: ${{ runner.temp }}\ltspice-real-optimization
         run: python tests/real_ltspice_robust_selection.py
 
+      - name: Run submitted System Builder statistical study
+        if: env.REMOTE_MODE == '1'
+        shell: pwsh
+        timeout-minutes: 15
+        run: python tests/real_ltspice_remote.py
+
       - name: Upload compact verification evidence
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: real-ltspice-windows-${{ github.run_id }}
+          name: ${{ env.REAL_LTSPICE_ARTIFACT_NAME }}
           if-no-files-found: warn
           retention-days: 7
           path: |
@@ -223,3 +278,4 @@ jobs:
             ${{ runner.temp }}/ltspice-real-smoke/smoke_summary.json
             ${{ runner.temp }}/ltspice-real-daq
             ${{ runner.temp }}/ltspice-real-optimization
+            ${{ runner.temp }}/ltspice-remote-study

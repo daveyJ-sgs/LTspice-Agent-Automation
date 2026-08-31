@@ -67,7 +67,7 @@ agent-authored definition produce byte-identical statistical plans. Its default
 preview resolves 12 manufacturing samples across two ADC-load corners into 24
 points and two paired experiments: 48 prospective LTspice runs.
 
-## Remote execution preview
+## Remote Windows execution
 
 After freezing a statistical study, **Preview GitHub workload** binds that exact
 plan ID, complete plan SHA-256, recipe SHA-256, point count, and run count to a
@@ -76,12 +76,41 @@ content-derived ID and SHA-256 and forecasts the Windows runner, candidate
 workflow, seven-day retention, and expected RAW, log, manifest, JSON, CSV, and
 HTML evidence.
 
-This is a local calculation only. It creates no file, launches no process,
-makes no network request, and neither requests nor stores a credential. The
-candidate real-LTspice workflow still requires the GUI-D4 frozen-plan input
-contract before it can accept a System Builder dispatch. A changed recipe
-invalidates the frozen launch and its remote preview; a plan already started
-locally cannot be newly previewed for remote dispatch.
+Preview is a local calculation only. It creates no file, launches no process,
+makes no network request, and neither requests nor stores a credential. A
+changed recipe invalidates the frozen launch and its remote preview; a plan
+already started locally cannot be newly dispatched remotely.
+
+Dispatch is a separate external-action boundary. System Builder requires all
+of the following before enabling it:
+
+1. The recipe has been previewed and frozen into an immutable plan.
+2. The exact GitHub workload preview is still current.
+3. **Check GitHub access** confirms an existing authenticated `gh` session.
+4. The user acknowledges that the complete recipe, resolved netlists, analyses,
+   immutable plan, and confirmed run count will leave the computer.
+
+System Builder never reads, receives, logs, or writes the GitHub credential;
+GitHub CLI owns it. Install `gh`, authenticate with `gh auth login`, and ensure
+the active account can run Actions in the selected repository. Workflow inputs
+are not secrets, so proprietary circuit definitions belong in a private
+repository.
+
+The submitted envelope is compressed and size-bounded, then verified again on
+the Windows runner before LTspice starts. Its content identity covers the full
+recipe, immutable plan, and resolved experiment definitions. A dispatch intent
+is written locally before the network request and keyed by that identity, so a
+retry recovers the matching GitHub run instead of silently launching a
+duplicate.
+
+Remote jobs remain visible after a browser or System Builder restart. Status
+refresh and evidence download are explicit actions; there is no background
+network polling. A successful download is staged outside the durable job,
+checked against the runner's evidence manifest and every listed SHA-256, and
+only then admitted beneath `runs/remote-jobs/`. Verified HTML reports are linked
+from the recovered job card. GitHub retains the downloadable workflow artifact
+for seven days; the admitted local copy remains under the normal workspace
+retention policy.
 
 ## Durable local execution
 
@@ -182,9 +211,10 @@ light and dark themes.
 Local jobs write durable manifests and evidence beneath `runs/`. The browser may
 be closed while a job runs, but the System Builder process must remain active.
 If that process stops, a later launch recovers unfinished jobs through the
-durable engine and resumes automatic report processing. Remote execution remains
-disabled.
+durable engine and resumes automatic report processing. GitHub access occurs
+only through the explicit remote controls described above; the default session
+still performs no remote action.
 
 See the [MCP reference](MCP_REFERENCE.md) for the parallel agent-facing tool
-contracts and [ROADMAP.md](../ROADMAP.md) for planned GUI-D packaging and gated
-remote execution.
+contracts and [ROADMAP.md](../ROADMAP.md) for GUI-D packaging and gated remote
+execution.

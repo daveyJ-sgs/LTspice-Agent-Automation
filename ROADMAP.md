@@ -1405,9 +1405,19 @@ Next System Builder slices:
    - Each preview receives a deterministic content-derived identity; tests
      prove malformed targets and changed workloads fail closed while preview
      creates no files, processes, network requests, credentials, or GitHub run
-4. **GUI-D4 — Explicit remote dispatch and recovery**
+4. **GUI-D4 — Explicit remote dispatch and recovery — qualification in progress**
    - Require a separate acknowledgement, dispatch only the frozen plan, and
      retrieve verified evidence while keeping local-only mode the default
+   - Implemented: a bounded content-addressed envelope carries the exact recipe,
+     immutable plan, resolved netlists, and analyses to the real-LTspice Windows
+     workflow; GitHub CLI retains credential ownership and dispatch records are
+     durable and idempotent
+   - Implemented: explicit status refresh and artifact download admit evidence
+     only after the runner manifest, study identity, file inventory, and every
+     SHA-256 verify; browser restart recovery requires no network polling
+   - Completion gate: dispatch the flagship 48-run DAQ AC/transient study from
+     System Builder, pass Windows real-LTspice execution, recover the evidence,
+     and open the verified HTML reports locally
 
 ### Phase 5: Flagship portable mixed-signal DAQ/scope
 
@@ -1554,8 +1564,7 @@ expensive evaluation.
 
 ## Immediate next milestone
 
-Begin GUI-D4 with explicit acknowledgement, frozen-plan dispatch, remote status,
-and verified evidence retrieval. Preserve
-the local-only default, make every external action explicit and reviewable, and
-reuse the same immutable plans and portable evidence contracts rather than
-adding a second execution model.
+Complete GUI-D4 qualification by dispatching the exact flagship DAQ workload to
+the real-LTspice Windows runner and recovering its verified evidence through
+System Builder. Preserve the local-only default and the shared immutable-plan
+contract while proving the entire human-facing remote path end to end.

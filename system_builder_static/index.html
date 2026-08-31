@@ -20,9 +20,9 @@
     <div class="header-actions">
       <div class="security-state" tabindex="0" aria-describedby="local-security-detail">
         <span class="status-dot" aria-hidden="true"></span>
-        Local only
+        <span id="security-label">Local only</span>
         <span id="local-security-detail" class="security-tooltip" role="tooltip">
-          This session is bound to this computer. Remote preview is local and credential-free; dispatch remains disabled.
+          This interface remains loopback-only. GitHub access occurs only after an explicit access check, study acknowledgement, or remote-job action; credentials remain managed by GitHub CLI.
         </span>
       </div>
       <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch color theme" aria-pressed="false">
@@ -35,7 +35,7 @@
   <main>
     <section class="tool-intro">
       <div>
-        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-D3</p>
+        <p class="eyebrow">PROJECT / MIXED-SIGNAL DAQ / GUI-D4</p>
         <h1>1 MHz acquisition-channel engineering</h1>
         <p class="intro-copy">Configure tolerance qualification or inspect a deterministic optimization design space. Every Preview is non-mutating; confirmed work uses the existing durable evidence engines.</p>
       </div>
@@ -57,7 +57,7 @@
       </div>
       <div>
         <span class="label">Remote execution</span>
-        <strong>Preview only</strong>
+        <strong>Explicit only</strong>
       </div>
       <div>
         <span class="label">Current action</span>
@@ -219,7 +219,7 @@
                 <p class="step">REMOTE EXECUTION PREVIEW</p>
                 <h3>GitHub Windows qualification</h3>
               </div>
-              <span class="status-pill idle">No dispatch</span>
+              <span id="remote-mode-status" class="status-pill idle">No dispatch</span>
             </div>
             <div class="field-grid compact-fields">
               <label>
@@ -244,7 +244,31 @@
               </dl>
               <code id="remote-preview-id" class="artifact-path">—</code>
               <p id="remote-evidence-formats" class="remote-safety-note"></p>
+              <div class="remote-dispatch-gate">
+                <p><strong>External action boundary</strong></p>
+                <p>The complete circuit recipe, resolved netlists, analyses, and immutable plan will be submitted to GitHub Actions. Workflow inputs are not secrets; use a private repository for proprietary designs.</p>
+                <label class="execution-check">
+                  <input id="remote-acknowledgement" type="checkbox">
+                  <span>I authorize this exact preview and confirmed run count to leave this computer and execute on GitHub.</span>
+                </label>
+                <div class="button-row remote-actions">
+                  <button id="remote-auth-button" class="secondary-button" type="button">Check GitHub access</button>
+                  <button id="remote-dispatch-button" class="danger-button" type="button" disabled>Dispatch exact plan</button>
+                </div>
+                <p id="remote-auth-status" class="remote-safety-note">GitHub access has not been checked.</p>
+              </div>
             </div>
+          </section>
+
+          <section id="remote-jobs-panel" class="remote-preview" hidden>
+            <div class="subsection-heading">
+              <div>
+                <p class="step">REMOTE JOBS</p>
+                <h3>GitHub execution and evidence</h3>
+              </div>
+              <span class="status-pill idle">Recoverable</span>
+            </div>
+            <div id="remote-job-list" class="remote-job-list" aria-live="polite"></div>
           </section>
 
           <section id="launch-result" class="launch-result" aria-live="polite" hidden></section>

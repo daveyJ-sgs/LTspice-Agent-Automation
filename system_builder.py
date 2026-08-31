@@ -25,6 +25,7 @@ import optimization_study
 import qualification_study
 import robust_selection
 import schematic_capture
+from github_remote import GitHubRemote
 from study_recipe import (
     MAX_RECIPE_BYTES,
     load_recipe_experiments,
@@ -35,6 +36,7 @@ from system_builder_routes import (
     create_core_router,
     create_optimization_router,
     create_qualification_router,
+    create_remote_router,
     create_schematic_router,
     create_study_router,
     json_error,
@@ -71,6 +73,7 @@ def create_app(
     testing: bool = False,
     manager_factory: Callable[[Path], object] | None = None,
     schematic_capturer: Callable[[Path, object], dict[str, object]] | None = None,
+    remote_client: object | None = None,
 ) -> FastAPI:
     """Create one session-scoped loopback application."""
     workspace = workspace_root.resolve(strict=True)
@@ -79,6 +82,7 @@ def create_app(
     session_token = secrets.token_urlsafe(32)
     manager_builder = manager_factory or _default_manager_factory
     capture_builder = schematic_capturer or schematic_capture.capture_schematic
+    github_remote = remote_client or GitHubRemote(workspace / "runs")
     execution_manager: object | None = None
     optimization_manager: optimization_study.OptimizationStudyManager | None = None
     qualification_manager: qualification_study.QualificationStudyManager | None = None
@@ -681,6 +685,17 @@ def create_app(
             execution_lock=execution_lock,
             frozen_launches=frozen_launches,
             managed_jobs=managed_jobs,
+        )
+    )
+    app.include_router(
+        create_remote_router(
+            workspace=workspace,
+            authorize_read=authorize_read,
+            authorize_mutation=authorize_mutation,
+            read_json_body=read_json_body,
+            execution_lock=execution_lock,
+            frozen_launches=frozen_launches,
+            remote_client=github_remote,
         )
     )
     app.include_router(
