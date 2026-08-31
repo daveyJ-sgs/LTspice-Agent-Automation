@@ -260,8 +260,17 @@ jobs:
         timeout-minutes: 15
         run: python tests/real_ltspice_remote.py
 
-      - name: Upload compact verification evidence
-        if: always()
+      - name: Upload submitted remote-study evidence
+        if: always() && env.REMOTE_MODE == '1'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.REAL_LTSPICE_ARTIFACT_NAME }}
+          if-no-files-found: error
+          retention-days: 7
+          path: ${{ runner.temp }}/ltspice-remote-study
+
+      - name: Upload fixed qualification evidence
+        if: always() && env.REMOTE_MODE == '0'
         uses: actions/upload-artifact@v6
         with:
           name: ${{ env.REAL_LTSPICE_ARTIFACT_NAME }}
@@ -278,4 +287,3 @@ jobs:
             ${{ runner.temp }}/ltspice-real-smoke/smoke_summary.json
             ${{ runner.temp }}/ltspice-real-daq
             ${{ runner.temp }}/ltspice-real-optimization
-            ${{ runner.temp }}/ltspice-remote-study

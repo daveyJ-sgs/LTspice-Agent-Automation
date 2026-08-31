@@ -184,4 +184,6 @@ class RemoteWorkflowContractTests(unittest.TestCase):
         self.assertIn("real_ltspice_remote.py --validate-only", workflow)
         self.assertIn("if: env.REMOTE_MODE == '1'", workflow)
         self.assertIn("remote-ltspice-$env:REMOTE_PREVIEW_ID", workflow)
+        self.assertIn("Upload submitted remote-study evidence", workflow)
+        self.assertIn("path: ${{ runner.temp }}/ltspice-remote-study", workflow)
         self.assertIn("remote_evidence_manifest.json", Path(__file__).parents[1].joinpath("remote_study.py").read_text(encoding="utf-8"))
