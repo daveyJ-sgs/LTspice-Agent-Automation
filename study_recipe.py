@@ -492,13 +492,15 @@ def preview_study_recipe(
             "plan_sha256": plan_sha256,
             "definition_hash": plan["definition_hash"],
             "generator_version": plan["generator_version"],
-            "sampling_method": plan["definition"]["sampling_method"],
+            "sampling_method": plan["definition"].get(
+                "sampling_method", "independent"
+            ),
             "sample_count": plan["sample_count"],
             "corner_combination_count": point_count // plan["sample_count"],
             "point_count": point_count,
             "parameter_count": len(plan["parameter_order"]),
             "variables": plan["definition"]["variables"],
-            "corner_axes": plan["definition"]["corner_axes"],
+            "corner_axes": plan["definition"].get("corner_axes", []),
         },
         "execution": {
             "experiment_count": experiment_count,

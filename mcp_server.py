@@ -272,8 +272,8 @@ def _analyze_experiment_point(
         if step_index is not None:
             options["step_index"] = step_index
         try:
-            analysis_result = analyze_waveform(
-                str(output_dir),
+            analysis_result = _analyze_waveform_impl(
+                output_dir,
                 analysis["variable"],
                 analysis["requirements"],
                 **options,
@@ -707,9 +707,43 @@ def analyze_waveform(
     metrics use the optional secondary_variable.
     Stepped raw files require an explicit zero-based step_index.
     """
+    resolved = _resolve_run_dir(run_dir)
+    return _analyze_waveform_impl(
+        resolved,
+        variable,
+        requirements,
+        axis_variable=axis_variable,
+        step_index=step_index,
+        signal_unit=signal_unit,
+        axis_unit=axis_unit,
+        raw_filename=raw_filename,
+        secondary_variable=secondary_variable,
+    )
+
+
+def _analyze_waveform_impl(
+    resolved: Path,
+    variable: str,
+    requirements: list[waveform_metrics.WaveformRequirement],
+    axis_variable: str | None = None,
+    step_index: int | None = None,
+    signal_unit: str = "",
+    axis_unit: str | None = None,
+    raw_filename: str | None = None,
+    secondary_variable: str | None = None,
+) -> WaveformAnalysisResult:
+    """Shared implementation behind the analyze_waveform tool.
+
+    Takes an already-resolved, already-trusted directory rather than a raw
+    `run_dir` string, so an experiment's own per-point analysis (whose
+    directory was produced internally under the job's actual workspace, not
+    supplied by a caller) can reuse this logic without being incorrectly
+    re-confined to this module's fixed single-workspace RUNS_DIR. The public
+    analyze_waveform tool above still resolves and confines external input
+    before calling in.
+    """
     if not requirements:
         raise ValueError("requirements must be a non-empty list")
-    resolved = _resolve_run_dir(run_dir)
     raw_path = _find_raw(resolved, raw_filename)
     data = raw_parser.parse_raw(raw_path)
     axis_name = axis_variable or data.variables[0]

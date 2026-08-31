@@ -75,6 +75,69 @@ class StudyRecipeTests(unittest.TestCase):
         self.assertNotIn("statistical-plans", after)
         self.assertNotIn("runs", after)
 
+    def test_preview_accepts_a_recipe_with_no_sampling_method_or_corners(self) -> None:
+        """Regression: sampling_method and corner_axes are only written into
+        the engine's internal plan definition when non-default (see
+        statistical_engine._build_definition). A recipe that never opts into
+        either -- i.e. the plain default case -- must still preview cleanly
+        instead of KeyErroring on a key the definition never set.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "plain.cir").write_text(
+                "V1 in 0 AC 1\nR1 in out {R_VAL}\nC1 out 0 1u\n"
+                ".ac dec 10 10 10k\n.end\n"
+            )
+            recipe = {
+                "schema_version": study_recipe.STUDY_RECIPE_SCHEMA_VERSION,
+                "kind": "statistical",
+                "name": "minimal",
+                "description": "minimal recipe with no sampling_method or corners",
+                "plan": {
+                    "variables": [
+                        {
+                            "name": "R_VAL",
+                            "distribution": "gaussian",
+                            "nominal": 1000,
+                            "sigma": 10,
+                            "minimum": 950,
+                            "maximum": 1050,
+                            "unit": "ohm",
+                        }
+                    ],
+                    "sample_count": 4,
+                    "seed": 1,
+                },
+                "experiments": [
+                    {
+                        "name": "ac",
+                        "netlist_path": "plain.cir",
+                        "filename": "plain.cir",
+                        "waveform_analyses": [
+                            {
+                                "name": "check",
+                                "variable": "V(out)",
+                                "requirements": [
+                                    {
+                                        "metric": "ac_gain_db",
+                                        "operator": ">=",
+                                        "target": -1.0,
+                                        "frequency_value": 10,
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+                "execution": {"max_concurrency": 1, "reuse_cache": False},
+            }
+
+            preview = study_recipe.preview_study_recipe(recipe, root)
+
+        self.assertTrue(preview["valid"], preview.get("errors"))
+        self.assertEqual(preview["plan"]["sampling_method"], "independent")
+        self.assertEqual(preview["plan"]["corner_axes"], [])
+
     def test_invalid_sample_count_has_a_field_path(self) -> None:
         recipe = copy.deepcopy(self.recipe)
         recipe["plan"]["sample_count"] = 0

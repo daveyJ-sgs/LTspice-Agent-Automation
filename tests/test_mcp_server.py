@@ -677,6 +677,59 @@ class MCPServerTests(TemporaryRunsTestCase):
                 ["1k"] * (mcp_server.MAX_LEGACY_SWEEP_POINTS + 1),
             )
 
+    def test_analyze_experiment_point_is_not_confined_to_this_modules_runs_dir(
+        self,
+    ) -> None:
+        """Regression: System Builder's --workspace can point anywhere, so a
+        job's own point directory legitimately lives outside this module's
+        fixed RUNS_DIR (which self.setUp patches to match self.runs only for
+        this test class's convenience). Per-point analysis must evaluate that
+        directory directly rather than re-validating it against RUNS_DIR, or
+        every point in a non-default workspace fails with a confinement
+        error regardless of its actual simulation result.
+        """
+        outside_runs_dir = self.root / "elsewhere" / "point-0000" / "attempt-0000"
+        outside_runs_dir.mkdir(parents=True)
+        (outside_runs_dir / "circuit.raw").write_bytes(b"raw")
+        self.assertNotIn(self.runs, outside_runs_dir.parents)
+
+        raw_data = RawData(
+            flags="real",
+            variables=["time", "V(out)"],
+            values={"time": [0.0, 1.0], "V(out)": [0.5, 0.5]},
+            step_count=1,
+            points_per_step=2,
+        )
+        point: dict[str, object] = {
+            "index": 0,
+            "parameters": {},
+            "run_dir": str(outside_runs_dir),
+            "simulation_status": "completed",
+            "duration_seconds": 0.01,
+            "measurements": {},
+            "analyses": [],
+            "all_passed": False,
+            "error": None,
+        }
+        analyses = [
+            {
+                "name": "check",
+                "variable": "V(out)",
+                "requirements": [
+                    {"metric": "maximum", "operator": "<=", "target": 1.0}
+                ],
+            }
+        ]
+
+        with patch.object(mcp_server.raw_parser, "parse_raw", return_value=raw_data):
+            result = mcp_server._analyze_experiment_point(
+                point, outside_runs_dir, analyses
+            )
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["analyses"][0]["status"], "completed")
+        self.assertTrue(result["analyses"][0]["analysis"]["all_passed"])
+
     def test_run_experiment_expands_cartesian_points_and_reuses_requirements(self) -> None:
         rendered_netlists: list[str] = []
 
@@ -717,7 +770,7 @@ class MCPServerTests(TemporaryRunsTestCase):
         with (
             patch.object(mcp_server, "_run_netlist_text", side_effect=execute),
             patch.object(mcp_server, "_summarize_run", side_effect=summarize),
-            patch.object(mcp_server, "analyze_waveform", side_effect=analyze) as analysis,
+            patch.object(mcp_server, "_analyze_waveform_impl", side_effect=analyze) as analysis,
         ):
             result = mcp_server.run_experiment(
                 "R1 in out {R}\nC1 out 0 {C}\n.end\n",
@@ -1941,7 +1994,7 @@ class MCPServerTests(TemporaryRunsTestCase):
                 },
             ),
             patch.object(mcp_server.raw_parser, "parse_raw", return_value=raw_data),
-            patch.object(mcp_server, "analyze_waveform", side_effect=analyze),
+            patch.object(mcp_server, "_analyze_waveform_impl", side_effect=analyze),
         ):
             result = mcp_server.run_experiment(
                 "R1 in out {R}\nC1 out 0 {C}\n.param tau={TAU}\n.end\n",
@@ -2017,7 +2070,7 @@ class MCPServerTests(TemporaryRunsTestCase):
                     "cache": {"hit": True, "key": "native-cache-key"},
                 },
             ),
-            patch.object(mcp_server, "analyze_waveform") as analyze,
+            patch.object(mcp_server, "_analyze_waveform_impl") as analyze,
         ):
             result = mcp_server.run_experiment(
                 "R1 in out {R}\n.end\n",
@@ -2107,7 +2160,7 @@ class MCPServerTests(TemporaryRunsTestCase):
                 "parse_raw",
                 side_effect=lambda path: invalid if path.name == "custom.raw" else valid,
             ),
-            patch.object(mcp_server, "analyze_waveform") as analyze,
+            patch.object(mcp_server, "_analyze_waveform_impl") as analyze,
         ):
             result = mcp_server.run_experiment(
                 "R1 in out {R}\n.end\n",
@@ -2371,7 +2424,7 @@ class MCPServerTests(TemporaryRunsTestCase):
         with (
             patch.object(mcp_server, "_run_netlist_text", side_effect=execute) as execution,
             patch.object(mcp_server, "_summarize_run", side_effect=summarize),
-            patch.object(mcp_server, "analyze_waveform", side_effect=analyze) as analysis,
+            patch.object(mcp_server, "_analyze_waveform_impl", side_effect=analyze) as analysis,
         ):
             result = mcp_server.run_experiment(
                 "R1 in out {R}\n.end\n",
