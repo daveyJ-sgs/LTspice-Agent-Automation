@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import secrets
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -12,7 +11,13 @@ from fastapi.responses import JSONResponse, Response
 
 import qualification_recipe
 
-from .common import Authorization, JsonBodyReader, json_error
+from .common import (
+    Authorization,
+    JsonBodyReader,
+    add_job_crud_routes,
+    json_error,
+    mint_launch_token,
+)
 
 
 def create_qualification_router(
@@ -100,13 +105,9 @@ def create_qualification_router(
             experiments, execution, execution_sha256 = optimization_experiments()
         except (OSError, TypeError, ValueError) as exc:
             return json_error(409, "qualification_freeze_failed", str(exc))
-        launch_token = secrets.token_urlsafe(32)
-        with execution_lock:
-            while len(frozen_qualification_launches) >= 32:
-                frozen_qualification_launches.pop(
-                    next(iter(frozen_qualification_launches))
-                )
-            frozen_qualification_launches[launch_token] = {
+        launch_token = mint_launch_token(
+            frozen_qualification_launches,
+            {
                 "state": "ready",
                 "study_id": payload["study_id"],
                 "candidate_index": payload["candidate_index"],
@@ -116,7 +117,9 @@ def create_qualification_router(
                 "plan_id": published["plan_id"],
                 "total_run_count": payload["expected_total_run_count"],
                 "execution_sha256": execution_sha256,
-            }
+            },
+            execution_lock,
+        )
         return JSONResponse(
             {
                 "status": "frozen",
@@ -223,52 +226,19 @@ def create_qualification_router(
                 continue
         return JSONResponse({"jobs": jobs})
 
-    @router.get("/api/qualification/jobs/{job_id}")
-    def qualification_job(request: Request, job_id: str) -> Response:
-        denied = authorize_read(request)
-        if denied is not None:
-            return denied
-        try:
-            return JSONResponse(
-                qualification_job_payload(get_qualification_manager().snapshot(job_id))
-            )
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return json_error(404, "qualification_job_not_found", str(exc))
-
-    @router.get("/api/qualification/jobs/{job_id}/results")
-    def qualification_results(request: Request, job_id: str) -> Response:
-        denied = authorize_read(request)
-        if denied is not None:
-            return denied
-        try:
-            snapshot = get_qualification_manager().snapshot(job_id)
-            return JSONResponse(qualification_results_payload(snapshot))
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return json_error(404, "qualification_results_not_found", str(exc))
-
-    @router.post("/api/qualification/jobs/{job_id}/cancel")
-    def cancel_qualification(request: Request, job_id: str) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None:
-            return denied
-        try:
-            return JSONResponse(
-                qualification_job_payload(get_qualification_manager().cancel(job_id))
-            )
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return json_error(409, "qualification_cancel_failed", str(exc))
-
-    @router.post("/api/qualification/jobs/{job_id}/resume")
-    def resume_qualification(request: Request, job_id: str) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None:
-            return denied
-        try:
-            return JSONResponse(
-                qualification_job_payload(get_qualification_manager().resume(job_id)),
-                status_code=202,
-            )
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return json_error(409, "qualification_resume_failed", str(exc))
+    add_job_crud_routes(
+        router,
+        prefix="/api/qualification/jobs",
+        id_param="job_id",
+        authorize_read=authorize_read,
+        authorize_mutation=authorize_mutation,
+        manager_getter=get_qualification_manager,
+        payload_builder=qualification_job_payload,
+        not_found_code="qualification_job_not_found",
+        cancel_failed_code="qualification_cancel_failed",
+        resume_failed_code="qualification_resume_failed",
+        results_payload_builder=qualification_results_payload,
+        results_not_found_code="qualification_results_not_found",
+    )
 
     return router
