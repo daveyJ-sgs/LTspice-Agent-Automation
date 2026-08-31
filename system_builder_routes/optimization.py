@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import secrets
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -12,7 +11,13 @@ from fastapi.responses import JSONResponse, Response
 
 import optimization_recipe
 
-from .common import Authorization, JsonBodyReader, json_error
+from .common import (
+    Authorization,
+    JsonBodyReader,
+    add_job_crud_routes,
+    json_error,
+    mint_launch_token,
+)
 
 
 def create_optimization_router(
@@ -101,13 +106,9 @@ def create_optimization_router(
             )
         except (OSError, ValueError) as exc:
             return json_error(409, "optimization_freeze_failed", str(exc))
-        launch_token = secrets.token_urlsafe(32)
-        with execution_lock:
-            while len(frozen_optimization_launches) >= 32:
-                frozen_optimization_launches.pop(
-                    next(iter(frozen_optimization_launches))
-                )
-            frozen_optimization_launches[launch_token] = {
+        launch_token = mint_launch_token(
+            frozen_optimization_launches,
+            {
                 "state": "ready",
                 "recipe_sha256": expected_recipe_sha256,
                 "plan_id": expected_plan_id,
@@ -115,7 +116,9 @@ def create_optimization_router(
                 "total_run_count": expected_total_run_count,
                 "execution_sha256": execution_sha256,
                 "response": None,
-            }
+            },
+            execution_lock,
+        )
         return JSONResponse(
             {
                 "status": "frozen",
@@ -269,56 +272,19 @@ def create_optimization_router(
                 continue
         return JSONResponse({"jobs": jobs})
 
-    @router.get("/api/optimization/jobs/{optimization_job_id}")
-    def optimization_job(request: Request, optimization_job_id: str) -> Response:
-        denied = authorize_read(request)
-        if denied is not None:
-            return denied
-        try:
-            return JSONResponse(
-                optimization_job_payload(
-                    get_optimization_manager().snapshot(optimization_job_id)
-                )
-            )
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return json_error(404, "optimization_job_not_found", str(exc))
-
-    @router.get("/api/optimization/jobs/{optimization_job_id}/results")
-    def optimization_job_results(
-        request: Request, optimization_job_id: str
-    ) -> Response:
-        denied = authorize_read(request)
-        if denied is not None:
-            return denied
-        try:
-            snapshot = get_optimization_manager().snapshot(optimization_job_id)
-            return JSONResponse(optimization_results_payload(snapshot))
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return json_error(404, "optimization_results_not_found", str(exc))
-
-    @router.post("/api/optimization/jobs/{optimization_job_id}/cancel")
-    def cancel_optimization_job(request: Request, optimization_job_id: str) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None:
-            return denied
-        try:
-            return JSONResponse(
-                optimization_job_payload(
-                    get_optimization_manager().cancel(optimization_job_id)
-                )
-            )
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return json_error(409, "optimization_cancel_failed", str(exc))
-
-    @router.post("/api/optimization/jobs/{optimization_job_id}/resume")
-    def resume_optimization_job(request: Request, optimization_job_id: str) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None:
-            return denied
-        try:
-            snapshot = get_optimization_manager().resume(optimization_job_id)
-            return JSONResponse(optimization_job_payload(snapshot), status_code=202)
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return json_error(409, "optimization_resume_failed", str(exc))
+    add_job_crud_routes(
+        router,
+        prefix="/api/optimization/jobs",
+        id_param="optimization_job_id",
+        authorize_read=authorize_read,
+        authorize_mutation=authorize_mutation,
+        manager_getter=get_optimization_manager,
+        payload_builder=optimization_job_payload,
+        not_found_code="optimization_job_not_found",
+        cancel_failed_code="optimization_cancel_failed",
+        resume_failed_code="optimization_resume_failed",
+        results_payload_builder=optimization_results_payload,
+        results_not_found_code="optimization_results_not_found",
+    )
 
     return router

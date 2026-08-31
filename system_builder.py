@@ -298,15 +298,40 @@ def create_app(
         experiment_id = str(snapshot["experiment_id"])
         report = workspace / "runs" / experiment_id / "report.html"
         postprocess = postprocess_states.get(experiment_id, {"state": "pending"})
+        point_count = snapshot["point_count"]
+        finished_points = snapshot.get("finished_points", 0)
+        running_points = snapshot.get("running_points", 0)
+        pending_points = snapshot.get("pending_points", 0)
+        passed_points = snapshot.get("passed_points", 0)
+        failed_points = snapshot.get("failed_points", 0)
         return {
+            # "kind" and "job_id" are a normalized envelope, added alongside
+            # (not instead of) the pre-existing fields below: study jobs are
+            # genuinely a different shape from optimization/qualification
+            # jobs (N independent jobs here vs. one parent job with named
+            # children there), so this isn't pretending they're identical —
+            # it's giving every job payload a common minimal handle
+            # (kind + job_id + progress) a shared UI could read regardless
+            # of which domain it came from, without breaking any existing
+            # consumer of the original fields.
+            "kind": "study",
+            "job_id": experiment_id,
             "experiment_id": experiment_id,
             "status": snapshot["status"],
-            "point_count": snapshot["point_count"],
-            "finished_points": snapshot.get("finished_points", 0),
-            "running_points": snapshot.get("running_points", 0),
-            "pending_points": snapshot.get("pending_points", 0),
-            "passed_points": snapshot.get("passed_points", 0),
-            "failed_points": snapshot.get("failed_points", 0),
+            "point_count": point_count,
+            "finished_points": finished_points,
+            "running_points": running_points,
+            "pending_points": pending_points,
+            "passed_points": passed_points,
+            "failed_points": failed_points,
+            "progress": {
+                "total_runs": point_count,
+                "finished_points": finished_points,
+                "running_points": running_points,
+                "pending_points": pending_points,
+                "passed_points": passed_points,
+                "failed_points": failed_points,
+            },
             "all_passed": snapshot.get("all_passed"),
             "report_available": report.is_file() and not report.is_symlink(),
             "report_url": f"/evidence/{experiment_id}/report.html"
@@ -414,6 +439,8 @@ def create_app(
         point_count = int(plan["point_count"])
         study_id = snapshot.get("optimization_study_id")
         return {
+            "kind": "optimization",
+            "job_id": snapshot["optimization_job_id"],
             "optimization_job_id": snapshot["optimization_job_id"],
             "plan_id": snapshot["plan_id"],
             "status": snapshot["status"],
@@ -588,6 +615,8 @@ def create_app(
         source = finalists[0]
         assert isinstance(source, dict)
         return {
+            "kind": "qualification",
+            "job_id": snapshot["qualification_job_id"],
             "qualification_job_id": snapshot["qualification_job_id"], "plan_id": snapshot["plan_id"],
             "status": snapshot["status"], "experiments": children,
             "progress": {"total_runs": total, "finished_points": finished, "running_points": running, "pending_points": pending},

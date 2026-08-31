@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import secrets
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -19,7 +18,13 @@ from study_recipe import (
     publish_study_recipe_plan,
 )
 
-from .common import Authorization, JsonBodyReader, json_error
+from .common import (
+    Authorization,
+    JsonBodyReader,
+    add_job_crud_routes,
+    json_error,
+    mint_launch_token,
+)
 
 
 def create_study_router(
@@ -38,38 +43,18 @@ def create_study_router(
 ) -> APIRouter:
     router = APIRouter()
 
-    @router.get("/api/jobs/{experiment_id}")
-    def job(request: Request, experiment_id: str) -> Response:
-        denied = authorize_read(request)
-        if denied is not None:
-            return denied
-        try:
-            snapshot = get_execution_manager().snapshot(experiment_id)  # type: ignore[attr-defined]
-            return JSONResponse(job_payload(snapshot))
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return json_error(404, "job_not_found", str(exc))
-
-    @router.post("/api/jobs/{experiment_id}/cancel")
-    def cancel_job(request: Request, experiment_id: str) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None:
-            return denied
-        try:
-            snapshot = get_execution_manager().cancel(experiment_id)  # type: ignore[attr-defined]
-            return JSONResponse(job_payload(snapshot))
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return json_error(409, "cancel_failed", str(exc))
-
-    @router.post("/api/jobs/{experiment_id}/resume")
-    def resume_job(request: Request, experiment_id: str) -> Response:
-        denied = authorize_mutation(request)
-        if denied is not None:
-            return denied
-        try:
-            snapshot = get_execution_manager().resume(experiment_id)  # type: ignore[attr-defined]
-            return JSONResponse(job_payload(snapshot), status_code=202)
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            return json_error(409, "resume_failed", str(exc))
+    add_job_crud_routes(
+        router,
+        prefix="/api/jobs",
+        id_param="experiment_id",
+        authorize_read=authorize_read,
+        authorize_mutation=authorize_mutation,
+        manager_getter=get_execution_manager,
+        payload_builder=job_payload,
+        not_found_code="job_not_found",
+        cancel_failed_code="cancel_failed",
+        resume_failed_code="resume_failed",
+    )
 
     @router.post("/api/jobs/{experiment_id}/finalize")
     def finalize_job(request: Request, experiment_id: str) -> Response:
@@ -147,13 +132,11 @@ def create_study_router(
             )
         except (OSError, ValueError) as exc:
             return json_error(409, "freeze_failed", str(exc))
-        launch_token = secrets.token_urlsafe(32)
         execution = preview_result["execution"]
         assert isinstance(execution, dict)
-        with execution_lock:
-            while len(frozen_launches) >= 32:
-                frozen_launches.pop(next(iter(frozen_launches)))
-            frozen_launches[launch_token] = {
+        launch_token = mint_launch_token(
+            frozen_launches,
+            {
                 "state": "ready",
                 "recipe_sha256": expected_recipe_sha256,
                 "plan_id": expected_plan_id,
@@ -166,7 +149,9 @@ def create_study_router(
                 "experiment_count": execution["experiment_count"],
                 "total_run_count": execution["total_run_count"],
                 "response": None,
-            }
+            },
+            execution_lock,
+        )
         return JSONResponse(
             {
                 "status": "frozen",
@@ -376,6 +361,7 @@ def create_study_router(
                     for snapshot in snapshots
                 ]
                 response = {
+                    "kind": "study",
                     "status": "queued",
                     "plan_id": plan_id,
                     "total_run_count": confirmed_runs,
