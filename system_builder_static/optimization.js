@@ -651,6 +651,20 @@ function renderOptimizationCandidates(result) {
   optId("optimization-candidate-summary").textContent = `Candidate evidence (${rows.length})`;
 }
 
+// Qualification is a peer top-level view now rather than a panel nested
+// inside optimization results, so "a candidate is ready to qualify" has to
+// drive several independent pieces of UI in one place: the empty state vs.
+// the real panel inside the qualification view, the nav badge, the
+// cross-link button on the optimization results, and the dashboard's
+// attention note.
+function setQualificationAvailability(available) {
+  optId("qualification-panel").hidden = !available;
+  optId("qualification-empty").hidden = available;
+  optId("goto-qualification-link").hidden = !available;
+  optId("qualification-nav-badge").hidden = !available;
+  optId("dashboard-attention").hidden = !available;
+}
+
 function renderOptimizationResults(result) {
   displayedOptimizationStudy = result.study_id;
   optId("optimization-results-title").textContent = `Decision · ${result.study_id}`;
@@ -672,7 +686,7 @@ function renderOptimizationResults(result) {
   optId("optimization-result-metrics").replaceChildren(...metrics);
   const selected = (result.candidates || []).find((candidate) => candidate.selected) || null;
   selectedQualificationSource = selected ? {study_id: result.study_id, candidate_index: selected.candidate_index} : null;
-  optId("qualification-panel").hidden = selectedQualificationSource === null;
+  setQualificationAvailability(selectedQualificationSource !== null);
   renderSelectedOptimizationCandidate(result, selected);
   renderOptimizationParetoPlot(result);
   renderOptimizationCandidates(result);
@@ -713,11 +727,17 @@ function renderQualificationModel(result) {
     value.textContent = `${optimizationEngineeringValue(variable.nominal, variable.unit)} nominal · σ ${optimizationEngineeringValue(variable.sigma, variable.unit)} · ${optimizationEngineeringValue(variable.minimum, variable.unit)} to ${optimizationEngineeringValue(variable.maximum, variable.unit)}`;
     row.append(name, value); return row;
   });
-  const corner = document.createElement("div");
-  const cornerName = document.createElement("strong"); cornerName.textContent = "ADC load";
-  const cornerValues = document.createElement("span");
-  cornerValues.textContent = result.plan.corner_axes[0].values.map((item) => `${optimizationLabel(item.name)} ${optimizationEngineeringValue(item.value, result.plan.corner_axes[0].unit)}`).join(" · ");
-  corner.append(cornerName, cornerValues); rows.push(corner);
+  // Every named corner axis, using its own name/unit rather than a single
+  // hardcoded axis and label — the previous version assumed corner_axes[0]
+  // always existed and was always "ADC load", which threw on any plan with
+  // zero corner axes and mislabeled every plan with a different one.
+  for (const axis of result.plan.corner_axes || []) {
+    const corner = document.createElement("div");
+    const cornerName = document.createElement("strong"); cornerName.textContent = optimizationLabel(axis.name || "corner axis");
+    const cornerValues = document.createElement("span");
+    cornerValues.textContent = (axis.values || []).map((item) => `${optimizationLabel(item.name)} ${optimizationEngineeringValue(item.value, axis.unit)}`).join(" · ");
+    corner.append(cornerName, cornerValues); rows.push(corner);
+  }
   optId("qualification-model").replaceChildren(...rows);
 }
 
@@ -834,7 +854,12 @@ async function loadQualificationResults(job) {
 }
 
 async function recoverQualificationJob() {
-  const response = await fetch("/api/qualification/jobs?limit=1"); if (!response.ok) return;
+  // limit=8 (the server's default page size), not 1: this list is not
+  // filtered by source study/candidate server-side, so recovery has to
+  // search recent jobs client-side. limit=1 made that search a no-op
+  // whenever the most recent qualification job belonged to a different
+  // candidate than the one currently selected.
+  const response = await fetch("/api/qualification/jobs?limit=8"); if (!response.ok) return;
   const result = await response.json();
   const job = result.jobs.find((item) => item.source_study_id === selectedQualificationSource?.study_id && Number(item.source_candidate_index) === Number(selectedQualificationSource?.candidate_index));
   if (job) renderQualificationJob(job);

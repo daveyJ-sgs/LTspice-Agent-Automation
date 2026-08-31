@@ -43,6 +43,52 @@ function applyTheme(theme) {
 
 applyTheme(preferredTheme());
 
+// Real view routing: exactly one top-level section is visible at a time,
+// switched by clicking a nav link or a data-view control anywhere on the
+// page, with the current view reflected in the URL hash so back/forward
+// and reload land where you left off. This replaces the previous
+// anchor-scroll navigation, where every section lived in the DOM at once
+// and "switching" meant scrolling.
+const VIEWS = ["dashboard", "definition", "optimization", "qualification", "history"];
+const VIEW_LABELS = {
+  dashboard: "Dashboard",
+  definition: "Study setup",
+  optimization: "Optimization",
+  qualification: "Qualification",
+  history: "Workspace",
+};
+
+function showView(view) {
+  if (!VIEWS.includes(view)) view = "dashboard";
+  for (const name of VIEWS) {
+    const section = byId(name);
+    if (section) section.hidden = name !== view;
+  }
+  document.querySelectorAll(".tool-nav [data-view]").forEach((link) => {
+    if (link.dataset.view === view) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+  const crumb = byId("topbar-crumb");
+  if (crumb) crumb.textContent = VIEW_LABELS[view];
+  if (window.location.hash.slice(1) !== view) {
+    window.history.replaceState(null, "", `#${view}`);
+  }
+  window.scrollTo({top: 0});
+}
+
+function routeFromHash() {
+  showView((window.location.hash || "#dashboard").slice(1));
+}
+
+window.addEventListener("hashchange", routeFromHash);
+document.addEventListener("click", (event) => {
+  const trigger = event.target.closest("[data-view]");
+  if (!trigger) return;
+  event.preventDefault();
+  showView(trigger.dataset.view);
+});
+routeFromHash();
+
 function updateRecipeFromControls() {
   if (!recipe) return;
   recipe.plan.sample_count = numericValue(byId("sample-count").value);
@@ -1370,9 +1416,19 @@ async function checkRemoteAuth() {
     const result = await response.json();
     if (!response.ok) throw new Error(result.error?.message || "GitHub access check failed");
     remoteAuthReady = result.available === true;
-    byId("remote-auth-status").textContent = "GitHub CLI is authenticated. Its credential remains outside System Builder.";
-    byId("remote-mode-status").className = "status-pill valid";
-    byId("remote-mode-status").textContent = "Access verified";
+    if (remoteAuthReady) {
+      byId("remote-auth-status").textContent = "GitHub CLI is authenticated. Its credential remains outside System Builder.";
+      byId("remote-mode-status").className = "status-pill valid";
+      byId("remote-mode-status").textContent = "Access verified";
+    } else {
+      // The server currently only ever answers 200 with available: true, or
+      // a non-200 error caught below — but the status text should reflect
+      // the flag it just checked rather than assume it, in case that ever
+      // changes.
+      byId("remote-auth-status").textContent = "GitHub CLI reported no access. Run `gh auth login` and try again.";
+      byId("remote-mode-status").className = "status-pill invalid";
+      byId("remote-mode-status").textContent = "Access unavailable";
+    }
     renderErrors([]);
   } catch (error) {
     remoteAuthReady = false;
