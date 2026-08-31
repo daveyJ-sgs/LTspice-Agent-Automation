@@ -49,9 +49,10 @@ applyTheme(preferredTheme());
 // and reload land where you left off. This replaces the previous
 // anchor-scroll navigation, where every section lived in the DOM at once
 // and "switching" meant scrolling.
-const VIEWS = ["dashboard", "definition", "optimization", "qualification", "history"];
+const VIEWS = ["dashboard", "projects", "definition", "optimization", "qualification", "history"];
 const VIEW_LABELS = {
   dashboard: "Dashboard",
+  projects: "Projects",
   definition: "Study setup",
   optimization: "Optimization",
   qualification: "Qualification",
@@ -1629,6 +1630,102 @@ async function startStudy() {
   }
 }
 
+function renderProjectsError(message) {
+  const container = byId("projects-errors");
+  if (!message) {
+    container.hidden = true;
+    container.replaceChildren();
+    return;
+  }
+  container.textContent = message;
+  container.hidden = false;
+}
+
+async function openProject(project) {
+  try {
+    const response = await fetch(`/api/projects/${encodeURIComponent(project.slug)}/recipe`);
+    const loaded = await response.json();
+    if (!response.ok) throw new Error(loaded.error?.message || "Recipe could not be loaded");
+    if (project.kind === "optimization") {
+      optimizationRecipe = loaded;
+      optimizationDisplayUnits = new WeakMap();
+      renderOptimizationEditors();
+      await previewOptimization();
+      showView("optimization");
+    } else {
+      recipe = loaded;
+      variableDisplayUnits = new WeakMap();
+      cornerDisplayUnits = new WeakMap();
+      invalidateFrozenPlan();
+      populateRecipeControls();
+      await preview();
+      showView("definition");
+    }
+  } catch (error) {
+    renderProjectsError(`${project.name}: ${error.message}`);
+  }
+}
+
+function renderProjects(projects) {
+  const grid = byId("projects-grid");
+  byId("projects-empty").hidden = projects.length > 0;
+  grid.replaceChildren(
+    ...projects.map((project) => {
+      const card = document.createElement("article");
+      card.className = project.valid ? "project-card" : "project-card invalid";
+
+      const heading = document.createElement("div");
+      heading.className = "project-card-heading";
+      const name = document.createElement("strong");
+      name.textContent = project.name;
+      heading.append(name);
+      if (project.kind) {
+        const badge = document.createElement("span");
+        badge.className = "kind-badge";
+        badge.textContent = project.kind;
+        heading.append(badge);
+      }
+
+      const description = document.createElement("p");
+      description.textContent = project.valid
+        ? project.description || "No description."
+        : "This project's recipe file could not be read.";
+
+      const path = document.createElement("code");
+      path.textContent = project.path;
+
+      const buttonRow = document.createElement("div");
+      buttonRow.className = "button-row";
+      const openButton = document.createElement("button");
+      openButton.type = "button";
+      openButton.className = "secondary-button";
+      openButton.textContent = "Open";
+      openButton.disabled = !project.valid;
+      openButton.addEventListener("click", () => openProject(project));
+      buttonRow.append(openButton);
+
+      card.append(heading, description, path, buttonRow);
+      return card;
+    }),
+  );
+}
+
+async function loadProjects() {
+  const button = byId("refresh-projects");
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/projects");
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Projects could not be read");
+    renderProjectsError(null);
+    renderProjects(result.projects);
+  } catch (error) {
+    renderProjectsError(error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function loadInitialState() {
   const [sessionResponse, recipeResponse] = await Promise.all([
     fetch("/api/session"),
@@ -1642,10 +1739,11 @@ async function loadInitialState() {
   invalidateFrozenPlan();
   byId("workspace").textContent = session.workspace;
   byId("workspace").title = session.workspace;
+  byId("projects-workspace").textContent = session.workspace;
   populateRecipeControls();
   await loadSchematicFiles();
   await preview();
-  await Promise.all([loadHistory(), loadRemoteJobs()]);
+  await Promise.all([loadHistory(), loadRemoteJobs(), loadProjects()]);
 }
 
 byId("preview-button").addEventListener("click", preview);
@@ -1768,6 +1866,34 @@ byId("save-button").addEventListener("click", () => {
   URL.revokeObjectURL(link.href);
 });
 byId("refresh-history").addEventListener("click", loadHistory);
+byId("refresh-projects").addEventListener("click", loadProjects);
+byId("new-project-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const input = byId("new-project-name");
+  const name = input.value.trim();
+  if (!name) return;
+  const button = event.submitter;
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/projects", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({name}),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Project could not be created");
+    renderProjectsError(null);
+    input.value = "";
+    await loadProjects();
+  } catch (error) {
+    renderProjectsError(error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
 byId("theme-toggle").addEventListener("click", () => {
   const theme = document.documentElement.dataset.theme === "light" ? "dark" : "light";
   applyTheme(theme);

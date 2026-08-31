@@ -159,6 +159,8 @@ class SystemBuilderTests(unittest.TestCase):
             ("GET", "/api/optimization/jobs"),
             ("GET", "/api/optimization/jobs/{optimization_job_id}"),
             ("GET", "/api/optimization/jobs/{optimization_job_id}/results"),
+            ("GET", "/api/projects"),
+            ("GET", "/api/projects/{slug}/recipe"),
             ("GET", "/api/qualification/jobs"),
             ("GET", "/api/qualification/jobs/{job_id}"),
             ("GET", "/api/qualification/jobs/{job_id}/results"),
@@ -183,6 +185,7 @@ class SystemBuilderTests(unittest.TestCase):
             ("POST", "/api/optimization/preview"),
             ("POST", "/api/optimization/start"),
             ("POST", "/api/preview"),
+            ("POST", "/api/projects"),
             ("POST", "/api/qualification/freeze"),
             ("POST", "/api/qualification/jobs/{job_id}/cancel"),
             ("POST", "/api/qualification/jobs/{job_id}/resume"),
@@ -1342,6 +1345,49 @@ class SystemBuilderTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"]["code"], "history_limit")
+
+    def test_projects_routes_are_authorized_listed_created_and_opened(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            (workspace / "existing").mkdir()
+            (workspace / "existing" / "existing.ltstudy.json").write_text(
+                json.dumps({"name": "Existing", "description": "d", "kind": "statistical"})
+            )
+            client = TestClient(
+                system_builder.create_app(workspace, testing=True),
+                base_url="http://testserver",
+            )
+
+            self.assertEqual(client.get("/api/projects").status_code, 401)
+            client.get("/")
+
+            listing = client.get("/api/projects").json()
+            self.assertEqual([p["slug"] for p in listing["projects"]], ["existing"])
+
+            denied_create = client.post("/api/projects", json={"name": "New One"})
+            created = client.post(
+                "/api/projects", json={"name": "New One"}, headers=self._headers()
+            )
+            duplicate = client.post(
+                "/api/projects", json={"name": "new one"}, headers=self._headers()
+            )
+            bad_name = client.post(
+                "/api/projects", json={"name": ""}, headers=self._headers()
+            )
+
+            self.assertEqual(denied_create.status_code, 403)
+            self.assertEqual(created.status_code, 201)
+            self.assertEqual(created.json()["project"]["slug"], "new-one")
+            self.assertEqual(duplicate.status_code, 409)
+            self.assertEqual(duplicate.json()["error"]["code"], "project_exists")
+            self.assertEqual(bad_name.status_code, 400)
+
+            recipe = client.get("/api/projects/existing/recipe")
+            missing = client.get("/api/projects/missing-project/recipe")
+
+            self.assertEqual(recipe.status_code, 200)
+            self.assertEqual(recipe.json()["name"], "Existing")
+            self.assertEqual(missing.status_code, 404)
 
 
 if __name__ == "__main__":

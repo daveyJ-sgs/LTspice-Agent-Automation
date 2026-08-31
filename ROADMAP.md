@@ -1421,6 +1421,23 @@ Next System Builder slices:
    - The recovered 264-file, 15,010,763-byte artifact passed manifest identity,
      exact inventory, and per-file SHA-256 verification before both HTML reports
      were admitted and opened locally
+5. **GUI-D5 — Multi-project workspace switching**
+   - Today the workspace is fixed for the life of the process: `--workspace`
+     is read once at startup and every route/manager in the app is built
+     against that single folder, so opening a different project means
+     stopping the server and relaunching it with a different flag
+   - A first cut (list projects under a projects root, scaffold a new one from
+     a template, show the exact launch command for an existing one) ships
+     without touching this constraint
+   - This slice is the definite follow-up: switch the active workspace inside
+     one running server process — no restart, no dropped browser tab — which
+     requires reworking how `create_app()` wires every manager, router, and
+     lock, deciding what happens to jobs still running in a workspace being
+     switched away from, and whether workspaces can ever be active
+     concurrently or switching is strictly exclusive
+   - Needs its own scoped design pass before implementation, given how much
+     of the app's dependency-injection tree currently assumes one workspace
+     per process lifetime
 
 ### Phase 5: Flagship portable mixed-signal DAQ/scope
 

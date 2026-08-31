@@ -169,7 +169,7 @@ h3 { font-size: 16px; }
 .attention-note strong { display: block; margin-bottom: 3px; }
 .attention-note p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .attention-note button { flex: 0 0 auto; align-self: center; }
-.dashboard-links { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 24px 0 8px; }
+.dashboard-links { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin: 24px 0 8px; }
 .dashboard-link-card { display: flex; flex-direction: column; align-items: flex-start; gap: 7px; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-raised); color: var(--text); text-align: left; cursor: pointer; transition: border-color .12s ease, transform .12s ease; }
 .dashboard-link-card:hover, .dashboard-link-card:focus-visible { border-color: var(--accent); transform: translateY(-1px); }
 .dashboard-link-card .step { margin: 0; }
@@ -352,6 +352,21 @@ td:first-child { color: var(--text); font-weight: 600; }
 .history-item small, .history-item-bottom { color: var(--muted); font-size: 11.5px; margin-top: 3px; }
 .history-item code { display: block; color: var(--subtle); font: 400 10px "IBM Plex Mono", monospace; margin-top: 8px; overflow-wrap: anywhere; }
 .progress-track { height: 4px; border-radius: 999px; background: var(--border); overflow: hidden; margin: 10px 0 8px; }
+
+.history-heading code, .new-project-form + .errors code { color: var(--info); font: 600 12px "IBM Plex Mono", monospace; }
+.new-project-form { display: flex; align-items: end; gap: 14px; margin-bottom: 20px; max-width: 520px; }
+.new-project-form label { flex: 1; }
+.new-project-form label span { display: block; color: var(--muted); font-size: 11.5px; font-weight: 600; margin-bottom: 6px; }
+.projects-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+.project-card { display: flex; flex-direction: column; gap: 8px; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-raised); }
+.project-card-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.project-card-heading strong { font-size: 14.5px; }
+.project-card .kind-badge { flex: 0 0 auto; color: var(--subtle); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; font: 600 10px "IBM Plex Mono", monospace; text-transform: uppercase; }
+.project-card p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.project-card code { color: var(--subtle); font: 400 10.5px "IBM Plex Mono", monospace; overflow-wrap: anywhere; }
+.project-card .button-row { margin-top: auto; padding-top: 4px; }
+.project-card.invalid { border-color: var(--danger); }
+.project-card.invalid p { color: var(--danger); }
 .progress-track span { display: block; height: 100%; background: var(--accent); }
 .report-link { color: var(--accent-text); text-decoration: none; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
 .report-link:hover { text-decoration: underline; }

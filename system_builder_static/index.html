@@ -18,6 +18,10 @@
           <svg class="nav-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="1.5" y="1.5" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/><rect x="8.5" y="1.5" width="6" height="9" rx="1.2" stroke="currentColor" stroke-width="1.3"/><rect x="1.5" y="9.5" width="6" height="5" rx="1.2" stroke="currentColor" stroke-width="1.3"/></svg>
           <span>Dashboard</span>
         </button>
+        <button type="button" class="nav-link" data-view="projects">
+          <svg class="nav-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.8 4.2c0-.66.54-1.2 1.2-1.2h3l1.2 1.4h6c.66 0 1.2.54 1.2 1.2v6.2c0 .66-.54 1.2-1.2 1.2H3c-.66 0-1.2-.54-1.2-1.2V4.2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+          <span>Projects</span>
+        </button>
         <button type="button" class="nav-link" data-view="definition">
           <svg class="nav-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 12.5c1.5 0 1.5-3 3-3s1.5 5 3 5 1.5-8 3-8 1.5 6 3 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span>Study setup</span>
@@ -100,6 +104,11 @@
       </div>
 
       <div class="dashboard-links" role="navigation" aria-label="Jump to section">
+        <button type="button" class="dashboard-link-card" data-view="projects">
+          <span class="step">00</span>
+          <strong>Projects</strong>
+          <span>Browse, open, or create a project folder in this workspace.</span>
+        </button>
         <button type="button" class="dashboard-link-card" data-view="definition">
           <span class="step">01</span>
           <strong>Study setup</strong>
@@ -121,6 +130,29 @@
           <span>Durable jobs, decision reports, and evidence already on disk.</span>
         </button>
       </div>
+    </section>
+
+    <section id="projects" class="projects-section" hidden>
+      <div class="history-heading">
+        <div>
+          <p class="step">CURRENT WORKSPACE</p>
+          <h2>Projects in this workspace.</h2>
+          <p>A project is a folder in <strong id="projects-workspace">this workspace</strong> holding its own netlist and recipe. Opening a different workspace still means relaunching System Builder with a different <code>--workspace</code> for now.</p>
+        </div>
+        <button id="refresh-projects" class="secondary-button" type="button">Refresh</button>
+      </div>
+
+      <form id="new-project-form" class="new-project-form">
+        <label>
+          <span>New project name</span>
+          <input id="new-project-name" type="text" spellcheck="false" placeholder="Sensor front-end v2" maxlength="80" required>
+        </label>
+        <button type="submit" class="primary-button">Create project</button>
+      </form>
+
+      <div id="projects-errors" class="errors" role="alert" hidden></div>
+      <div id="projects-grid" class="projects-grid" aria-live="polite"></div>
+      <p id="projects-empty" class="muted-copy" hidden>No projects here yet — create one above, or add a subfolder with a <code>.ltstudy.json</code>/<code>.ltopt.json</code> recipe.</p>
     </section>
 
     <section id="definition" class="builder-grid" hidden>

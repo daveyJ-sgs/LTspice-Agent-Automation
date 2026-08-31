@@ -35,6 +35,7 @@ from system_builder_history import evidence_file
 from system_builder_routes import (
     create_core_router,
     create_optimization_router,
+    create_projects_router,
     create_qualification_router,
     create_remote_router,
     create_schematic_router,
@@ -690,6 +691,14 @@ def create_app(
             example_recipe=EXAMPLE_RECIPE,
             example_optimization_recipe=EXAMPLE_OPTIMIZATION_RECIPE,
             authorize_read=authorize_read,
+        )
+    )
+    app.include_router(
+        create_projects_router(
+            workspace=workspace,
+            authorize_read=authorize_read,
+            authorize_mutation=authorize_mutation,
+            read_json_body=read_json_body,
         )
     )
     app.include_router(
