@@ -1405,7 +1405,7 @@ Next System Builder slices:
    - Each preview receives a deterministic content-derived identity; tests
      prove malformed targets and changed workloads fail closed while preview
      creates no files, processes, network requests, credentials, or GitHub run
-4. **GUI-D4 — Explicit remote dispatch and recovery — qualification in progress**
+4. **GUI-D4 — Explicit remote dispatch and recovery — complete**
    - Require a separate acknowledgement, dispatch only the frozen plan, and
      retrieve verified evidence while keeping local-only mode the default
    - Implemented: a bounded content-addressed envelope carries the exact recipe,
@@ -1415,9 +1415,12 @@ Next System Builder slices:
    - Implemented: explicit status refresh and artifact download admit evidence
      only after the runner manifest, study identity, file inventory, and every
      SHA-256 verify; browser restart recovery requires no network polling
-   - Completion gate: dispatch the flagship 48-run DAQ AC/transient study from
-     System Builder, pass Windows real-LTspice execution, recover the evidence,
-     and open the verified HTML reports locally
+   - Complete: System Builder dispatched the flagship 48-run DAQ AC/transient
+     study as GitHub run `33347518632`; real LTspice 26.0.2 completed all 24 AC
+     and 24 transient points with no simulation or analysis errors
+   - The recovered 264-file, 15,010,763-byte artifact passed manifest identity,
+     exact inventory, and per-file SHA-256 verification before both HTML reports
+     were admitted and opened locally
 
 ### Phase 5: Flagship portable mixed-signal DAQ/scope
 
@@ -1564,7 +1567,8 @@ expensive evaluation.
 
 ## Immediate next milestone
 
-Complete GUI-D4 qualification by dispatching the exact flagship DAQ workload to
-the real-LTspice Windows runner and recovering its verified evidence through
-System Builder. Preserve the local-only default and the shared immutable-plan
-contract while proving the entire human-facing remote path end to end.
+Begin Phase 5 architecture by freezing the flagship portable mixed-signal
+DAQ/scope requirements, interfaces, and first hardware partition. Reuse System
+Builder's completed local/Windows execution, optimization, statistical, and
+portable-evidence contracts rather than creating a project-specific simulator
+path.

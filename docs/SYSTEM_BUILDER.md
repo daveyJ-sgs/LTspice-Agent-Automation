@@ -112,6 +112,12 @@ from the recovered job card. GitHub retains the downloadable workflow artifact
 for seven days; the admitted local copy remains under the normal workspace
 retention policy.
 
+GUI-D4 qualification used this path for the default mixed-signal DAQ recipe:
+GitHub run `33347518632` installed LTspice 26.0.2 on Windows, completed all 24 AC
+and 24 transient points, and returned a 264-file evidence set. System Builder
+verified its 15,010,763-byte manifest and every file hash before exposing the
+two local HTML report links.
+
 ## Durable local execution
 
 Execution is server-owned. The interface follows point-level progress, can

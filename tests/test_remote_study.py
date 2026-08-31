@@ -171,7 +171,13 @@ class RemoteStudyTests(unittest.TestCase):
             ):
                 summary = remote_study.run_remote_study(document, evidence)
 
-            self.assertTrue(summary["experiments"][0]["all_passed"])
+            experiment = summary["experiments"][0]
+            self.assertTrue(experiment["all_passed"])
+            self.assertEqual(experiment["report_html"], "experiment/report.html")
+            self.assertEqual(experiment["worst_cases"], "experiment/worst.json")
+            self.assertEqual(
+                experiment["sensitivity"], "experiment/sensitivity.json"
+            )
 
 class RemoteWorkflowContractTests(unittest.TestCase):
     def test_workflow_accepts_and_verifies_remote_envelope(self) -> None:

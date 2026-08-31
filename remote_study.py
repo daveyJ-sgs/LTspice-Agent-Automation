@@ -229,13 +229,17 @@ def run_remote_study(document: object, evidence_dir: Path) -> dict[str, object]:
                 "invalid_points": summary["invalid_points"],
                 "all_passed": result["all_passed"],
                 "report_html": str(
-                    Path(report["report_html"]).relative_to(evidence_dir)
+                    Path(report["report_html"]).relative_to(evidence_dir).as_posix()
                 ),
                 "worst_cases": str(
-                    Path(worst["worst_cases_json"]).relative_to(evidence_dir)
+                    Path(worst["worst_cases_json"])
+                    .relative_to(evidence_dir)
+                    .as_posix()
                 ),
                 "sensitivity": str(
-                    Path(sensitivity["sensitivity_json"]).relative_to(evidence_dir)
+                    Path(sensitivity["sensitivity_json"])
+                    .relative_to(evidence_dir)
+                    .as_posix()
                 ),
             }
         )
