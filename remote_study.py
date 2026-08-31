@@ -227,7 +227,7 @@ def run_remote_study(document: object, evidence_dir: Path) -> dict[str, object]:
                 "completed_points": result["completed_points"],
                 "error_points": result["error_points"],
                 "invalid_points": summary["invalid_points"],
-                "all_passed": summary["all_passed"],
+                "all_passed": result["all_passed"],
                 "report_html": str(
                     Path(report["report_html"]).relative_to(evidence_dir)
                 ),

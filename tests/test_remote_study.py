@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import artifacts
 import remote_execution
@@ -128,6 +129,49 @@ class RemoteStudyTests(unittest.TestCase):
                     expected_run_id="123",
                 )
 
+    def test_remote_summary_uses_engine_pass_status(self) -> None:
+        document = self._document()
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary)
+            experiment_dir = evidence / "experiment"
+            with (
+                patch(
+                    "remote_study.mcp_server.run_statistical_experiment",
+                    return_value={
+                        "experiment_id": "mcp-experiment-test",
+                        "status": "completed",
+                        "point_count": 2,
+                        "completed_points": 2,
+                        "error_points": 0,
+                        "all_passed": True,
+                    },
+                ),
+                patch(
+                    "remote_study.statistical_results.summarize_statistical_experiment",
+                    return_value={"invalid_points": 0},
+                ),
+                patch(
+                    "remote_study.worst_case_analysis.analyze_statistical_worst_cases",
+                    return_value={
+                        "worst_cases_json": str(experiment_dir / "worst.json")
+                    },
+                ),
+                patch(
+                    "remote_study.sensitivity_analysis.analyze_statistical_sensitivity",
+                    return_value={
+                        "sensitivity_json": str(experiment_dir / "sensitivity.json")
+                    },
+                ),
+                patch(
+                    "remote_study.experiment_report.build_experiment_report",
+                    return_value={
+                        "report_html": str(experiment_dir / "report.html")
+                    },
+                ),
+            ):
+                summary = remote_study.run_remote_study(document, evidence)
+
+            self.assertTrue(summary["experiments"][0]["all_passed"])
 
 class RemoteWorkflowContractTests(unittest.TestCase):
     def test_workflow_accepts_and_verifies_remote_envelope(self) -> None:
