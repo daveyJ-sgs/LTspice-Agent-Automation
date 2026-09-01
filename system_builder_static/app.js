@@ -372,9 +372,25 @@ async function loadNetlistFiles() {
   if (recipe) populateExperiments();
 }
 
+function commonDirectoryPrefix(paths) {
+  if (paths.length === 0) return "";
+  const segmented = paths.map((path) => path.split("/"));
+  let commonLength = segmented[0].length - 1;
+  for (const segments of segmented.slice(1)) {
+    let i = 0;
+    while (i < commonLength && i < segments.length - 1 && segments[i] === segmented[0][i]) i++;
+    commonLength = i;
+  }
+  return commonLength > 0 ? segmented[0].slice(0, commonLength).join("/") + "/" : "";
+}
+
 function netlistSelect(experiment, path) {
   const value = experiment.netlist_path || "";
-  const choices = netlistFiles.map((file) => [file, file]);
+  const prefix = commonDirectoryPrefix(netlistFiles);
+  const choices = netlistFiles.map((file) => [
+    file,
+    prefix && file.startsWith(prefix) ? file.slice(prefix.length) : file,
+  ]);
   if (!value) choices.unshift(["", "— Select a netlist —"]);
   const select = selectInput(value, choices, path);
   select.addEventListener("change", () => {
