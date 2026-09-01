@@ -1414,8 +1414,13 @@ class SystemBuilderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
             (workspace / "sensor").mkdir()
-            (workspace / "sensor" / "sensor.cir").write_text("R1 in out 1000\n.end\n")
-            (workspace / "outside.cir").write_text("R1 in out 1\n.end\n")
+            # newline="" pins the exact bytes on disk regardless of platform --
+            # otherwise Path.write_text() silently turns \n into \r\n on
+            # Windows, and read_netlist_text() (by design) reads raw bytes
+            # with no newline translation, so the assertion below would only
+            # fail on the Windows CI runner.
+            (workspace / "sensor" / "sensor.cir").write_text("R1 in out 1000\n.end\n", newline="")
+            (workspace / "outside.cir").write_text("R1 in out 1\n.end\n", newline="")
             client = TestClient(
                 system_builder.create_app(workspace, testing=True),
                 base_url="http://testserver",
