@@ -363,6 +363,17 @@ async function loadSchematicFiles() {
   populate("schematic-image-files", result.images || []);
 }
 
+async function loadNetlistFiles() {
+  const response = await fetch("/api/recipe/netlists");
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error?.message || "Netlist files could not be listed");
+  byId("netlist-files").replaceChildren(...(result.files || []).map((value) => {
+    const option = document.createElement("option");
+    option.value = value;
+    return option;
+  }));
+}
+
 async function captureSchematic() {
   if (!recipe) return;
   const sourcePath = byId("schematic-source-path").value.trim();
@@ -789,28 +800,103 @@ function populateCorners() {
   byId("corners").replaceChildren(...(cards.length ? cards : [emptyEditor("No operating-corner axes defined.")]));
 }
 
-function populateRequirements() {
-  let count = 0;
-  const cards = [];
-  for (const [experimentIndex, experiment] of (recipe.experiments || []).entries()) {
-    for (const [analysisIndex, analysis] of (experiment.waveform_analyses || []).entries()) {
-      const base = `experiments[${experimentIndex}].waveform_analyses[${analysisIndex}]`;
+function populateExperiments() {
+  const experiments = recipe.experiments || (recipe.experiments = []);
+  let requirementCount = 0;
+
+  const groups = experiments.map((experiment, experimentIndex) => {
+    const base = `experiments[${experimentIndex}]`;
+    const group = document.createElement("section");
+    group.className = "editor-card experiment-group";
+    group.dataset.path = base;
+
+    const heading = document.createElement("div");
+    heading.className = "editor-card-heading";
+    const title = document.createElement("strong");
+    title.textContent = experiment.name || `Experiment ${experimentIndex + 1}`;
+    heading.append(title, removeButton(`Remove experiment ${experiment.name || experimentIndex + 1}`, () => {
+      experiments.splice(experimentIndex, 1);
+      populateExperiments();
+      schedulePreview();
+    }));
+
+    const fields = document.createElement("div");
+    fields.className = "compact-fields";
+    const nameWrapper = document.createElement("label");
+    const nameCaption = document.createElement("span");
+    nameCaption.textContent = "Experiment name";
+    const nameField = fieldInput(experiment.name, `${base}.name`);
+    nameField.addEventListener("input", () => {
+      experiment.name = nameField.value;
+      title.textContent = experiment.name || `Experiment ${experimentIndex + 1}`;
+      schedulePreview();
+    });
+    nameWrapper.append(nameCaption, nameField);
+    const netlistWrapper = document.createElement("label");
+    const netlistCaption = document.createElement("span");
+    netlistCaption.textContent = "Netlist (.cir/.net)";
+    const netlistField = fieldInput(experiment.netlist_path, `${base}.netlist_path`);
+    netlistField.setAttribute("list", "netlist-files");
+    netlistField.placeholder = "project-slug/circuit.cir";
+    netlistField.addEventListener("input", () => {
+      experiment.netlist_path = netlistField.value;
+      experiment.filename = netlistField.value.split("/").pop() || "";
+      schedulePreview();
+    });
+    netlistWrapper.append(netlistCaption, netlistField);
+    fields.append(nameWrapper, netlistWrapper);
+
+    const analyses = experiment.waveform_analyses || (experiment.waveform_analyses = []);
+    const analysisStack = document.createElement("div");
+    analysisStack.className = "editor-stack analysis-stack";
+    for (const [analysisIndex, analysis] of analyses.entries()) {
+      const analysisBase = `${base}.waveform_analyses[${analysisIndex}]`;
       const card = document.createElement("section");
-      card.className = "editor-card";
-      card.dataset.path = base;
-      const heading = document.createElement("div");
-      heading.className = "editor-card-heading";
-      const title = document.createElement("strong");
-      title.textContent = analysis.name;
-      const meta = document.createElement("span");
-      meta.className = "analysis-meta";
-      meta.textContent = `${experiment.name.toUpperCase()} · ${analysis.variable}`;
-      heading.append(title, meta);
+      card.className = "editor-card analysis-card";
+      card.dataset.path = analysisBase;
+
+      const analysisHeading = document.createElement("div");
+      analysisHeading.className = "editor-card-heading";
+      const analysisTitle = document.createElement("strong");
+      analysisTitle.textContent = analysis.name || `Analysis ${analysisIndex + 1}`;
+      analysisHeading.append(analysisTitle, removeButton(`Remove ${analysis.name || "analysis"}`, () => {
+        analyses.splice(analysisIndex, 1);
+        populateExperiments();
+        schedulePreview();
+      }));
+
+      const analysisFields = document.createElement("div");
+      analysisFields.className = "compact-fields";
+      for (const [key, label, placeholder] of [
+        ["name", "Analysis name", "response"],
+        ["variable", "Signal, e.g. V(out)", "V(out)"],
+        ["secondary_variable", "Reference signal (optional)", "V(in)"],
+      ]) {
+        const wrapper = document.createElement("label");
+        const caption = document.createElement("span");
+        caption.textContent = label;
+        const input = fieldInput(analysis[key], `${analysisBase}.${key}`);
+        input.placeholder = placeholder;
+        input.addEventListener("input", () => {
+          if (key === "name") {
+            analysis.name = input.value;
+            analysisTitle.textContent = analysis.name || `Analysis ${analysisIndex + 1}`;
+          } else {
+            const value = input.value.trim();
+            if (value) analysis[key] = value;
+            else delete analysis[key];
+          }
+          schedulePreview();
+        });
+        wrapper.append(caption, input);
+        analysisFields.append(wrapper);
+      }
+
       const rows = document.createElement("div");
       rows.className = "requirement-rows";
       for (const [requirementIndex, requirement] of (analysis.requirements || []).entries()) {
-        count += 1;
-        const requirementBase = `${base}.requirements[${requirementIndex}]`;
+        requirementCount += 1;
+        const requirementBase = `${analysisBase}.requirements[${requirementIndex}]`;
         const row = document.createElement("div");
         row.className = "requirement-row";
         row.dataset.path = requirementBase;
@@ -825,27 +911,48 @@ function populateRequirements() {
         setRecipeField(target, requirement, "target", true);
         row.append(metric, operator, target, removeButton(`Remove ${requirement.metric} requirement`, () => {
           analysis.requirements.splice(requirementIndex, 1);
-          populateRequirements();
+          populateExperiments();
           schedulePreview();
         }));
         rows.append(row);
       }
-      const add = document.createElement("button");
-      add.type = "button";
-      add.className = "compact-button";
-      add.textContent = "+ Requirement";
-      add.addEventListener("click", () => {
-        analysis.requirements.push({metric: "maximum", operator: "<=", target: 0});
-        populateRequirements();
+      const addRequirement = document.createElement("button");
+      addRequirement.type = "button";
+      addRequirement.className = "compact-button";
+      addRequirement.textContent = "+ Requirement";
+      addRequirement.addEventListener("click", () => {
+        (analysis.requirements || (analysis.requirements = [])).push({metric: "maximum", operator: "<=", target: 0});
+        populateExperiments();
         schedulePreview();
       });
-      rows.append(add);
-      card.append(heading, rows);
-      cards.push(card);
+      rows.append(addRequirement);
+      card.append(analysisHeading, analysisFields, rows);
+      analysisStack.append(card);
     }
-  }
-  byId("requirement-count").textContent = `${count} requirements`;
-  byId("requirements").replaceChildren(...(cards.length ? cards : [emptyEditor("No waveform analyses defined.")]));
+
+    const addAnalysis = document.createElement("button");
+    addAnalysis.type = "button";
+    addAnalysis.className = "compact-button";
+    addAnalysis.textContent = "+ Analysis";
+    addAnalysis.addEventListener("click", () => {
+      const names = new Set(analyses.map((analysis) => analysis.name));
+      let suffix = analyses.length + 1;
+      while (names.has(`analysis_${suffix}`)) suffix += 1;
+      analyses.push({
+        name: `analysis_${suffix}`,
+        variable: "V(out)",
+        requirements: [{metric: "maximum", operator: "<=", target: 0}],
+      });
+      populateExperiments();
+      schedulePreview();
+    });
+
+    group.append(heading, fields, analysisStack, addAnalysis);
+    return group;
+  });
+
+  byId("requirement-count").textContent = `${requirementCount} requirements`;
+  byId("requirements").replaceChildren(...(groups.length ? groups : [emptyEditor("No experiments defined.")]));
 }
 
 function emptyEditor(message) {
@@ -864,7 +971,7 @@ function populateRecipeControls() {
   populateVariables();
   populateCorrelations();
   populateCorners();
-  populateRequirements();
+  populateExperiments();
   populateSchematicControls();
 }
 
@@ -961,11 +1068,11 @@ function renderPreview(result) {
     card.className = "experiment";
     const icon = document.createElement("span");
     icon.className = "experiment-icon";
-    icon.textContent = experiment.name === "ac" ? "AC" : "TR";
+    icon.textContent = experiment.name.slice(0, 2).toUpperCase();
     const copy = document.createElement("div");
     const title = document.createElement("strong");
     const detail = document.createElement("small");
-    title.textContent = experiment.name === "ac" ? "Frequency response" : "Acquisition transient";
+    title.textContent = experiment.name;
     detail.textContent = `${experiment.analysis_count} analyses · ${experiment.requirement_count} requirements`;
     copy.append(title, detail);
     const runs = document.createElement("span");
@@ -1659,6 +1766,7 @@ async function openProject(project) {
       cornerDisplayUnits = new WeakMap();
       invalidateFrozenPlan();
       populateRecipeControls();
+      await loadNetlistFiles();
       await preview();
       showView("definition");
     }
@@ -1742,7 +1850,7 @@ async function loadInitialState() {
   byId("workspace").title = session.workspace;
   byId("projects-workspace").textContent = session.workspace;
   populateRecipeControls();
-  await loadSchematicFiles();
+  await Promise.all([loadSchematicFiles(), loadNetlistFiles()]);
   await preview();
   await Promise.all([loadHistory(), loadRemoteJobs(), loadProjects()]);
 }
@@ -1839,6 +1947,27 @@ byId("add-corner").addEventListener("click", () => {
     values: [{name: "nominal", value: 1}],
   });
   populateCorners();
+  schedulePreview();
+});
+byId("add-experiment").addEventListener("click", () => {
+  if (!recipe) return;
+  const experiments = recipe.experiments || (recipe.experiments = []);
+  const names = new Set(experiments.map((experiment) => experiment.name));
+  let suffix = experiments.length + 1;
+  while (names.has(`experiment_${suffix}`)) suffix += 1;
+  experiments.push({
+    name: `experiment_${suffix}`,
+    netlist_path: "",
+    filename: "",
+    waveform_analyses: [
+      {
+        name: "response",
+        variable: "V(out)",
+        requirements: [{metric: "maximum", operator: "<=", target: 0}],
+      },
+    ],
+  });
+  populateExperiments();
   schedulePreview();
 });
 byId("recipe-file").addEventListener("change", async (event) => {

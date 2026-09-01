@@ -13,6 +13,7 @@ import statistical_engine
 from remote_execution import build_remote_preview
 from study_recipe import (
     MAX_RECIPE_BYTES,
+    list_netlist_files,
     load_recipe_experiments,
     preview_study_recipe,
     publish_study_recipe_plan,
@@ -75,6 +76,16 @@ def create_study_router(
             )
         except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
             return json_error(409, "finalize_failed", str(exc))
+
+    @router.get("/api/recipe/netlists")
+    def netlist_files(request: Request) -> Response:
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        try:
+            return JSONResponse({"files": list_netlist_files(workspace)})
+        except OSError as exc:
+            return json_error(409, "netlist_list_failed", str(exc))
 
     @router.post("/api/preview")
     async def preview(request: Request) -> Response:

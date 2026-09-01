@@ -249,6 +249,10 @@ td:first-child { color: var(--text); font-weight: 600; }
 .requirement-row { display: grid; grid-template-columns: minmax(115px, 1.4fr) 76px minmax(90px, .8fr) 28px; gap: 8px; align-items: center; }
 .corner-value-row input, .requirement-row input, .requirement-row select { padding: 9px 10px; font-size: 13px; }
 .analysis-meta { color: var(--subtle); font: 400 10.5px "IBM Plex Mono", monospace; }
+.experiment-group { border-color: var(--accent); }
+.experiment-group > .compact-fields { grid-template-columns: 1fr 2fr; }
+.analysis-stack { margin-top: 13px; gap: 10px; }
+.analysis-card { background: var(--bg); }
 .correlation-variables { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 11px 0 14px; }
 .correlation-variables label { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font: 500 11px "IBM Plex Mono", monospace; }
 .correlation-variables input { width: 14px; height: 14px; accent-color: var(--accent); }

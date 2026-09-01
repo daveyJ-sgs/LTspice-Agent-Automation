@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 
 import artifacts
@@ -581,3 +582,31 @@ def load_recipe_experiments(
             }
         )
     return resolved
+
+
+def list_netlist_files(workspace_root: Path, *, maximum: int = 250) -> list[str]:
+    """List bounded workspace .cir/.net netlist files without following links."""
+    if not 1 <= maximum <= 1_000:
+        raise ValueError("netlist file limit must be between 1 and 1,000")
+    root = workspace_root.resolve(strict=True)
+    files: list[str] = []
+    skipped_directories = {".git", ".venv", "__pycache__", "node_modules", "runs"}
+    for current, directories, names in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        directories[:] = sorted(
+            name
+            for name in directories
+            if name not in skipped_directories
+            and not name.startswith(".")
+            and not (current_path / name).is_symlink()
+        )
+        for name in sorted(names):
+            path = current_path / name
+            if path.is_symlink() or not path.is_file():
+                continue
+            if path.suffix.lower() not in {".cir", ".net"}:
+                continue
+            files.append(path.relative_to(root).as_posix())
+            if len(files) >= maximum:
+                return files
+    return files

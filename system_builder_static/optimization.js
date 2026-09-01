@@ -356,10 +356,10 @@ function renderOptimizationPreview(result) {
     row.className = "experiment";
     const icon = document.createElement("span");
     icon.className = "experiment-icon";
-    icon.textContent = name === "ac" ? "AC" : "TR";
+    icon.textContent = name.slice(0, 2).toUpperCase();
     const detail = document.createElement("div");
     const title = document.createElement("strong");
-    title.textContent = name === "ac" ? "Frequency response" : "Acquisition transient";
+    title.textContent = name;
     const note = document.createElement("small");
     note.textContent = `${result.plan.objective_count} objectives · ${result.plan.constraint_count} total constraints`;
     detail.append(title, note);

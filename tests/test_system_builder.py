@@ -164,6 +164,7 @@ class SystemBuilderTests(unittest.TestCase):
             ("GET", "/api/qualification/jobs"),
             ("GET", "/api/qualification/jobs/{job_id}"),
             ("GET", "/api/qualification/jobs/{job_id}/results"),
+            ("GET", "/api/recipe/netlists"),
             ("GET", "/api/remote/jobs"),
             ("GET", "/api/schematic/files"),
             ("GET", "/api/schematic/image"),
@@ -1388,6 +1389,24 @@ class SystemBuilderTests(unittest.TestCase):
             self.assertEqual(recipe.status_code, 200)
             self.assertEqual(recipe.json()["name"], "Existing")
             self.assertEqual(missing.status_code, 404)
+
+    def test_netlist_files_route_is_authorized_and_lists_workspace_netlists(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            (workspace / "sensor").mkdir()
+            (workspace / "sensor" / "sensor.cir").write_text(".end\n")
+            client = TestClient(
+                system_builder.create_app(workspace, testing=True),
+                base_url="http://testserver",
+            )
+
+            self.assertEqual(client.get("/api/recipe/netlists").status_code, 401)
+            client.get("/")
+
+            listed = client.get("/api/recipe/netlists")
+
+            self.assertEqual(listed.status_code, 200)
+            self.assertEqual(listed.json()["files"], ["sensor/sensor.cir"])
 
 
 if __name__ == "__main__":

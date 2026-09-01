@@ -234,6 +234,25 @@ class StudyRecipeTests(unittest.TestCase):
             },
         )
 
+    def test_list_netlist_files_finds_cir_and_net_and_skips_symlinks_and_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "runs").mkdir()
+            (root / "runs" / "hidden.cir").write_text(".end\n")
+            project = root / "sensor-front-end"
+            project.mkdir()
+            (project / "sensor-front-end.cir").write_text(".end\n")
+            (project / "legacy.net").write_text(".end\n")
+            (project / "notes.txt").write_text("not a netlist")
+            (root / "linked.cir").symlink_to(project / "sensor-front-end.cir")
+
+            files = study_recipe.list_netlist_files(root)
+
+        self.assertEqual(
+            set(files),
+            {"sensor-front-end/sensor-front-end.cir", "sensor-front-end/legacy.net"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

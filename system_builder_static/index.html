@@ -232,13 +232,17 @@
 
         <div class="subsection-heading">
           <div>
-            <p class="step">05 / REQUIREMENTS</p>
-            <h3>Electrical pass criteria</h3>
+            <p class="step">05 / EXPERIMENTS</p>
+            <h3>Netlists, analyses, and pass criteria</h3>
           </div>
-          <span id="requirement-count" class="count-badge">—</span>
+          <div class="heading-actions">
+            <span id="requirement-count" class="count-badge">—</span>
+            <button id="add-experiment" class="compact-button" type="button">+ Experiment</button>
+          </div>
         </div>
         <div id="requirements" class="editor-stack"></div>
         <div id="requirement-errors" class="inline-errors" aria-live="polite" hidden></div>
+        <datalist id="netlist-files"></datalist>
       </article>
 
       <aside class="right-column">
