@@ -1974,7 +1974,45 @@ function renderProjects(projects) {
       openButton.textContent = "Open";
       openButton.disabled = !project.valid;
       openButton.addEventListener("click", () => openProject(project));
-      buttonRow.append(openButton);
+
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "destructive-button";
+      deleteButton.textContent = "Delete";
+      let confirmTimer = null;
+      deleteButton.addEventListener("click", async () => {
+        if (!deleteButton.classList.contains("confirming")) {
+          deleteButton.classList.add("confirming");
+          deleteButton.textContent = "Really delete?";
+          confirmTimer = window.setTimeout(() => {
+            deleteButton.classList.remove("confirming");
+            deleteButton.textContent = "Delete";
+          }, 4000);
+          return;
+        }
+        window.clearTimeout(confirmTimer);
+        deleteButton.disabled = true;
+        deleteButton.textContent = "Deleting…";
+        try {
+          const response = await fetch(`/api/projects/${encodeURIComponent(project.slug)}`, {
+            method: "DELETE",
+            headers: {"X-LTspice-System-Builder": "1"},
+          });
+          if (!response.ok) {
+            const result = await response.json().catch(() => ({}));
+            throw new Error(result.error?.message || "Project could not be deleted");
+          }
+          renderProjectsError(null);
+          await loadProjects();
+        } catch (error) {
+          renderProjectsError(`${project.name}: ${error.message}`);
+          deleteButton.disabled = false;
+          deleteButton.classList.remove("confirming");
+          deleteButton.textContent = "Delete";
+        }
+      });
+
+      buttonRow.append(openButton, deleteButton);
 
       card.append(heading, description, path, buttonRow);
       return card;

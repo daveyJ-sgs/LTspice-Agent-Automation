@@ -151,6 +151,7 @@ class SystemBuilderTests(unittest.TestCase):
             for method in operations
         }
         expected = {
+            ("DELETE", "/api/projects/{slug}"),
             ("GET", "/"),
             ("GET", "/api/examples/mixed-signal-daq"),
             ("GET", "/api/examples/mixed-signal-daq-optimization"),
@@ -1391,6 +1392,22 @@ class SystemBuilderTests(unittest.TestCase):
             self.assertEqual(recipe.status_code, 200)
             self.assertEqual(recipe.json()["name"], "Existing")
             self.assertEqual(missing.status_code, 404)
+
+            denied_delete = client.delete("/api/projects/existing")
+            self.assertEqual(denied_delete.status_code, 403)
+            self.assertTrue((workspace / "existing").is_dir())
+
+            deleted = client.delete("/api/projects/existing", headers=self._headers())
+            self.assertEqual(deleted.status_code, 204)
+            self.assertFalse((workspace / "existing").exists())
+
+            missing_delete = client.delete(
+                "/api/projects/existing", headers=self._headers()
+            )
+            self.assertEqual(missing_delete.status_code, 404)
+
+            reserved_delete = client.delete("/api/projects/runs", headers=self._headers())
+            self.assertEqual(reserved_delete.status_code, 409)
 
     def test_netlist_files_route_is_authorized_and_lists_workspace_netlists(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

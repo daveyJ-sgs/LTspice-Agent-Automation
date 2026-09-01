@@ -72,4 +72,17 @@ def create_projects_router(
             return json_error(409, "project_recipe_invalid", str(exc))
         return JSONResponse(recipe)
 
+    @router.delete("/api/projects/{slug}")
+    def delete_project(request: Request, slug: str) -> Response:
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        try:
+            project_scaffold.delete_project(workspace, slug)
+        except FileNotFoundError as exc:
+            return json_error(404, "project_not_found", str(exc))
+        except (OSError, ValueError) as exc:
+            return json_error(409, "project_delete_failed", str(exc))
+        return Response(status_code=204)
+
     return router

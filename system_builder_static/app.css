@@ -208,6 +208,9 @@ button, .secondary-button { cursor: pointer; border-radius: var(--radius-sm); pa
 .secondary-button { color: var(--text); background: var(--surface); border-color: var(--border); }
 .secondary-button:hover { border-color: var(--border-strong); }
 .text-button { color: var(--accent-text); background: transparent; }
+.destructive-button { color: var(--danger); background: transparent; border-color: var(--border); }
+.destructive-button:hover { border-color: var(--danger); }
+.destructive-button.confirming { color: #fff; background: var(--danger); border-color: var(--danger); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 
 .subsection-heading { display: flex; align-items: end; justify-content: space-between; margin: 22px 0 11px; }

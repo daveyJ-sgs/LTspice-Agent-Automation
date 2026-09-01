@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 
 import study_recipe
@@ -216,3 +217,18 @@ def create_project(workspace_root: Path, name: object) -> dict[str, object]:
     summary = _project_summary(project_dir, root)
     assert summary is not None
     return summary
+
+
+def delete_project(workspace_root: Path, slug: object) -> None:
+    """Permanently delete a project directory and everything inside it.
+
+    Confined the same way every other project operation is: the resolved
+    directory must be a real, non-symlinked subdirectory of the workspace
+    (see _project_directory). Reserved names are rejected as defense in
+    depth -- the UI never lists runs/ or examples/ as a project to delete,
+    but this keeps a stray or crafted request from ever reaching them.
+    """
+    if isinstance(slug, str) and slug in RESERVED_NAMES:
+        raise ValueError(f"'{slug}' is a reserved name and cannot be deleted")
+    directory = _project_directory(workspace_root, slug)
+    shutil.rmtree(directory)

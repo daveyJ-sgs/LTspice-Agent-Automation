@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -95,6 +96,39 @@ class ProjectScaffoldTests(unittest.TestCase):
             for bad_slug in ("..", ".", "a/b", "a\\b", "", "does-not-exist"):
                 with self.assertRaises((ValueError, FileNotFoundError)):
                     project_scaffold.project_recipe(root, bad_slug)
+
+    def test_delete_project_removes_the_directory_and_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            created = project_scaffold.create_project(root, "Delete Me")
+            project_dir = root / created["slug"]
+            self.assertTrue(project_dir.is_dir())
+
+            project_scaffold.delete_project(root, created["slug"])
+
+            self.assertFalse(project_dir.exists())
+            with self.assertRaises(FileNotFoundError):
+                project_scaffold.delete_project(root, created["slug"])
+
+            (root / "runs").mkdir()
+            with self.assertRaises(ValueError):
+                project_scaffold.delete_project(root, "runs")
+            self.assertTrue((root / "runs").is_dir())
+
+            for bad_slug in ("..", ".", "a/b", "a\\b", ""):
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    project_scaffold.delete_project(root, bad_slug)
+
+            outside = root.parent / "outside-sibling"
+            outside.mkdir()
+            try:
+                escape_link = root / "escape"
+                escape_link.symlink_to(outside, target_is_directory=True)
+                with self.assertRaises(ValueError):
+                    project_scaffold.delete_project(root, "escape")
+                self.assertTrue(outside.is_dir())
+            finally:
+                shutil.rmtree(outside, ignore_errors=True)
 
 
 if __name__ == "__main__":
