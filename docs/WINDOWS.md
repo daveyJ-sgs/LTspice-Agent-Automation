@@ -71,10 +71,14 @@ policy, or enable remote execution. If LTspice is not installed, the launcher
 warns and continues: recipe editing and pure plan preview remain available,
 while simulation and schematic capture stay unavailable.
 
-PowerShell users can select another circuit workspace explicitly:
+Select another circuit workspace explicitly with `-Workspace`. `.cmd` just
+forwards its arguments to the `.ps1` underneath, so this works the same way
+whether you double-click it, run it from `cmd.exe`, or run it from
+PowerShell — there is no need to invoke `Start-SystemBuilder.ps1` directly
+unless you want to:
 
 ```powershell
-.\Start-SystemBuilder.ps1 -Workspace 'C:\Users\Dave\Documents\My Circuits'
+.\Start-SystemBuilder.cmd -Workspace 'C:\Users\Dave\Documents\My Circuits'
 ```
 
 Use `-NoBrowser` for diagnostics or automated startup checks. The launcher

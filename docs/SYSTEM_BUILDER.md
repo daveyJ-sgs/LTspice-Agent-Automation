@@ -26,13 +26,25 @@ performs Python/LTspice diagnostics automatically:
 .\Start-SystemBuilder.cmd
 ```
 
+Pass `-Workspace` to point it at a folder of your own circuit projects instead
+of the repository's dogfooding examples:
+
+```powershell
+.\Start-SystemBuilder.cmd -Workspace 'C:\Users\Dave\Documents\LTspice Projects'
+```
+
 See [Windows setup and qualification](WINDOWS.md#start-system-builder) for
-first-run behavior, an explicit workspace example, and troubleshooting.
+first-run behavior and troubleshooting.
 
 On macOS, double-click `Start-SystemBuilder.command` (or run it from a
 terminal). It creates the private `.venv`, installs the GUI dependencies,
 finds `/Applications/LTspice.app`, and opens the same loopback-only
-application. No administrator access or machine-wide changes.
+application. No administrator access or machine-wide changes. Pass
+`--workspace` the same way to point it at your own projects folder:
+
+```bash
+./Start-SystemBuilder.command --workspace=/Users/dave/Documents/LTspice/projects
+```
 
 The application opens the default browser on a random `127.0.0.1` port. The
 bundled reference recipe is

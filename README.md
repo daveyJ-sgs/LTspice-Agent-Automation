@@ -205,7 +205,11 @@ Program Files locations.
 
 After cloning the repository, `Start-SystemBuilder.cmd` provides the no-admin
 first-start path: it creates the private Python environment, installs GUI
-dependencies, diagnoses LTspice discovery, and opens the local interface.
+dependencies, diagnoses LTspice discovery, and opens the local interface. Pass
+`-Workspace 'C:\path\to\your\projects'` to point it at your own circuit
+projects instead of the repository's dogfooding examples — `.cmd` forwards
+its arguments straight through to the underlying `.ps1`, so this works from
+`cmd.exe`, PowerShell, or a double-click-launched shortcut with arguments.
 
 The opt-in real-LTspice GitHub workflow installs a pinned Analog Devices build
 on Windows Server, resolves first-run consent, and qualifies the RC, complete
@@ -222,7 +226,9 @@ no-admin first-start path: it creates a private `.venv`, installs the GUI
 dependencies, finds LTspice at `/Applications/LTspice.app`, and opens System
 Builder in the default browser on a random loopback-only port. Install
 LTspice first with `brew install --cask ltspice`, then launch it once to
-answer its usage-data prompt.
+answer its usage-data prompt. Pass `--workspace=/path/to/your/projects` from
+a terminal to point it at your own circuit projects instead of the
+repository's dogfooding examples.
 
 ## Tests and quality gates
 
