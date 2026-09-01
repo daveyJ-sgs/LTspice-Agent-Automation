@@ -194,6 +194,7 @@ class SystemBuilderTests(unittest.TestCase):
             ("POST", "/api/qualification/jobs/{job_id}/resume"),
             ("POST", "/api/qualification/preview"),
             ("POST", "/api/qualification/start"),
+            ("POST", "/api/recipe/netlist"),
             ("POST", "/api/remote/auth"),
             ("POST", "/api/remote/dispatch"),
             ("POST", "/api/remote/jobs/{remote_job_id}/download"),
@@ -1486,6 +1487,46 @@ class SystemBuilderTests(unittest.TestCase):
             )
             self.assertEqual(bad_save.status_code, 409)
             self.assertEqual((workspace / "outside.cir").read_text(), "R1 in out 1\n.end\n")
+
+            denied_import = client.post(
+                "/api/recipe/netlist",
+                params={"path": "sensor/imported.net"},
+                json={"content": "R1 in out {R_VAL}\n.end\n"},
+            )
+            self.assertEqual(denied_import.status_code, 403)
+
+            imported = client.post(
+                "/api/recipe/netlist",
+                params={"path": "sensor/imported.net"},
+                json={"content": "R1 in out {R_VAL}\n.end\n"},
+                headers=self._headers(),
+            )
+            self.assertEqual(imported.status_code, 201)
+            self.assertEqual(
+                (workspace / "sensor" / "imported.net").read_text(),
+                "R1 in out {R_VAL}\n.end\n",
+            )
+
+            duplicate_import = client.post(
+                "/api/recipe/netlist",
+                params={"path": "sensor/imported.net"},
+                json={"content": "anything else"},
+                headers=self._headers(),
+            )
+            self.assertEqual(duplicate_import.status_code, 409)
+            self.assertEqual(
+                (workspace / "sensor" / "imported.net").read_text(),
+                "R1 in out {R_VAL}\n.end\n",
+            )
+
+            escaped_import = client.post(
+                "/api/recipe/netlist",
+                params={"path": "../escaped.cir"},
+                json={"content": "anything"},
+                headers=self._headers(),
+            )
+            self.assertEqual(escaped_import.status_code, 409)
+            self.assertFalse((workspace.parent / "escaped.cir").exists())
 
 
 if __name__ == "__main__":

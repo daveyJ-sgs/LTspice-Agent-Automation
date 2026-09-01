@@ -13,6 +13,7 @@ let jobPollTimer = null;
 let variableDisplayUnits = new WeakMap();
 let cornerDisplayUnits = new WeakMap();
 let netlistFiles = [];
+let currentProjectPath = null; // workspace-relative folder of the open project, if any
 
 const byId = (id) => document.getElementById(id);
 const THEME_KEY = "ltspice-system-builder-theme";
@@ -1917,6 +1918,7 @@ async function openProject(project) {
     const response = await fetch(`/api/projects/${encodeURIComponent(project.slug)}/recipe`);
     const loaded = await response.json();
     if (!response.ok) throw new Error(loaded.error?.message || "Recipe could not be loaded");
+    currentProjectPath = project.path;
     if (project.kind === "optimization") {
       optimizationRecipe = loaded;
       optimizationDisplayUnits = new WeakMap();
@@ -2209,6 +2211,35 @@ byId("refresh-netlists").addEventListener("click", async () => {
     renderScopedErrors([{path: "experiments", message: error.message}]);
   } finally {
     button.disabled = false;
+  }
+});
+byId("netlist-import-input").addEventListener("change", async (event) => {
+  const input = event.target;
+  const file = input.files[0];
+  input.value = ""; // allow re-selecting the same filename later
+  if (!file) return;
+  const lowerName = file.name.toLowerCase();
+  if (!lowerName.endsWith(".cir") && !lowerName.endsWith(".net")) {
+    renderScopedErrors([{path: "experiments", message: "Import requires a .cir or .net file."}]);
+    return;
+  }
+  try {
+    const content = await file.text();
+    const destination = currentProjectPath ? `${currentProjectPath}/${file.name}` : file.name;
+    const response = await fetch(`/api/recipe/netlist?path=${encodeURIComponent(destination)}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({content}),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Netlist could not be imported");
+    renderScopedErrors([]);
+    await loadNetlistFiles();
+  } catch (error) {
+    renderScopedErrors([{path: "experiments", message: error.message}]);
   }
 });
 byId("new-project-form").addEventListener("submit", async (event) => {

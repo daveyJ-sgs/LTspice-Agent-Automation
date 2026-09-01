@@ -640,3 +640,49 @@ def write_netlist_text(workspace_root: Path, relative_path: object, content: str
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(content, encoding="utf-8", newline="\n")
     os.replace(temporary, path)
+
+
+def create_netlist_file(workspace_root: Path, relative_path: object, content: str) -> Path:
+    """Create a new workspace-confined .cir/.net file; refuses to overwrite.
+
+    For importing a file from outside the workspace (e.g. a netlist
+    exported somewhere else on disk) into it. Mirrors _confined_file's
+    escape/symlink checks, but for a destination that must NOT already
+    exist -- the opposite precondition from _confined_file, which is only
+    ever used for a netlist that's already there.
+    """
+    if (
+        not isinstance(relative_path, str)
+        or not relative_path
+        or "\\" in relative_path
+    ):
+        raise ValueError("netlist path must be a non-empty portable path using forward slashes")
+    portable = PurePosixPath(relative_path)
+    if portable.is_absolute() or ".." in portable.parts:
+        raise ValueError("netlist path must remain inside the selected workspace")
+    if Path(relative_path).suffix.lower() not in {".cir", ".net"}:
+        raise ValueError("netlist path must end in .cir or .net")
+    if not isinstance(content, str):
+        raise ValueError("netlist content must be a string")
+    if len(content.encode("utf-8")) > MAX_NETLIST_BYTES:
+        raise ValueError(f"netlists are limited to {MAX_NETLIST_BYTES} bytes")
+
+    root = workspace_root.resolve(strict=True)
+    destination = root.joinpath(*portable.parts)
+    cursor = root
+    for part in portable.parts:
+        cursor /= part
+        if cursor.is_symlink():
+            raise ValueError("netlist path must not traverse a symbolic link")
+    try:
+        parent = destination.parent.resolve(strict=True)
+        parent.relative_to(root)
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        raise ValueError(
+            "netlist path's containing folder does not exist inside the workspace"
+        ) from exc
+    if destination.exists():
+        raise ValueError(f"'{relative_path}' already exists; choose a different name")
+
+    destination.write_text(content, encoding="utf-8", newline="\n")
+    return destination

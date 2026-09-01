@@ -357,6 +357,41 @@ class StudyRecipeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 study_recipe.write_netlist_text(root, "amp/amp.cir", "x" * (study_recipe.MAX_NETLIST_BYTES + 1))
 
+    def test_create_netlist_file_imports_new_files_and_refuses_to_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            # Resolved up front: on macOS, tempfile's /var/... path is itself
+            # a symlink to /private/var/..., and create_netlist_file()
+            # correctly returns the resolved destination -- comparing against
+            # an unresolved root would fail for that reason alone.
+            root = Path(tmp).resolve()
+            project = root / "amp"
+            project.mkdir()
+
+            created = study_recipe.create_netlist_file(
+                root, "amp/imported.net", "R1 in out {R_VAL}\n.end\n"
+            )
+
+            self.assertEqual(created, project / "imported.net")
+            self.assertEqual(
+                created.read_text(encoding="utf-8"), "R1 in out {R_VAL}\n.end\n"
+            )
+
+            with self.assertRaises(ValueError):
+                study_recipe.create_netlist_file(root, "amp/imported.net", "anything else")
+            self.assertEqual(
+                created.read_text(encoding="utf-8"), "R1 in out {R_VAL}\n.end\n"
+            )
+
+            with self.assertRaises(ValueError):
+                study_recipe.create_netlist_file(root, "../escaped.cir", "anything")
+            self.assertFalse((root.parent / "escaped.cir").exists())
+
+            with self.assertRaises(ValueError):
+                study_recipe.create_netlist_file(root, "amp/notes.txt", "not a netlist")
+
+            with self.assertRaises(ValueError):
+                study_recipe.create_netlist_file(root, "missing-folder/x.cir", "anything")
+
 
 if __name__ == "__main__":
     unittest.main()

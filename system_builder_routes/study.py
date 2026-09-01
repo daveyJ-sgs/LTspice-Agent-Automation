@@ -14,6 +14,7 @@ from remote_execution import build_remote_preview
 from study_recipe import (
     MAX_NETLIST_BYTES,
     MAX_RECIPE_BYTES,
+    create_netlist_file,
     list_netlist_files,
     load_recipe_experiments,
     preview_study_recipe,
@@ -118,6 +119,26 @@ def create_study_router(
         except ValueError as exc:
             return json_error(409, "netlist_save_failed", str(exc))
         return JSONResponse({"path": path, "content": payload["content"]})
+
+    @router.post("/api/recipe/netlist")
+    async def import_netlist_content(request: Request, path: str) -> Response:
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        payload, error = await read_json_body(request, maximum=MAX_NETLIST_BYTES + 4096)
+        if error is not None:
+            return error
+        if not isinstance(payload, dict) or not isinstance(payload.get("content"), str):
+            return json_error(
+                400, "invalid_netlist_import", "import requires a string content field"
+            )
+        try:
+            create_netlist_file(workspace, path, payload["content"])
+        except ValueError as exc:
+            return json_error(409, "netlist_import_failed", str(exc))
+        return JSONResponse(
+            {"path": path, "content": payload["content"]}, status_code=201
+        )
 
     @router.post("/api/preview")
     async def preview(request: Request) -> Response:
