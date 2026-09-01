@@ -114,6 +114,7 @@ def _inside(path: Path, root: Path, message: str) -> Path:
 def _validated_context(
     experiment_dir: Path,
     context: ReportContext | None,
+    workspace_root: Path,
 ) -> tuple[ReportContext, str | None]:
     context_path = experiment_dir / REPORT_CONTEXT_FILENAME
     if context is None and context_path.is_file() and not context_path.is_symlink():
@@ -136,11 +137,10 @@ def _validated_context(
     image_data = None
     image_reference = validated.get("schematic_path")
     if image_reference:
-        project_root = Path(__file__).resolve().parent
         image_path = _inside(
-            project_root / image_reference,
-            project_root,
-            "report schematic must remain inside the project directory",
+            workspace_root / image_reference,
+            workspace_root,
+            "report schematic must remain inside the selected workspace",
         )
         if image_path.is_symlink() or not image_path.is_file():
             raise ValueError("report schematic must be a regular file")
@@ -1182,7 +1182,16 @@ def build_experiment_report(
 ) -> ExperimentReportResult:
     """Build a deterministic, self-contained report for one completed experiment."""
     experiment_dir, manifest, results, record = _load_artifacts(runs_dir, experiment_id)
-    context, image_data = _validated_context(experiment_dir, report_context)
+    # runs_dir is always <workspace>/runs (every caller constructs it that way,
+    # including mcp_server's own RUNS_DIR default), so its parent is the
+    # workspace a report_context.schematic_path is relative to. Resolving
+    # against the automation repo's own directory instead -- the previous
+    # behavior -- silently broke schematic images for any workspace that
+    # isn't the repo itself, exactly the class of bug already found and
+    # fixed once this session in mcp_server.py's RUNS_DIR confinement.
+    context, image_data = _validated_context(
+        experiment_dir, report_context, runs_dir.resolve().parent
+    )
     if (
         max_traces_per_plot is not None
         and (

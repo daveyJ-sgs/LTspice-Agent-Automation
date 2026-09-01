@@ -355,12 +355,42 @@ class ExperimentReportTests(TemporaryRunsTestCase):
                 self.experiment_id,
                 {"title": "x" * (experiment_report.MAX_CONTEXT_TEXT + 1)},
             )
-        with self.assertRaisesRegex(ValueError, "inside the project"):
+        with self.assertRaisesRegex(ValueError, "inside the selected workspace"):
             experiment_report.build_experiment_report(
                 self.runs,
                 self.experiment_id,
                 {"schematic_path": "../outside.png"},
             )
+
+    def test_schematic_path_resolves_against_the_actual_workspace(self) -> None:
+        """Regression: report_context.schematic_path must resolve against the
+        workspace that owns runs_dir (self.runs.parent here), not the
+        automation repo's own directory. The old code hardcoded
+        Path(__file__).resolve().parent as the root, so any workspace other
+        than the repo itself always failed with "must be a regular file"
+        even for a real, correctly-placed schematic image -- the exact bug
+        class already found once this session in mcp_server.py's RUNS_DIR.
+        """
+        # A minimal 1x1 PNG. Placed only under the fake workspace root
+        # (self.runs.parent), never under the real repository, so success
+        # here can only mean resolution used the right root.
+        png_bytes = bytes.fromhex(
+            "89504e470d0a1a0a0000000d494844520000000100000001"
+            "08060000001f15c4890000000a4944415478da6300010000"
+            "0500010d0a2db4000000000049454e44ae426082"
+        )
+        (self.root / "my-schematic.png").write_bytes(png_bytes)
+
+        with patch.object(
+            experiment_report.raw_parser, "parse_raw", return_value=self._raw_data()
+        ):
+            result = experiment_report.build_experiment_report(
+                self.runs,
+                self.experiment_id,
+                {"schematic_path": "my-schematic.png"},
+            )
+
+        self.assertIn("data:image/png;base64,", Path(result["report_html"]).read_text(encoding="utf-8"))
 
     def test_resolves_portable_windows_artifact_paths(self) -> None:
         results_path = self.experiment_dir / "results.json"
