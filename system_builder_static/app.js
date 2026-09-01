@@ -856,6 +856,7 @@ function emptyEditor(message) {
 }
 
 function populateRecipeControls() {
+  byId("study-name").textContent = recipe.name || "Untitled study";
   byId("study-description").textContent = recipe.description || "Portable LTspice study recipe";
   byId("sample-count").value = recipe.plan.sample_count;
   byId("seed").value = recipe.plan.seed;
@@ -1888,6 +1889,7 @@ byId("new-project-form").addEventListener("submit", async (event) => {
     renderProjectsError(null);
     input.value = "";
     await loadProjects();
+    await openProject(result.project);
   } catch (error) {
     renderProjectsError(error.message);
   } finally {
