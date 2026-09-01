@@ -51,7 +51,7 @@ applyTheme(preferredTheme());
 // and reload land where you left off. This replaces the previous
 // anchor-scroll navigation, where every section lived in the DOM at once
 // and "switching" meant scrolling.
-const VIEWS = ["dashboard", "projects", "definition", "optimization", "qualification", "history"];
+const VIEWS = ["dashboard", "projects", "definition", "optimization", "qualification", "history", "guide", "faq"];
 const VIEW_LABELS = {
   dashboard: "Dashboard",
   projects: "Projects",
@@ -59,6 +59,8 @@ const VIEW_LABELS = {
   optimization: "Optimization",
   qualification: "Qualification",
   history: "Workspace",
+  guide: "Guide",
+  faq: "FAQ",
 };
 
 function showView(view) {

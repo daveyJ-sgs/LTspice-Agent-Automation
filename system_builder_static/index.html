@@ -39,6 +39,14 @@
           <svg class="nav-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3"/><path d="M8 4.8V8l2.3 1.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span>Workspace</span>
         </button>
+        <button type="button" class="nav-link" data-view="guide">
+          <svg class="nav-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 2.8c0-.5.4-.9 1-.9h3.4c.9 0 1.6.6 1.6 1.4v9.9c0-.6-.5-1-1.2-1H2V2.8z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M14 2.8c0-.5-.4-.9-1-.9H9.6C8.7 1.9 8 2.5 8 3.3v9.9c0-.6.5-1 1.2-1H14V2.8z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+          <span>Guide</span>
+        </button>
+        <button type="button" class="nav-link" data-view="faq">
+          <svg class="nav-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3"/><path d="M6.1 6.2c0-1 .8-1.7 1.9-1.7s1.9.6 1.9 1.6c0 1.3-1.7 1.3-1.9 2.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="11.2" r=".9" fill="currentColor"/></svg>
+          <span>FAQ</span>
+        </button>
       </nav>
       <div class="sidebar-footer">
         <div class="security-state" tabindex="0" aria-describedby="local-security-detail">
@@ -652,6 +660,151 @@
         </article>
       </div>
       <p class="history-note">Opening or refreshing this workspace never rebuilds the index, resumes a job, or launches LTspice.</p>
+    </section>
+
+    <section id="guide" class="guide-section" hidden>
+      <div class="history-heading">
+        <div>
+          <p class="step">GETTING STARTED</p>
+          <h2>From a blank project to a finished study.</h2>
+          <p>A walkthrough of the whole path, in order. Each step links to where it happens in the app.</p>
+        </div>
+      </div>
+
+      <div class="guide-steps">
+        <article class="editor-card guide-step">
+          <div class="editor-card-heading"><strong>1. Create a project</strong></div>
+          <p class="muted-copy">Open <a href="#projects" data-view="projects">Projects</a> and give it a name. A project starts as an empty shell -- just a recipe file, no netlist -- so it never pretends to be ready before it actually is.</p>
+        </article>
+
+        <article class="editor-card guide-step">
+          <div class="editor-card-heading"><strong>2. Get a real SPICE netlist out of LTspice</strong></div>
+          <p class="muted-copy">This is the step that trips people up most, so read it carefully. With your <code>.asc</code> schematic open in LTspice, either choose <strong>View → SPICE Netlist</strong>, or right-click an empty spot on the schematic and choose <strong>Create Netlist</strong>. Either one writes a <code>.net</code> file next to your <code>.asc</code>, containing real SPICE component lines like <code>R1 N001 N002 4700</code>.</p>
+          <p class="muted-copy"><strong>Watch out for:</strong> LTspice can also export netlists meant for PCB layout tools (for example a file that starts with a header like <code>"ExpressPCB Netlist"</code>). Those describe physical board connections, not a circuit the simulator can run, and look superficially similar at a glance. If System Builder tells you a netlist "must be readable UTF-8 or UTF-16 text" even though the file looks like plain text to you, or preview complains about a missing parameter placeholder no matter what you try, open the file and check: does it actually contain SPICE element lines (<code>R1</code>, <code>C1</code>, <code>Q1</code>, <code>.tran</code>, <code>.ac</code>, <code>.end</code>), or something else entirely?</p>
+        </article>
+
+        <article class="editor-card guide-step">
+          <div class="editor-card-heading"><strong>3. Pick or import the netlist</strong></div>
+          <p class="muted-copy">In <a href="#definition" data-view="definition">Study setup</a>, the Netlist field at the top lists every <code>.cir</code>/<code>.net</code> file already in this workspace. If yours isn't there yet, click <strong>⇧ Import netlist</strong> to bring in a file from anywhere on your computer -- it's copied straight into this project's folder and becomes selectable immediately.</p>
+        </article>
+
+        <article class="editor-card guide-step">
+          <div class="editor-card-heading"><strong>4. Turn a fixed value into a variable</strong></div>
+          <p class="muted-copy">A real exported netlist has literal component values (<code>4700</code>), not the <code>{VARIABLE_NAME}</code> placeholders this tool samples over. The built-in editor right below the netlist picker shows that file's text -- delete the literal value you want to vary and click the matching <code>{VAR_NAME}</code> button to insert the exact placeholder syntax at your cursor, then <strong>Save netlist</strong>. Placeholder names are case-sensitive and must match a declared variable exactly.</p>
+        </article>
+
+        <article class="editor-card guide-step">
+          <div class="editor-card-heading"><strong>5. Declare your variables</strong></div>
+          <p class="muted-copy">In <strong>02 / Variables</strong>: a name (matching the placeholder you just inserted), a distribution, a nominal value, and either a tolerance (Gaussian) or a min/max range. This is the manufacturing-variation model -- what a real production run of this part would actually look like, not just its datasheet-typical value.</p>
+        </article>
+
+        <article class="editor-card guide-step">
+          <div class="editor-card-heading"><strong>6. Correlations and corners (optional)</strong></div>
+          <p class="muted-copy">Skip these for a first study. <strong>03 / Correlations</strong> links two Gaussian variables that vary together rather than independently (parts from the same reel or batch). <strong>04 / Corners</strong> adds named fixed operating conditions -- light load vs. heavy load, for example -- that get crossed with every sampled point, on top of the random variation, not instead of it. See the <a href="#faq" data-view="faq">FAQ</a> for more on both.</p>
+        </article>
+
+        <article class="editor-card guide-step">
+          <div class="editor-card-heading"><strong>7. Set pass/fail requirements</strong></div>
+          <p class="muted-copy">In <strong>05 / Experiments</strong>, each analysis needs at least one requirement: a metric (like <code>ac_gain_db</code> or <code>cutoff_frequency</code>), a comparison operator, and a target value. A sampled point only counts as passing if every one of its requirements passes.</p>
+        </article>
+
+        <article class="editor-card guide-step">
+          <div class="editor-card-heading"><strong>8. Preview</strong></div>
+          <p class="muted-copy">Click <strong>Preview resolved plan</strong>. This only validates and resolves the exact plan -- it never writes a plan file, creates a run directory, or launches LTspice. Fix whatever the errors point at and preview again until it's valid.</p>
+        </article>
+
+        <article class="editor-card guide-step">
+          <div class="editor-card-heading"><strong>9. Freeze, then start</strong></div>
+          <p class="muted-copy"><strong>Create immutable plan</strong> locks in the exact sample set under a content-addressed plan ID -- it still doesn't run anything. <strong>Start local study</strong> is the one action that actually launches LTspice, once per sampled point.</p>
+        </article>
+
+        <article class="editor-card guide-step">
+          <div class="editor-card-heading"><strong>10. Read the results</strong></div>
+          <p class="muted-copy">Track progress and open finished reports from <a href="#history" data-view="history">Workspace</a>. A completed study's HTML report has plots, worst-case points, and a pass/fail breakdown per requirement -- and lives under <code>runs/</code> in this workspace as a portable, self-contained artifact.</p>
+        </article>
+      </div>
+
+      <p class="muted-copy">Optimization (search for a good design point) and Qualification (prove one chosen candidate survives full tolerance) follow this same shape once you have a working Study. See the <a href="#faq" data-view="faq">FAQ</a> for how those relate to each other.</p>
+    </section>
+
+    <section id="faq" class="faq-section" hidden>
+      <div class="history-heading">
+        <div>
+          <p class="step">REFERENCE</p>
+          <h2>Frequently asked questions.</h2>
+          <p>What the statistical and workflow terms in this app actually mean.</p>
+        </div>
+      </div>
+
+      <div class="faq-group">
+        <h3 class="faq-group-heading">Sampling</h3>
+
+        <details class="faq-item">
+          <summary>What does "sample count" mean?</summary>
+          <div class="muted-copy">How many points get simulated across your declared manufacturing variation. Each point is one complete, independently-parameterized LTspice run. Yield is the fraction of those points that pass every requirement.</div>
+        </details>
+
+        <details class="faq-item">
+          <summary>Independent random, Latin hypercube, or digit-scrambled Halton -- which sampling method should I use?</summary>
+          <div class="muted-copy">
+            <p><strong>Independent random</strong> draws every variable independently at random from its distribution -- the simplest, most textbook form of Monte Carlo, but samples can clump together and leave gaps for a small sample count.</p>
+            <p><strong>Latin hypercube</strong> splits each variable's range into as many equal-probability bins as you have samples and guarantees every bin is used exactly once per variable, so coverage is more even than pure random for the same sample count.</p>
+            <p><strong>Digit-scrambled Halton</strong> is a low-discrepancy (quasi-random) sequence: it fills the space more evenly still, and a randomized digit-scrambling step avoids the visible striping artifacts a plain Halton sequence can show in higher dimensions. It's the default and generally the strongest choice for a tolerance study -- it tends to characterize yield accurately with fewer samples than either alternative.</p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary>What is a "seed" and why does it matter?</summary>
+          <div class="muted-copy">The seed makes sampling deterministic: the same seed, variables, and sample count always produce the exact same sampled points. That's what makes a plan reproducible and its evidence portable -- anyone re-running the same frozen plan gets the identical set of points, not "close enough."</div>
+        </details>
+      </div>
+
+      <div class="faq-group">
+        <h3 class="faq-group-heading">Variables, corners, and correlations</h3>
+
+        <details class="faq-item">
+          <summary>What are "corners"?</summary>
+          <div class="muted-copy">Named, fixed operating conditions -- light load vs. heavy load, for example -- rather than randomly sampled ones. Every corner axis you define gets crossed with the entire statistical sample set, so you see manufacturing variation evaluated at each named condition, not a replacement for it.</div>
+        </details>
+
+        <details class="faq-item">
+          <summary>What are "correlations" for?</summary>
+          <div class="muted-copy">Real components from the same manufacturing batch or reel often drift together rather than completely independently. A correlation group links two or more Gaussian variables with a correlation coefficient matrix, so the sampled variation reflects that shared drift instead of assuming every part is an independent random draw.</div>
+        </details>
+      </div>
+
+      <div class="faq-group">
+        <h3 class="faq-group-heading">Plans, workflows, and evidence</h3>
+
+        <details class="faq-item">
+          <summary>Why does "freezing" a plan matter -- isn't Preview enough?</summary>
+          <div class="muted-copy">Preview is pure and repeatable, but the recipe backing it can still change. Freezing hashes the exact sample set and netlist content into one content-addressed plan ID -- what actually gets run and reported is always traceable back to that exact, unchangeable definition, so "which version of the recipe did this evidence come from" is never ambiguous.</div>
+        </details>
+
+        <details class="faq-item">
+          <summary>Study vs. Optimization vs. Qualification -- what's the difference?</summary>
+          <div class="muted-copy">
+            <p><strong>Study</strong> (statistical/tolerance): does my current design survive realistic manufacturing variation around its nominal values?</p>
+            <p><strong>Optimization</strong>: search a design space for a good -- ideally Pareto-optimal -- nominal design point in the first place.</p>
+            <p><strong>Qualification</strong>: take one specific candidate design (often optimization's winner) and prove it survives full tolerance stackup before you commit to it.</p>
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary>What's a Wilson interval, and why is it next to my yield number?</summary>
+          <div class="muted-copy">A confidence interval for the true yield percentage given a finite number of samples. It behaves better than a naive normal-approximation interval, especially when yield is very high or very low or the sample count is small -- which is exactly when a naive interval is least trustworthy.</div>
+        </details>
+
+        <details class="faq-item">
+          <summary>Where does the evidence from a run actually live?</summary>
+          <div class="muted-copy">Under <code>runs/</code> in the current workspace: LTspice's own RAW waveform files, JSON manifests, CSV exports, and a self-contained HTML report per completed job -- the same portable evidence contract used by the MCP and CLI workflows, not something specific to the GUI.</div>
+        </details>
+
+        <details class="faq-item">
+          <summary>What metrics can a requirement check?</summary>
+          <div class="muted-copy">AC-domain metrics like gain, phase, cutoff frequency, and peaking; transient-domain metrics like rise time, settling time, overshoot, and propagation delay; and general-purpose ones like maximum/minimum. See <code>docs/MCP_REFERENCE.md</code> in the repository for the complete list and exact parameters each metric takes.</div>
+        </details>
+      </div>
     </section>
       </main>
     </div>
