@@ -101,6 +101,11 @@ alias stub instead of an interpreter. Pass it explicitly:
 make PYTHON=python test
 ```
 
+GNU Make itself is not part of a default Windows install, and the CI Windows
+job does not depend on it -- it runs `python -m unittest discover -s tests -v`
+directly. Use that form if `make` is not on your `PATH` rather than installing
+Make just to run tests.
+
 The wrapper uses `subprocess` and `pathlib` rather than shell-specific command
 strings. Model-library search paths and representative `.asc` files still need
 verification against the target LTspice version.

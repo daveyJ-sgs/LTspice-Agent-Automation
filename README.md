@@ -121,6 +121,8 @@ python3 -m venv .venv
 Common commands include `make test`, `make ac`, `make transient`, `make nand`,
 `make sallen-key`, `make mixed-signal-daq`, `make sweep`,
 `make statistical-yield`, `make search`, `make step`, and `make dashboard`.
+Every target has a `.venv/bin/python <script>.py`-style equivalent for
+platforms without GNU Make installed (see [Windows](#windows) below).
 
 ## LTspice System Builder
 
@@ -244,9 +246,19 @@ make typecheck
 python3 -m unittest discover -s tests -v
 ```
 
-Normal pushes run the suite on both macOS and Windows. Real LTspice installation
-and circuit qualification remain an explicit workflow because they are slower
-and retain larger evidence bundles.
+Normal pushes run the suite on both macOS and Windows, but CI's Windows job
+does not use `make` at all -- it calls the underlying commands directly, since
+GNU Make is not a default part of Windows. Do the same locally instead of
+installing `make`:
+
+```powershell
+python -m ruff check <files...>   # see LINT_FILES in the Makefile for the list
+python -m mypy artifacts.py waveform_metrics.py frequency_domain_metrics.py
+python -m unittest discover -s tests -v
+```
+
+Real LTspice installation and circuit qualification remain an explicit
+workflow because they are slower and retain larger evidence bundles.
 
 ## Documentation
 
