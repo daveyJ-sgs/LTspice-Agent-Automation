@@ -118,6 +118,13 @@ python3 -m venv .venv
   -r requirements-gui.txt -r requirements-dev.txt
 ```
 
+On Windows, `venv` creates `Scripts\` instead of `bin/`:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt -r requirements-mcp.txt -r requirements-gui.txt -r requirements-dev.txt
+```
+
 Common commands include `make test`, `make ac`, `make transient`, `make nand`,
 `make sallen-key`, `make mixed-signal-daq`, `make sweep`,
 `make statistical-yield`, `make search`, `make step`, and `make dashboard`.
