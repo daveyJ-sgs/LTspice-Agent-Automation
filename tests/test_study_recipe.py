@@ -325,6 +325,38 @@ class StudyRecipeTests(unittest.TestCase):
             {"sensor-front-end/sensor-front-end.cir", "sensor-front-end/legacy.net"},
         )
 
+    def test_read_and_write_netlist_text_round_trip_and_stay_confined(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "amp"
+            project.mkdir()
+            (project / "amp.cir").write_bytes(
+                b"\xff\xfe" + "R1 in out 4700\n.end\n".encode("utf-16-le")
+            )
+            (root / "outside.cir").write_text("R1 in out 1\n.end\n")
+
+            original = study_recipe.read_netlist_text(root, "amp/amp.cir")
+            self.assertEqual(original, "R1 in out 4700\n.end\n")
+
+            study_recipe.write_netlist_text(root, "amp/amp.cir", "R1 in out {R_VAL}\n.end\n")
+            self.assertEqual(
+                (project / "amp.cir").read_text(encoding="utf-8"),
+                "R1 in out {R_VAL}\n.end\n",
+            )
+            self.assertEqual(
+                study_recipe.read_netlist_text(root, "amp/amp.cir"),
+                "R1 in out {R_VAL}\n.end\n",
+            )
+
+            with self.assertRaises(ValueError):
+                study_recipe.read_netlist_text(root, "../outside.cir")
+            with self.assertRaises(ValueError):
+                study_recipe.write_netlist_text(root, "../outside.cir", "anything")
+            self.assertEqual((root / "outside.cir").read_text(), "R1 in out 1\n.end\n")
+
+            with self.assertRaises(ValueError):
+                study_recipe.write_netlist_text(root, "amp/amp.cir", "x" * (study_recipe.MAX_NETLIST_BYTES + 1))
+
 
 if __name__ == "__main__":
     unittest.main()

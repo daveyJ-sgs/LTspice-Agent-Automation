@@ -364,12 +364,127 @@ async function loadSchematicFiles() {
   populate("schematic-image-files", result.images || []);
 }
 
+// Unsaved edits, keyed by workspace-relative netlist path, so a structural
+// re-render elsewhere (e.g. adding a requirement) doesn't clobber text the
+// user hasn't saved yet. Cleared on an explicit "Refresh netlists" click.
+const netlistEditorBuffers = new Map();
+
 async function loadNetlistFiles() {
   const response = await fetch("/api/recipe/netlists");
   const result = await response.json();
   if (!response.ok) throw new Error(result.error?.message || "Netlist files could not be listed");
   netlistFiles = result.files || [];
+  netlistEditorBuffers.clear();
   if (recipe) populateExperiments();
+}
+
+function buildNetlistEditor(experiment) {
+  const container = document.createElement("div");
+  container.className = "netlist-editor";
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "netlist-editor-toolbar";
+  const label = document.createElement("span");
+  label.className = "muted-copy";
+  label.textContent = "Insert variable:";
+  toolbar.append(label);
+
+  const textarea = document.createElement("textarea");
+  textarea.className = "netlist-textarea";
+  textarea.spellcheck = false;
+  textarea.rows = 14;
+  textarea.disabled = true;
+  textarea.placeholder = "Pick a netlist above to view and edit its text here.";
+
+  for (const variable of (recipe.plan.variables || [])) {
+    if (!variable.name) continue;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "compact-button";
+    button.textContent = `{${variable.name}}`;
+    button.title = `Insert {${variable.name}} at the cursor`;
+    button.addEventListener("click", () => {
+      const insertText = `{${variable.name}}`;
+      const start = textarea.selectionStart ?? textarea.value.length;
+      const end = textarea.selectionEnd ?? textarea.value.length;
+      textarea.value = textarea.value.slice(0, start) + insertText + textarea.value.slice(end);
+      netlistEditorBuffers.set(experiment.netlist_path, textarea.value);
+      const cursor = start + insertText.length;
+      textarea.focus();
+      textarea.setSelectionRange(cursor, cursor);
+    });
+    toolbar.append(button);
+  }
+
+  textarea.addEventListener("input", () => {
+    netlistEditorBuffers.set(experiment.netlist_path, textarea.value);
+  });
+
+  const status = document.createElement("span");
+  status.className = "muted-copy netlist-editor-status";
+
+  const saveButton = document.createElement("button");
+  saveButton.type = "button";
+  saveButton.className = "primary-button";
+  saveButton.textContent = "Save netlist";
+  saveButton.disabled = true;
+  saveButton.addEventListener("click", async () => {
+    const path = experiment.netlist_path;
+    if (!path) return;
+    saveButton.disabled = true;
+    status.textContent = "Saving…";
+    try {
+      const response = await fetch(`/api/recipe/netlist?path=${encodeURIComponent(path)}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-LTspice-System-Builder": "1",
+        },
+        body: JSON.stringify({content: textarea.value}),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error?.message || "Netlist could not be saved");
+      netlistEditorBuffers.set(path, textarea.value);
+      status.textContent = "Saved.";
+      schedulePreview();
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      saveButton.disabled = false;
+    }
+  });
+
+  const buttonRow = document.createElement("div");
+  buttonRow.className = "button-row";
+  buttonRow.append(saveButton, status);
+
+  container.append(toolbar, textarea, buttonRow);
+
+  (async () => {
+    const path = experiment.netlist_path;
+    if (!path) return;
+    if (netlistEditorBuffers.has(path)) {
+      textarea.value = netlistEditorBuffers.get(path);
+      textarea.disabled = false;
+      saveButton.disabled = false;
+      return;
+    }
+    status.textContent = "Loading…";
+    try {
+      const response = await fetch(`/api/recipe/netlist?path=${encodeURIComponent(path)}`);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error?.message || "Netlist could not be loaded");
+      textarea.value = result.content;
+      netlistEditorBuffers.set(path, result.content);
+      textarea.disabled = false;
+      saveButton.disabled = false;
+      status.textContent = "";
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  })();
+
+  return container;
 }
 
 function commonDirectoryPrefix(paths) {
@@ -861,12 +976,14 @@ function populateExperiments() {
     });
     nameWrapper.append(nameCaption, nameField);
     fields.append(nameWrapper);
+    let netlistEditor = null;
     if (experiments.length > 1) {
       const netlistWrapper = document.createElement("label");
       const netlistCaption = document.createElement("span");
       netlistCaption.textContent = "Netlist (.cir/.net)";
       netlistWrapper.append(netlistCaption, netlistSelect(experiment, `${base}.netlist_path`));
       fields.append(netlistWrapper);
+      netlistEditor = buildNetlistEditor(experiment);
     }
 
     const analyses = experiment.waveform_analyses || (experiment.waveform_analyses = []);
@@ -970,7 +1087,9 @@ function populateExperiments() {
       schedulePreview();
     });
 
-    group.append(heading, fields, analysisStack, addAnalysis);
+    group.append(heading, fields);
+    if (netlistEditor) group.append(netlistEditor);
+    group.append(analysisStack, addAnalysis);
     return group;
   });
 
@@ -982,14 +1101,19 @@ function populateExperiments() {
 function populatePrimaryNetlist(experiments) {
   const row = byId("primary-netlist-row");
   const note = byId("primary-netlist-note");
+  const editorSlot = byId("primary-netlist-editor-slot");
   if (experiments.length === 1) {
     row.hidden = false;
     note.hidden = true;
     byId("primary-netlist-field").replaceChildren(
       netlistSelect(experiments[0], "experiments[0].netlist_path")
     );
+    editorSlot.hidden = false;
+    editorSlot.replaceChildren(buildNetlistEditor(experiments[0]));
   } else {
     row.hidden = true;
+    editorSlot.hidden = true;
+    editorSlot.replaceChildren();
     note.hidden = experiments.length === 0;
   }
 }

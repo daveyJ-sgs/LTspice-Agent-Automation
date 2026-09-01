@@ -253,6 +253,11 @@ td:first-child { color: var(--text); font-weight: 600; }
 .experiment-group > .compact-fields { grid-template-columns: 1fr 2fr; }
 .analysis-stack { margin-top: 13px; gap: 10px; }
 .analysis-card { background: var(--bg); }
+.netlist-editor { margin: 12px 0 22px; }
+.netlist-editor-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.netlist-editor-toolbar .muted-copy { margin: 0; }
+.netlist-textarea { min-height: 220px; }
+.netlist-editor-status { font-size: 12px; }
 .correlation-variables { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 11px 0 14px; }
 .correlation-variables label { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font: 500 11px "IBM Plex Mono", monospace; }
 .correlation-variables input { width: 14px; height: 14px; accent-color: var(--accent); }

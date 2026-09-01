@@ -615,3 +615,28 @@ def list_netlist_files(workspace_root: Path, *, maximum: int = 250) -> list[str]
             if len(files) >= maximum:
                 return files
     return files
+
+
+def read_netlist_text(workspace_root: Path, relative_path: object) -> str:
+    """Read and decode a workspace-confined .cir/.net file's text content."""
+    path, error = _confined_file(workspace_root, relative_path, "netlist_path")
+    if error is not None or path is None:
+        raise ValueError(error["message"] if error else "netlist was not found")
+    try:
+        return decode_text(path.read_bytes())
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("netlist must be readable UTF-8 or UTF-16 text") from exc
+
+
+def write_netlist_text(workspace_root: Path, relative_path: object, content: str) -> None:
+    """Atomically overwrite a workspace-confined .cir/.net file's text content."""
+    path, error = _confined_file(workspace_root, relative_path, "netlist_path")
+    if error is not None or path is None:
+        raise ValueError(error["message"] if error else "netlist was not found")
+    if not isinstance(content, str):
+        raise ValueError("netlist content must be a string")
+    if len(content.encode("utf-8")) > MAX_NETLIST_BYTES:
+        raise ValueError(f"netlists are limited to {MAX_NETLIST_BYTES} bytes")
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(content, encoding="utf-8", newline="\n")
+    os.replace(temporary, path)

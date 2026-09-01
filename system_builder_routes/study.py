@@ -12,11 +12,14 @@ from fastapi.responses import JSONResponse, Response
 import statistical_engine
 from remote_execution import build_remote_preview
 from study_recipe import (
+    MAX_NETLIST_BYTES,
     MAX_RECIPE_BYTES,
     list_netlist_files,
     load_recipe_experiments,
     preview_study_recipe,
     publish_study_recipe_plan,
+    read_netlist_text,
+    write_netlist_text,
 )
 
 from .common import (
@@ -86,6 +89,35 @@ def create_study_router(
             return JSONResponse({"files": list_netlist_files(workspace)})
         except OSError as exc:
             return json_error(409, "netlist_list_failed", str(exc))
+
+    @router.get("/api/recipe/netlist")
+    def netlist_content(request: Request, path: str) -> Response:
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        try:
+            content = read_netlist_text(workspace, path)
+        except ValueError as exc:
+            return json_error(404, "netlist_not_found", str(exc))
+        return JSONResponse({"path": path, "content": content})
+
+    @router.put("/api/recipe/netlist")
+    async def save_netlist_content(request: Request, path: str) -> Response:
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        payload, error = await read_json_body(request, maximum=MAX_NETLIST_BYTES + 4096)
+        if error is not None:
+            return error
+        if not isinstance(payload, dict) or not isinstance(payload.get("content"), str):
+            return json_error(
+                400, "invalid_netlist_save", "save requires a string content field"
+            )
+        try:
+            write_netlist_text(workspace, path, payload["content"])
+        except ValueError as exc:
+            return json_error(409, "netlist_save_failed", str(exc))
+        return JSONResponse({"path": path, "content": payload["content"]})
 
     @router.post("/api/preview")
     async def preview(request: Request) -> Response:

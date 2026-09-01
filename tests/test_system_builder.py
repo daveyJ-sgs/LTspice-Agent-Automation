@@ -164,6 +164,7 @@ class SystemBuilderTests(unittest.TestCase):
             ("GET", "/api/qualification/jobs"),
             ("GET", "/api/qualification/jobs/{job_id}"),
             ("GET", "/api/qualification/jobs/{job_id}/results"),
+            ("GET", "/api/recipe/netlist"),
             ("GET", "/api/recipe/netlists"),
             ("GET", "/api/remote/jobs"),
             ("GET", "/api/schematic/files"),
@@ -199,6 +200,7 @@ class SystemBuilderTests(unittest.TestCase):
             ("POST", "/api/remote/preview"),
             ("POST", "/api/schematic/capture"),
             ("POST", "/api/start"),
+            ("PUT", "/api/recipe/netlist"),
         }
         self.assertEqual(actual, expected)
 
@@ -1407,6 +1409,61 @@ class SystemBuilderTests(unittest.TestCase):
 
             self.assertEqual(listed.status_code, 200)
             self.assertEqual(listed.json()["files"], ["sensor/sensor.cir"])
+
+    def test_netlist_content_route_reads_writes_and_stays_confined(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            (workspace / "sensor").mkdir()
+            (workspace / "sensor" / "sensor.cir").write_text("R1 in out 1000\n.end\n")
+            (workspace / "outside.cir").write_text("R1 in out 1\n.end\n")
+            client = TestClient(
+                system_builder.create_app(workspace, testing=True),
+                base_url="http://testserver",
+            )
+
+            self.assertEqual(
+                client.get("/api/recipe/netlist", params={"path": "sensor/sensor.cir"}).status_code,
+                401,
+            )
+            client.get("/")
+
+            read = client.get("/api/recipe/netlist", params={"path": "sensor/sensor.cir"})
+            self.assertEqual(read.status_code, 200)
+            self.assertEqual(read.json()["content"], "R1 in out 1000\n.end\n")
+
+            missing = client.get("/api/recipe/netlist", params={"path": "sensor/missing.cir"})
+            self.assertEqual(missing.status_code, 404)
+
+            escape = client.get("/api/recipe/netlist", params={"path": "../outside.cir"})
+            self.assertEqual(escape.status_code, 404)
+
+            denied_save = client.put(
+                "/api/recipe/netlist",
+                params={"path": "sensor/sensor.cir"},
+                json={"content": "R1 in out {R_VAL}\n.end\n"},
+            )
+            self.assertEqual(denied_save.status_code, 403)
+
+            saved = client.put(
+                "/api/recipe/netlist",
+                params={"path": "sensor/sensor.cir"},
+                json={"content": "R1 in out {R_VAL}\n.end\n"},
+                headers=self._headers(),
+            )
+            self.assertEqual(saved.status_code, 200)
+            self.assertEqual(
+                (workspace / "sensor" / "sensor.cir").read_text(),
+                "R1 in out {R_VAL}\n.end\n",
+            )
+
+            bad_save = client.put(
+                "/api/recipe/netlist",
+                params={"path": "../outside.cir"},
+                json={"content": "anything"},
+                headers=self._headers(),
+            )
+            self.assertEqual(bad_save.status_code, 409)
+            self.assertEqual((workspace / "outside.cir").read_text(), "R1 in out 1\n.end\n")
 
 
 if __name__ == "__main__":
