@@ -12,6 +12,7 @@ let trackedJobs = new Map();
 let jobPollTimer = null;
 let variableDisplayUnits = new WeakMap();
 let cornerDisplayUnits = new WeakMap();
+let netlistFiles = [];
 
 const byId = (id) => document.getElementById(id);
 const THEME_KEY = "ltspice-system-builder-theme";
@@ -367,11 +368,19 @@ async function loadNetlistFiles() {
   const response = await fetch("/api/recipe/netlists");
   const result = await response.json();
   if (!response.ok) throw new Error(result.error?.message || "Netlist files could not be listed");
-  byId("netlist-files").replaceChildren(...(result.files || []).map((value) => {
-    const option = document.createElement("option");
-    option.value = value;
-    return option;
-  }));
+  netlistFiles = result.files || [];
+  if (recipe) populateExperiments();
+}
+
+function netlistSelect(experiment, path) {
+  const select = selectInput(experiment.netlist_path || "", netlistFiles.map((file) => [file, file]), path);
+  select.addEventListener("change", () => {
+    experiment.netlist_path = select.value;
+    experiment.filename = select.value.split("/").pop() || "";
+    populateExperiments();
+    schedulePreview();
+  });
+  return select;
 }
 
 async function captureSchematic() {
@@ -832,19 +841,14 @@ function populateExperiments() {
       schedulePreview();
     });
     nameWrapper.append(nameCaption, nameField);
-    const netlistWrapper = document.createElement("label");
-    const netlistCaption = document.createElement("span");
-    netlistCaption.textContent = "Netlist (.cir/.net)";
-    const netlistField = fieldInput(experiment.netlist_path, `${base}.netlist_path`);
-    netlistField.setAttribute("list", "netlist-files");
-    netlistField.placeholder = "project-slug/circuit.cir";
-    netlistField.addEventListener("input", () => {
-      experiment.netlist_path = netlistField.value;
-      experiment.filename = netlistField.value.split("/").pop() || "";
-      schedulePreview();
-    });
-    netlistWrapper.append(netlistCaption, netlistField);
-    fields.append(nameWrapper, netlistWrapper);
+    fields.append(nameWrapper);
+    if (experiments.length > 1) {
+      const netlistWrapper = document.createElement("label");
+      const netlistCaption = document.createElement("span");
+      netlistCaption.textContent = "Netlist (.cir/.net)";
+      netlistWrapper.append(netlistCaption, netlistSelect(experiment, `${base}.netlist_path`));
+      fields.append(netlistWrapper);
+    }
 
     const analyses = experiment.waveform_analyses || (experiment.waveform_analyses = []);
     const analysisStack = document.createElement("div");
@@ -953,6 +957,22 @@ function populateExperiments() {
 
   byId("requirement-count").textContent = `${requirementCount} requirements`;
   byId("requirements").replaceChildren(...(groups.length ? groups : [emptyEditor("No experiments defined.")]));
+  populatePrimaryNetlist(experiments);
+}
+
+function populatePrimaryNetlist(experiments) {
+  const row = byId("primary-netlist-row");
+  const note = byId("primary-netlist-note");
+  if (experiments.length === 1) {
+    row.hidden = false;
+    note.hidden = true;
+    byId("primary-netlist-field").replaceChildren(
+      netlistSelect(experiments[0], "experiments[0].netlist_path")
+    );
+  } else {
+    row.hidden = true;
+    note.hidden = experiments.length === 0;
+  }
 }
 
 function emptyEditor(message) {
@@ -1955,10 +1975,11 @@ byId("add-experiment").addEventListener("click", () => {
   const names = new Set(experiments.map((experiment) => experiment.name));
   let suffix = experiments.length + 1;
   while (names.has(`experiment_${suffix}`)) suffix += 1;
+  const defaultNetlist = netlistFiles[0] || "";
   experiments.push({
     name: `experiment_${suffix}`,
-    netlist_path: "",
-    filename: "",
+    netlist_path: defaultNetlist,
+    filename: defaultNetlist.split("/").pop() || "",
     waveform_analyses: [
       {
         name: "response",

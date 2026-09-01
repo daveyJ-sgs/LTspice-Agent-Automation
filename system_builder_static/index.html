@@ -166,6 +166,14 @@
         </div>
         <p id="study-description" class="muted-copy">Loading the bundled reference study…</p>
 
+        <div class="field-grid" id="primary-netlist-row" hidden>
+          <label class="wide-field">
+            <span>Netlist (.cir/.net)</span>
+            <div id="primary-netlist-field"></div>
+          </label>
+        </div>
+        <p id="primary-netlist-note" class="muted-copy" hidden>This study has multiple experiments — each one's netlist is set in the Experiments section below.</p>
+
         <div class="field-grid">
           <label>
             <span>Samples</span>
@@ -242,7 +250,6 @@
         </div>
         <div id="requirements" class="editor-stack"></div>
         <div id="requirement-errors" class="inline-errors" aria-live="polite" hidden></div>
-        <datalist id="netlist-files"></datalist>
       </article>
 
       <aside class="right-column">
