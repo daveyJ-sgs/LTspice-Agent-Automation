@@ -134,6 +134,10 @@ separate explicit acknowledgement.
 make system-builder
 ```
 
+On Windows, skip that command — `make` is not a standard Windows tool — and
+use `.\Start-SystemBuilder.cmd` instead; see the
+[Windows guide](docs/WINDOWS.md) below.
+
 The application opens on a random loopback-only `127.0.0.1` port. It supports
 durable statistical and optimization jobs, cancel/resume recovery, native
 LTspice schematic capture, completed-run decision views, and linked portable

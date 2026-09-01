@@ -12,15 +12,11 @@ for the packaged and source-launcher paths.
 
 ## Install and launch
 
-Install the optional GUI dependencies and launch the loopback-only application:
-
-```bash
-python3 -m pip install -r requirements-gui.txt
-make system-builder
-```
-
-On Windows, the no-admin first-start path creates the local environment and
-performs Python/LTspice diagnostics automatically:
+**Windows:** skip the `make`/`python3` commands below — `make` is not a
+standard Windows tool and `python3` commonly resolves to the Microsoft Store
+alias stub instead of a real interpreter, so that path fails on a stock
+Windows machine. Use the no-admin launcher instead, which creates the local
+environment and runs Python/LTspice diagnostics automatically:
 
 ```powershell
 .\Start-SystemBuilder.cmd
@@ -36,11 +32,19 @@ of the repository's dogfooding examples:
 See [Windows setup and qualification](WINDOWS.md#start-system-builder) for
 first-run behavior and troubleshooting.
 
-On macOS, double-click `Start-SystemBuilder.command` (or run it from a
-terminal). It creates the private `.venv`, installs the GUI dependencies,
-finds `/Applications/LTspice.app`, and opens the same loopback-only
-application. No administrator access or machine-wide changes. Pass
-`--workspace` the same way to point it at your own projects folder:
+**macOS/Linux with `make` installed** — install the optional GUI dependencies
+and launch the loopback-only application:
+
+```bash
+python3 -m pip install -r requirements-gui.txt
+make system-builder
+```
+
+**macOS (no-admin alternative):** double-click `Start-SystemBuilder.command`
+(or run it from a terminal). It creates the private `.venv`, installs the GUI
+dependencies, finds `/Applications/LTspice.app`, and opens the same
+loopback-only application. No administrator access or machine-wide changes.
+Pass `--workspace` the same way to point it at your own projects folder:
 
 ```bash
 ./Start-SystemBuilder.command --workspace=/Users/dave/Documents/LTspice/projects
