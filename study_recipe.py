@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 import artifacts
 import experiment_engine
 import statistical_engine
+from ltspice_text import decode_text
 
 STUDY_RECIPE_SCHEMA_VERSION = 1
 MAX_RECIPE_BYTES = 1024 * 1024
@@ -292,13 +293,13 @@ def preview_study_recipe(
                 continue
             assert netlist_path is not None
             try:
-                netlist = netlist_path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
+                netlist = decode_text(netlist_path.read_bytes())
+            except (OSError, UnicodeError):
                 errors.append(
                     _error(
                         f"{base}.netlist_path",
                         "invalid_encoding",
-                        "netlist must be readable UTF-8 text",
+                        "netlist must be readable UTF-8 or UTF-16 text",
                     )
                 )
                 continue
@@ -573,11 +574,15 @@ def load_recipe_experiments(
         )
         if error is not None or path is None:
             raise ValueError("experiment netlist is no longer available")
+        try:
+            netlist_template = decode_text(path.read_bytes())
+        except (OSError, UnicodeError) as exc:
+            raise ValueError("experiment netlist is no longer available") from exc
         resolved.append(
             {
                 "name": experiment["name"],
                 "filename": experiment["filename"],
-                "netlist_template": path.read_text(encoding="utf-8"),
+                "netlist_template": netlist_template,
                 "waveform_analyses": experiment["waveform_analyses"],
             }
         )

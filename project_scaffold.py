@@ -136,28 +136,21 @@ def list_projects(workspace_root: Path) -> list[dict[str, object]]:
     return projects
 
 
-def _template_files(slug: str, display_name: str) -> tuple[str, str, str]:
-    """Return (netlist_filename, netlist_text, recipe_json_text) for a new project.
+def _template_recipe(display_name: str) -> str:
+    """Return recipe_json_text for a new, empty-shell project.
 
-    Reuses the same RC low-pass shape as examples/rc-lowpass-starter -- already
-    verified end-to-end against a real LTspice run -- renamed to the new
-    project's slug so a fresh preview and start succeed immediately.
+    No netlist is generated or assumed -- the recipe intentionally points at
+    no file yet (Preview will say so) so the picker in the Study panel is the
+    one place a real netlist gets wired in, whether that's a file exported
+    from your own .asc schematic or one you write by hand. The example
+    variable and requirement below just show the expected shape; replace them
+    to match your own circuit's parameters and pass criteria.
     """
-    netlist_filename = f"{slug}.cir"
-    netlist_text = (
-        "* RC low-pass starter template -- replace with your own circuit.\n"
-        "* R_VAL and C_VAL are substituted per point by System Builder.\n"
-        "V1 in 0 AC 1\n"
-        "R1 in out {R_VAL}\n"
-        "C1 out 0 {C_VAL}\n"
-        ".ac dec 100 10 100k\n"
-        ".end\n"
-    )
     recipe = {
         "schema_version": study_recipe.STUDY_RECIPE_SCHEMA_VERSION,
         "kind": "statistical",
         "name": display_name,
-        "description": "Starter template: replace the netlist and variables with your own circuit.",
+        "description": "New project: pick a netlist above, then replace this example variable and requirement with your own.",
         "plan": {
             "variables": [
                 {
@@ -169,15 +162,6 @@ def _template_files(slug: str, display_name: str) -> tuple[str, str, str]:
                     "maximum": 1050,
                     "unit": "ohm",
                 },
-                {
-                    "name": "C_VAL",
-                    "distribution": "gaussian",
-                    "nominal": 1.59e-7,
-                    "sigma": 8e-9,
-                    "minimum": 1.4e-7,
-                    "maximum": 1.78e-7,
-                    "unit": "F",
-                },
             ],
             "sample_count": 8,
             "seed": 1,
@@ -185,8 +169,8 @@ def _template_files(slug: str, display_name: str) -> tuple[str, str, str]:
         "experiments": [
             {
                 "name": "ac",
-                "netlist_path": f"{slug}/{netlist_filename}",
-                "filename": netlist_filename,
+                "netlist_path": "",
+                "filename": "",
                 "waveform_analyses": [
                     {
                         "name": "response",
@@ -199,18 +183,6 @@ def _template_files(slug: str, display_name: str) -> tuple[str, str, str]:
                                 "target": -0.5,
                                 "frequency_value": 10,
                             },
-                            {
-                                "metric": "cutoff_frequency",
-                                "operator": ">=",
-                                "target": 750,
-                                "reference_frequency": 10,
-                            },
-                            {
-                                "metric": "cutoff_frequency",
-                                "operator": "<=",
-                                "target": 1300,
-                                "reference_frequency": 10,
-                            },
                         ],
                     }
                 ],
@@ -219,11 +191,15 @@ def _template_files(slug: str, display_name: str) -> tuple[str, str, str]:
         "execution": {"max_concurrency": 2, "reuse_cache": True},
         "report_context": {"title": display_name},
     }
-    return netlist_filename, netlist_text, json.dumps(recipe, indent=2) + "\n"
+    return json.dumps(recipe, indent=2) + "\n"
 
 
 def create_project(workspace_root: Path, name: object) -> dict[str, object]:
-    """Scaffold a new project subdirectory with a working starter recipe."""
+    """Scaffold a new, empty-shell project subdirectory with just a recipe file.
+
+    No netlist is created -- bring your own (e.g. exported from an .asc
+    schematic) and wire it in via the netlist picker in the Study panel.
+    """
     if not isinstance(name, str):
         raise ValueError("project name must be a string")
     slug = slugify_project_name(name)
@@ -232,9 +208,8 @@ def create_project(workspace_root: Path, name: object) -> dict[str, object]:
     if project_dir.exists() or project_dir.is_symlink():
         raise ProjectExistsError(f"a project named '{slug}' already exists")
 
-    netlist_filename, netlist_text, recipe_text = _template_files(slug, name.strip())
+    recipe_text = _template_recipe(name.strip())
     project_dir.mkdir()
-    (project_dir / netlist_filename).write_text(netlist_text, encoding="utf-8")
     recipe_filename = f"{slug}.ltstudy.json"
     (project_dir / recipe_filename).write_text(recipe_text, encoding="utf-8")
 

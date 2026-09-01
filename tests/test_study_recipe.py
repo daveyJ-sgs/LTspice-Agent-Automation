@@ -138,6 +138,78 @@ class StudyRecipeTests(unittest.TestCase):
         self.assertEqual(preview["plan"]["sampling_method"], "independent")
         self.assertEqual(preview["plan"]["corner_axes"], [])
 
+    def _minimal_recipe(self, netlist_relative_path: str) -> dict[str, object]:
+        return {
+            "schema_version": study_recipe.STUDY_RECIPE_SCHEMA_VERSION,
+            "kind": "statistical",
+            "name": "minimal",
+            "description": "minimal recipe for encoding regression coverage",
+            "plan": {
+                "variables": [
+                    {
+                        "name": "R_VAL",
+                        "distribution": "gaussian",
+                        "nominal": 1000,
+                        "sigma": 10,
+                        "minimum": 950,
+                        "maximum": 1050,
+                        "unit": "ohm",
+                    }
+                ],
+                "sample_count": 4,
+                "seed": 1,
+            },
+            "experiments": [
+                {
+                    "name": "ac",
+                    "netlist_path": netlist_relative_path,
+                    "filename": Path(netlist_relative_path).name,
+                    "waveform_analyses": [
+                        {
+                            "name": "check",
+                            "variable": "V(out)",
+                            "requirements": [
+                                {
+                                    "metric": "ac_gain_db",
+                                    "operator": ">=",
+                                    "target": -1.0,
+                                    "frequency_value": 10,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "execution": {"max_concurrency": 1, "reuse_cache": False},
+        }
+
+    def test_preview_and_execution_accept_a_utf16_netlist_ltspice_actually_exports(
+        self,
+    ) -> None:
+        """Regression: LTspice's own "Create Netlist" command on Windows can
+        write the .net file as UTF-16LE with a BOM, not UTF-8. Both the
+        preview path and the execution-time loader must accept it via the
+        same decode_text() helper already used for LTspice's .log and .raw
+        output, instead of a bare read_text(encoding="utf-8") that raises
+        UnicodeDecodeError on real LTspice-exported netlists.
+        """
+        netlist_text = (
+            "V1 in 0 AC 1\nR1 in out {R_VAL}\nC1 out 0 1u\n"
+            ".ac dec 10 10 10k\n.end\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "exported.net").write_bytes(
+                b"\xff\xfe" + netlist_text.encode("utf-16-le")
+            )
+            recipe = self._minimal_recipe("exported.net")
+
+            preview = study_recipe.preview_study_recipe(recipe, root)
+            experiments = study_recipe.load_recipe_experiments(recipe, root)
+
+        self.assertTrue(preview["valid"], preview.get("errors"))
+        self.assertEqual(experiments[0]["netlist_template"], netlist_text)
+
     def test_invalid_sample_count_has_a_field_path(self) -> None:
         recipe = copy.deepcopy(self.recipe)
         recipe["plan"]["sample_count"] = 0

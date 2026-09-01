@@ -373,7 +373,10 @@ async function loadNetlistFiles() {
 }
 
 function netlistSelect(experiment, path) {
-  const select = selectInput(experiment.netlist_path || "", netlistFiles.map((file) => [file, file]), path);
+  const value = experiment.netlist_path || "";
+  const choices = netlistFiles.map((file) => [file, file]);
+  if (!value) choices.unshift(["", "— Select a netlist —"]);
+  const select = selectInput(value, choices, path);
   select.addEventListener("change", () => {
     experiment.netlist_path = select.value;
     experiment.filename = select.value.split("/").pop() || "";
@@ -2018,6 +2021,18 @@ byId("save-button").addEventListener("click", () => {
 });
 byId("refresh-history").addEventListener("click", loadHistory);
 byId("refresh-projects").addEventListener("click", loadProjects);
+byId("refresh-netlists").addEventListener("click", async () => {
+  const button = byId("refresh-netlists");
+  button.disabled = true;
+  try {
+    await loadNetlistFiles();
+    schedulePreview();
+  } catch (error) {
+    renderScopedErrors([{path: "experiments", message: error.message}]);
+  } finally {
+    button.disabled = false;
+  }
+});
 byId("new-project-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const input = byId("new-project-name");

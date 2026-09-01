@@ -58,22 +58,21 @@ class ProjectScaffoldTests(unittest.TestCase):
 
         self.assertEqual([project["slug"] for project in projects], ["real-project"])
 
-    def test_create_project_scaffolds_a_working_recipe_and_rejects_duplicates(self) -> None:
+    def test_create_project_scaffolds_an_empty_shell_recipe_and_rejects_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             created = project_scaffold.create_project(root, "My New Filter")
 
             self.assertEqual(created["slug"], "my-new-filter")
-            netlist = root / "my-new-filter" / "my-new-filter.cir"
-            recipe_path = root / "my-new-filter" / "my-new-filter.ltstudy.json"
-            self.assertTrue(netlist.is_file())
+            project_dir = root / "my-new-filter"
+            recipe_path = project_dir / "my-new-filter.ltstudy.json"
             self.assertTrue(recipe_path.is_file())
+            # No netlist is scaffolded -- bring your own via the netlist picker.
+            self.assertEqual(list(project_dir.glob("*.cir")), [])
+            self.assertEqual(list(project_dir.glob("*.net")), [])
             recipe = json.loads(recipe_path.read_text())
             self.assertEqual(recipe["name"], "My New Filter")
-            self.assertEqual(
-                recipe["experiments"][0]["netlist_path"],
-                "my-new-filter/my-new-filter.cir",
-            )
+            self.assertEqual(recipe["experiments"][0]["netlist_path"], "")
 
             with self.assertRaises(project_scaffold.ProjectExistsError):
                 project_scaffold.create_project(root, "my new filter")
