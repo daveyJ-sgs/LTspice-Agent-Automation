@@ -292,6 +292,9 @@ function renderOptimizationSelectors() {
 }
 
 function renderOptimizationEditors() {
+  optId("optimization-title").textContent = optimizationRecipe.title || "Untitled optimization";
+  optId("optimization-description").textContent =
+    optimizationRecipe.description || "Portable LTspice optimization recipe";
   renderOptimizationDomains();
   renderOptimizationCorners();
   renderOptimizationSelectors();

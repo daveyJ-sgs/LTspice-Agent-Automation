@@ -440,9 +440,9 @@
     <section id="optimization" class="optimization-section" hidden>
       <div class="history-heading">
         <div>
-          <p class="step">GUI-C2 / OPTIMIZATION EXECUTION</p>
-          <h2>Design-space setup and run</h2>
-          <p>Edit and preview the Phase 4 DAQ design space, then explicitly publish and launch the exact content-addressed workload through the durable optimization engine.</p>
+          <p class="step">OPTIMIZATION</p>
+          <h2 id="optimization-title">Loading optimization…</h2>
+          <p id="optimization-description" class="muted-copy">Edit and preview the design space, then explicitly publish and launch the exact content-addressed workload through the durable optimization engine.</p>
         </div>
         <div class="button-row section-actions">
           <label class="secondary-button" for="optimization-file">Load .ltopt.json</label>
@@ -501,7 +501,7 @@
           <div class="limit-block">
             <span class="label">Engine ceilings</span>
             <code id="optimization-limits">—</code>
-            <p>Candidate and expanded-point limits are enforced by the Phase 4 engine before any artifact is written.</p>
+            <p>Candidate and expanded-point limits are enforced by the optimization engine before any artifact is written.</p>
           </div>
           <div class="execution-actions">
             <button id="optimization-freeze" class="primary-button" type="button" disabled>Publish confirmed plan</button>
@@ -533,7 +533,7 @@
       <section id="optimization-results" class="panel optimization-results" hidden>
         <div class="panel-heading compact">
           <div>
-            <p class="step">GUI-C3 / ENGINEERING DECISION</p>
+            <p class="step">ENGINEERING DECISION</p>
             <h2 id="optimization-results-title">Optimization results</h2>
           </div>
           <span id="optimization-results-status" class="status-pill valid">Complete</span>
@@ -592,10 +592,10 @@
       <p id="qualification-empty" class="editor-empty">Run an optimization study first — its winning candidate will appear here to qualify against the full manufacturing model.</p>
       <section id="qualification-panel" class="panel qualification-panel" hidden>
         <div class="subsection-heading">
-          <div><p class="step">GUI-C4 / TOLERANCE QUALIFICATION</p><h3>Prove the selected design across variation</h3></div>
+          <div><p class="step">TOLERANCE QUALIFICATION</p><h3>Prove the selected design across variation</h3></div>
           <span id="qualification-status" class="status-pill idle">Not previewed</span>
         </div>
-        <p class="editor-note">The nominal winner is not changed here. This stage applies correlated component tolerances and both ADC-load corners, then requires each sample to pass paired AC and transient analyses.</p>
+        <p class="editor-note">The nominal winner is not changed here. This stage applies correlated component tolerances and the candidate's own operating corners, then requires each sample to pass every declared analysis.</p>
         <div class="qualification-controls">
           <label class="field-caption">Halton samples<input id="qualification-samples" type="number" min="2" max="4096" value="32"></label>
           <label class="field-caption">Deterministic seed<input id="qualification-seed" type="number" min="0" value="20260827"></label>
