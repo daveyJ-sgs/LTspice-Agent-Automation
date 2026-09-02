@@ -33,25 +33,22 @@ const UNIT_CHOICES = {
   ohm: [["ohm", "Ω", 1], ["kohm", "kΩ", 1e3], ["Mohm", "MΩ", 1e6]],
 };
 
+const THEMES = ["dark", "light", "wiregrid"]; // "Solder Mask", "Copper Print", "Wire & Grid" -- no OS-auto option, pick one explicitly
+
 function preferredTheme() {
   try {
     const saved = window.localStorage.getItem(THEME_KEY);
-    if (["dark", "light"].includes(saved)) return saved;
+    if (THEMES.includes(saved)) return saved;
   } catch (_) {
-    // The system preference remains available if browser storage is disabled.
+    // Falls back to the default theme if browser storage is disabled.
   }
-  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  return "dark";
 }
 
 function applyTheme(theme) {
-  const light = theme === "light";
-  document.documentElement.dataset.theme = light ? "light" : "dark";
-  byId("theme-toggle").setAttribute("aria-pressed", String(light));
-  byId("theme-toggle").setAttribute(
-    "aria-label",
-    `Switch to ${light ? "dark" : "light"} mode`,
-  );
-  byId("theme-label").textContent = light ? "Dark" : "Light";
+  const resolved = THEMES.includes(theme) ? theme : "dark";
+  document.documentElement.dataset.theme = resolved;
+  byId("theme-select").value = resolved;
 }
 
 applyTheme(preferredTheme());
@@ -2367,8 +2364,8 @@ byId("new-project-form").addEventListener("submit", async (event) => {
     button.disabled = false;
   }
 });
-byId("theme-toggle").addEventListener("click", () => {
-  const theme = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+byId("theme-select").addEventListener("change", (event) => {
+  const theme = event.target.value;
   applyTheme(theme);
   try {
     window.localStorage.setItem(THEME_KEY, theme);

@@ -30,11 +30,20 @@
   font-display: swap;
 }
 
-/* Phase 2 palette: the copper/PCB-inspired language approved from the
-   "Signal Bench" pitch, mapped onto the existing four-tier surface system
-   (bg < surface < surface-raised < surface-input by visual weight) so every
-   selector below keeps working unchanged — only the values moved. */
-:root {
+/* Three named color themes, selected explicitly via #theme-select (no
+   prefers-color-scheme auto-detection -- Dave asked to skip a "System"
+   mode and just offer named choices). Each theme is a flat set of the same
+   token names so every selector below keeps working unchanged regardless
+   of which one is active; only the values move between blocks.
+
+   "Solder Mask" (default, this bare :root block) and "Copper Print" below
+   are the two faces of the Phase 2 "Signal Bench" copper/PCB palette --
+   copper traces on a dark green solder-mask background, and the same
+   copper accent reversed onto a light board. "Wire & Grid" (further down)
+   is a third, distinct identity built from LTspice's own default
+   schematic-editor colors (SchematicColor0/1/3/9 wire blue, SchematicColor12
+   grid grey, plus LTspice's red for continuation markers/SPICE directives). */
+:root, :root[data-theme="dark"] {
   color-scheme: dark;
   --radius: 10px;
   --radius-sm: 6px;
@@ -89,6 +98,43 @@
   --schematic-bg: #bdbdbd;
 }
 
+/* "Wire & Grid" -- built from LTspice's own default schematic-editor
+   colors, verified against a real .ini color scheme export:
+     Wire Blue       #0000FF  (SchematicColor0/1/3/9 -- wires & symbol outlines)
+     Grid Grey       #C0C0C0  (SchematicColor12 -- the schematic grid)
+     Continuation Red #FF0000 (SPICE-directive / continuation-marker text)
+     Canvas Black    #000000  (SchematicColor11 -- default text)
+   Those raw values are too saturated to run a whole UI in at readable
+   contrast, so they're used as the seed hue for a real light UI palette
+   (white canvas, cool grid-paper greys, wire-blue as the one accent,
+   continuation-red reserved for danger/destructive state) rather than
+   applied verbatim. */
+:root[data-theme="wiregrid"] {
+  color-scheme: light;
+  --bg: #f1f3f9;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-input: #ffffff;
+  --border: #d7dcea;
+  --border-strong: #b7bfd9;
+  --text: #12172a;
+  --muted: #545f7e;
+  --subtle: #7c86a3;
+  --accent: #1a3fd6;
+  --accent-hover: #142f9f;
+  --accent-soft: #e2e8fb;
+  --accent-text: #1a3fd6;
+  --info: #0f7d8c;
+  --info-soft: #e0f3f5;
+  --success: #1e8f5f;
+  --success-soft: #e2f5ec;
+  --warning: #a4720a;
+  --warning-soft: #fbf0da;
+  --danger: #c81e0e;
+  --danger-soft: #fbe4e1;
+  --schematic-bg: #eef0f7;
+}
+
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
 body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); }
@@ -131,14 +177,15 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .tool-nav button.nav-link[aria-current="page"] .nav-icon { opacity: 1; }
 .nav-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 4px; margin-left: auto; color: #fff; background: var(--accent); border-radius: 999px; font: 700 10px "IBM Plex Mono", monospace; }
 .sidebar-footer { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
-.security-state, .theme-toggle { min-height: 32px; display: flex; align-items: center; gap: 7px; border: 1px solid var(--border); background: var(--surface-raised); color: var(--muted); padding: 6px 10px; border-radius: var(--radius-sm); font-size: 12px; }
+.security-state, .theme-picker { min-height: 32px; display: flex; align-items: center; gap: 7px; border: 1px solid var(--border); background: var(--surface-raised); color: var(--muted); padding: 6px 10px; border-radius: var(--radius-sm); font-size: 12px; }
 .security-state { position: relative; cursor: help; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
 .security-tooltip { position: absolute; bottom: calc(100% + 9px); left: 0; z-index: 20; width: 300px; padding: 11px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: 400 12px/1.45 "IBM Plex Sans", sans-serif; box-shadow: 0 8px 22px rgba(0, 0, 0, .22); opacity: 0; visibility: hidden; pointer-events: none; }
 .security-state:hover .security-tooltip, .security-state:focus .security-tooltip, .security-state:focus-within .security-tooltip { opacity: 1; visibility: visible; }
-.theme-toggle { cursor: pointer; color: var(--text); justify-content: center; }
-.theme-toggle:hover { border-color: var(--border-strong); }
+.theme-picker:focus-within { border-color: var(--border-strong); }
 .theme-icon { color: var(--accent); font-size: 14px; }
+.theme-select { flex: 1 1 auto; min-width: 0; border: none; background: transparent; color: var(--text); font: inherit; cursor: pointer; padding: 0; }
+.theme-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 
 .app-content { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
 .app-topbar { position: sticky; top: 0; z-index: 10; height: 54px; display: flex; align-items: center; padding: 0 3vw; border-bottom: 1px solid var(--border); background: var(--bg); }

@@ -1238,11 +1238,12 @@ class SystemBuilderTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         fonts = PROJECT_ROOT / "system_builder_static/fonts"
 
-        self.assertIn('id="theme-toggle"', html)
+        self.assertIn('id="theme-select"', html)
         self.assertIn('class="tool-intro"', html)
         self.assertIn('class="security-tooltip"', html)
         self.assertNotIn('class="security-card"', html)
         self.assertIn(':root[data-theme="light"]', css)
+        self.assertIn(':root[data-theme="wiregrid"]', css)
         self.assertIn('font-family: "IBM Plex Mono"', css)
         self.assertNotIn("gradient(", css.lower())
         self.assertNotIn("https://", css)

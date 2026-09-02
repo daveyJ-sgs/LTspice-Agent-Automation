@@ -56,10 +56,15 @@
             This interface remains loopback-only. GitHub access occurs only after an explicit access check, study acknowledgement, or remote-job action; credentials remain managed by GitHub CLI.
           </span>
         </div>
-        <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch color theme" aria-pressed="false">
+        <div class="theme-picker">
           <span class="theme-icon" aria-hidden="true">◐</span>
-          <span id="theme-label">Light</span>
-        </button>
+          <label for="theme-select" class="visually-hidden">Color theme</label>
+          <select id="theme-select" class="theme-select">
+            <option value="dark">Solder Mask</option>
+            <option value="light">Copper Print</option>
+            <option value="wiregrid">Wire &amp; Grid</option>
+          </select>
+        </div>
       </div>
     </aside>
 
