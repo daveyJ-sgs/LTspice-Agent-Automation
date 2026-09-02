@@ -1056,7 +1056,11 @@ async function previewOptimization() {
   }
 }
 
-async function loadOptimizationReference(recoverJob = true) {
+async function loadOptimizationReference() {
+  // Seeds the Optimization view on initial page load only -- there is no
+  // "reset to the bundled example" control mid-session, so this recipe is
+  // just the starting point until a project or a .ltopt.json file replaces
+  // it via setCurrentProject()/optimizationRecipe assignment elsewhere.
   const response = await fetch("/api/examples/mixed-signal-daq-optimization");
   if (!response.ok) throw new Error("DAQ optimization reference could not be loaded");
   optimizationRecipe = await response.json();
@@ -1067,13 +1071,7 @@ async function loadOptimizationReference(recoverJob = true) {
   optId("optimization-results").hidden = true;
   renderOptimizationEditors();
   await previewOptimization();
-  // recoverOptimizationJob() shows the single most-recently-run job with no
-  // regard for which recipe is currently loaded -- correct once, on initial
-  // page load (resume where you left off), wrong every other time this
-  // function runs (e.g. "Reset DAQ reference" mid-session), where it would
-  // silently redisplay a candidate belonging to whatever was run last,
-  // mislabeled as this recipe's result.
-  if (recoverJob) await recoverOptimizationJob();
+  await recoverOptimizationJob();
 }
 
 optId("optimization-preview").addEventListener("click", previewOptimization);
@@ -1143,14 +1141,6 @@ optId("optimization-save").addEventListener("click", async () => {
   } catch (error) {
     status.textContent = error.message;
   }
-});
-optId("optimization-reset").addEventListener("click", () => {
-  if (!confirmDiscard(optimizationDirty, "Resetting will discard unsaved changes to the current recipe. Continue?")) return;
-  loadOptimizationReference(false).catch((error) => renderOptimizationPreview({
-    valid: false,
-    errors: [{path: "optimization", message: error.message}],
-    limits: {maximum_candidates: 512, maximum_points: 1000},
-  }));
 });
 optId("qualification-preview").addEventListener("click", previewQualification);
 optId("qualification-freeze").addEventListener("click", freezeQualification);
