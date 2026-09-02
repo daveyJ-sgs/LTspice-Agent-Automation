@@ -68,6 +68,11 @@ class SystemBuilderHistoryTests(unittest.TestCase):
         self.assertTrue(result["jobs"][0]["report_available"])
         self.assertFalse(result["index"]["available"])
         self.assertFalse(result["index"]["current"])
+        # Regression: the message previously defaulted to the exact string
+        # "Experiment index is available." even when available was False,
+        # because no runs/experiments.sqlite3 exists yet -- exactly this
+        # case, the most common "fresh workspace" state a user actually hits.
+        self.assertEqual(result["index"]["message"], "No runs index is available yet.")
 
     def test_history_is_bounded_and_skips_invalid_manifests(self) -> None:
         self.write_job()
@@ -110,6 +115,33 @@ class SystemBuilderHistoryTests(unittest.TestCase):
         self.assertFalse(result["index"]["current"])
         self.assertEqual(result["index"]["unindexed_jobs"], 1)
         self.assertIn("1 durable job", result["index"]["message"])
+
+    def test_history_reports_a_current_index_as_available(self) -> None:
+        job = self.write_job(status="completed")
+        (self.runs / "experiments.sqlite3").write_bytes(b"index")
+        indexed_record = {
+            "experiment_id": job.name,
+            "execution_mode": "independent",
+            "statistical": True,
+            "observed_yield": 1.0,
+        }
+
+        with (
+            patch(
+                "system_builder_history.query_experiments",
+                return_value={"experiments": [indexed_record]},
+            ),
+            patch(
+                "system_builder_history.query_studies",
+                return_value={"studies": []},
+            ),
+        ):
+            result = workspace_history(self.workspace)
+
+        self.assertTrue(result["index"]["available"])
+        self.assertTrue(result["index"]["current"])
+        self.assertEqual(result["index"]["unindexed_jobs"], 0)
+        self.assertIn("is available", result["index"]["message"])
 
     def test_unindexed_statistical_job_is_identified_from_manifest(self) -> None:
         experiment = self.write_job(status="completed")

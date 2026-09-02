@@ -91,7 +91,7 @@ def workspace_history(workspace: Path, *, limit: int = 12) -> dict[str, object]:
 
     indexed: dict[str, dict[str, object]] = {}
     studies: list[dict[str, object]] = []
-    index_message = "Experiment index is available."
+    index_message = "No runs index is available yet."
     index_available = False
     database = runs / "experiments.sqlite3"
     if database.is_file() and not database.is_symlink():
@@ -110,6 +110,7 @@ def workspace_history(workspace: Path, *, limit: int = 12) -> dict[str, object]:
                 for study in reversed(study_result["studies"][-limit:])
             ]
             index_available = True
+            index_message = "Experiment index is available."
         except (OSError, ValueError) as exc:
             index_message = f"Experiment index could not be read: {exc}"
 
