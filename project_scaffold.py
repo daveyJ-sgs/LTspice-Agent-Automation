@@ -12,6 +12,7 @@ System Builder with a different --workspace.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -115,6 +116,38 @@ def project_recipe(workspace_root: Path, slug: object) -> dict[str, object]:
     if not isinstance(recipe, dict):
         raise ValueError(f"project '{slug}' recipe is not a JSON object")
     return recipe
+
+
+def save_project_recipe(
+    workspace_root: Path, slug: object, recipe: object
+) -> dict[str, object]:
+    """Atomically overwrite a project's existing recipe file with new content.
+
+    Writes to whichever recipe file the project already has (.ltstudy.json
+    or .ltopt.json) -- it never creates a second file or guesses a kind.
+    Deliberately does not require `recipe` to pass full study/optimization
+    validation: the in-app "Save recipe" action has always let a
+    work-in-progress definition be saved as-is (previously via a client-side
+    file download; this is the same save, just written back to the project
+    instead of silently discarding the edits).
+    """
+    directory = _project_directory(workspace_root, slug)
+    recipe_file = _first_recipe_file(directory)
+    if recipe_file is None:
+        raise FileNotFoundError(f"project '{slug}' has no recipe file")
+    if not isinstance(recipe, dict):
+        raise ValueError("recipe must be a JSON object")
+    text = json.dumps(recipe, indent=2) + "\n"
+    if len(text.encode("utf-8")) > study_recipe.MAX_RECIPE_BYTES:
+        raise ValueError(
+            f"recipe is limited to {study_recipe.MAX_RECIPE_BYTES} bytes"
+        )
+    temporary = recipe_file.with_name(f".{recipe_file.name}.tmp")
+    temporary.write_text(text, encoding="utf-8")
+    os.replace(temporary, recipe_file)
+    summary = _project_summary(directory, workspace_root.resolve(strict=True))
+    assert summary is not None
+    return summary
 
 
 def list_projects(workspace_root: Path) -> list[dict[str, object]]:

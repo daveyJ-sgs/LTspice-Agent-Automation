@@ -204,6 +204,7 @@ class SystemBuilderTests(unittest.TestCase):
             ("POST", "/api/remote/preview"),
             ("POST", "/api/schematic/capture"),
             ("POST", "/api/start"),
+            ("PUT", "/api/projects/{slug}/recipe"),
             ("PUT", "/api/recipe/netlist"),
             ("PUT", "/api/settings/ltspice"),
         }
@@ -1396,6 +1397,42 @@ class SystemBuilderTests(unittest.TestCase):
             self.assertEqual(recipe.status_code, 200)
             self.assertEqual(recipe.json()["name"], "Existing")
             self.assertEqual(missing.status_code, 404)
+
+            edited = dict(recipe.json())
+            edited["description"] = "edited via the study panel"
+            denied_save = client.put("/api/projects/existing/recipe", json=edited)
+            self.assertEqual(denied_save.status_code, 403)
+            self.assertEqual(
+                json.loads(
+                    (workspace / "existing" / "existing.ltstudy.json").read_text()
+                )["description"],
+                "d",
+            )
+
+            saved = client.put(
+                "/api/projects/existing/recipe", json=edited, headers=self._headers()
+            )
+            self.assertEqual(saved.status_code, 200)
+            self.assertEqual(
+                json.loads(
+                    (workspace / "existing" / "existing.ltstudy.json").read_text()
+                )["description"],
+                "edited via the study panel",
+            )
+            reread = client.get("/api/projects/existing/recipe")
+            self.assertEqual(reread.json()["description"], "edited via the study panel")
+
+            missing_save = client.put(
+                "/api/projects/missing-project/recipe",
+                json=edited,
+                headers=self._headers(),
+            )
+            self.assertEqual(missing_save.status_code, 404)
+
+            not_object_save = client.put(
+                "/api/projects/existing/recipe", json="not an object", headers=self._headers()
+            )
+            self.assertEqual(not_object_save.status_code, 409)
 
             denied_delete = client.delete("/api/projects/existing")
             self.assertEqual(denied_delete.status_code, 403)

@@ -14,6 +14,17 @@ let variableDisplayUnits = new WeakMap();
 let cornerDisplayUnits = new WeakMap();
 let netlistFiles = [];
 let currentProjectPath = null; // workspace-relative folder of the open project, if any
+let currentProjectSlug = null; // the open project's slug, if any -- Save recipe writes here instead of downloading
+
+function setCurrentProject(slug, path) {
+  currentProjectSlug = slug;
+  currentProjectPath = path;
+  const label = slug ? "Save to project" : "Save recipe";
+  const studyButton = byId("save-button");
+  if (studyButton) studyButton.textContent = label;
+  const optimizationButton = byId("optimization-save");
+  if (optimizationButton) optimizationButton.textContent = label;
+}
 
 const byId = (id) => document.getElementById(id);
 const THEME_KEY = "ltspice-system-builder-theme";
@@ -76,7 +87,7 @@ function showView(view) {
   const crumb = byId("topbar-crumb");
   if (crumb) crumb.textContent = VIEW_LABELS[view];
   if (window.location.hash.slice(1) !== view) {
-    window.history.replaceState(null, "", `#${view}`);
+    window.history.pushState(null, "", `#${view}`);
   }
   window.scrollTo({top: 0});
 }
@@ -1920,7 +1931,7 @@ async function openProject(project) {
     const response = await fetch(`/api/projects/${encodeURIComponent(project.slug)}/recipe`);
     const loaded = await response.json();
     if (!response.ok) throw new Error(loaded.error?.message || "Recipe could not be loaded");
-    currentProjectPath = project.path;
+    setCurrentProject(project.slug, project.path);
     if (project.kind === "optimization") {
       optimizationRecipe = loaded;
       optimizationDisplayUnits = new WeakMap();
@@ -2229,25 +2240,53 @@ byId("recipe-file").addEventListener("change", async (event) => {
   if (!file) return;
   try {
     recipe = JSON.parse(await file.text());
+    // This file has nothing to do with whatever project (if any) was open
+    // before -- without clearing this, Save would silently write the newly
+    // loaded recipe into the previous project, and an unrelated netlist
+    // Import would land in its folder too.
+    setCurrentProject(null, null);
+    byId("save-status").textContent = "";
     variableDisplayUnits = new WeakMap();
     cornerDisplayUnits = new WeakMap();
     invalidateFrozenPlan();
     populateRecipeControls();
+    await loadNetlistFiles();
     await preview();
   } catch (error) {
     renderPreview({valid: false, errors: [{path: "$", message: `Could not load recipe: ${error.message}`}]});
   }
   event.target.value = "";
 });
-byId("save-button").addEventListener("click", () => {
+byId("save-button").addEventListener("click", async () => {
   if (!recipe) return;
   updateRecipeFromControls();
-  const blob = new Blob([`${JSON.stringify(recipe, null, 2)}\n`], {type: "application/json"});
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = "mixed-signal-daq.ltstudy.json";
-  link.click();
-  URL.revokeObjectURL(link.href);
+  const status = byId("save-status");
+  if (!currentProjectSlug) {
+    const blob = new Blob([`${JSON.stringify(recipe, null, 2)}\n`], {type: "application/json"});
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "mixed-signal-daq.ltstudy.json";
+    link.click();
+    URL.revokeObjectURL(link.href);
+    return;
+  }
+  status.textContent = "Saving…";
+  try {
+    const response = await fetch(`/api/projects/${encodeURIComponent(currentProjectSlug)}/recipe`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify(recipe),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Recipe could not be saved");
+    status.textContent = "Saved.";
+    loadProjects();
+  } catch (error) {
+    status.textContent = error.message;
+  }
 });
 byId("refresh-history").addEventListener("click", loadHistory);
 byId("refresh-projects").addEventListener("click", loadProjects);

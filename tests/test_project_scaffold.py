@@ -130,6 +130,36 @@ class ProjectScaffoldTests(unittest.TestCase):
             finally:
                 shutil.rmtree(outside, ignore_errors=True)
 
+    def test_save_project_recipe_overwrites_in_place_and_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            created = project_scaffold.create_project(root, "Editable")
+            slug = created["slug"]
+            loaded = project_scaffold.project_recipe(root, slug)
+            loaded["description"] = "changed by the study panel"
+
+            summary = project_scaffold.save_project_recipe(root, slug, loaded)
+
+            self.assertEqual(summary["slug"], slug)
+            self.assertEqual(
+                project_scaffold.project_recipe(root, slug)["description"],
+                "changed by the study panel",
+            )
+            # Still exactly one recipe file -- no second file created.
+            recipe_files = [
+                path
+                for path in (root / slug).iterdir()
+                if path.name.endswith((".ltstudy.json", ".ltopt.json"))
+            ]
+            self.assertEqual(len(recipe_files), 1)
+
+            with self.assertRaises(FileNotFoundError):
+                project_scaffold.save_project_recipe(root, "does-not-exist", loaded)
+            with self.assertRaises(ValueError):
+                project_scaffold.save_project_recipe(root, slug, "not an object")
+            with self.assertRaises(ValueError):
+                project_scaffold.save_project_recipe(root, "../escape", loaded)
+
 
 if __name__ == "__main__":
     unittest.main()

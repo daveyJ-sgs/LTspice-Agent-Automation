@@ -72,6 +72,22 @@ def create_projects_router(
             return json_error(409, "project_recipe_invalid", str(exc))
         return JSONResponse(recipe)
 
+    @router.put("/api/projects/{slug}/recipe")
+    async def save_project_recipe(request: Request, slug: str) -> Response:
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        recipe, error = await read_json_body(request)
+        if error is not None:
+            return error
+        try:
+            summary = project_scaffold.save_project_recipe(workspace, slug, recipe)
+        except FileNotFoundError as exc:
+            return json_error(404, "project_not_found", str(exc))
+        except (OSError, ValueError) as exc:
+            return json_error(409, "project_recipe_save_failed", str(exc))
+        return JSONResponse({"project": summary})
+
     @router.delete("/api/projects/{slug}")
     def delete_project(request: Request, slug: str) -> Response:
         denied = authorize_mutation(request)

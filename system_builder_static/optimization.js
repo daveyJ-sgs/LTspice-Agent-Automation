@@ -793,6 +793,21 @@ async function freezeQualification() {
 
 function renderQualificationJob(job) {
   trackedQualificationJob = job;
+  // The status pill otherwise only gets set by previewQualification(), so a
+  // job recovered from a page reload (or loaded via the Dashboard/Qualify
+  // link) left it stuck on its default "Not previewed" text even though a
+  // completed run's results were already showing right below it.
+  const statusPill = optId("qualification-status");
+  if (job.status === "completed") {
+    statusPill.className = "status-pill valid";
+    statusPill.textContent = "Completed";
+  } else if (job.status === "failed") {
+    statusPill.className = "status-pill invalid";
+    statusPill.textContent = "Failed";
+  } else {
+    statusPill.className = "status-pill idle";
+    statusPill.textContent = optimizationLabel(job.status);
+  }
   const box = optId("qualification-job");
   const title = document.createElement("strong"); title.textContent = `${job.qualification_job_id} · ${optimizationLabel(job.status)}`;
   const progress = document.createElement("div"); progress.className = "optimization-progress";
@@ -909,7 +924,7 @@ function renderOptimizationJob(job) {
   const evaluation = document.createElement("p");
   evaluation.className = "editor-note";
   evaluation.textContent = job.progress.evaluation === "complete"
-    ? "Electrical analysis is complete. Pareto and winner visualization begins in GUI-C3."
+    ? "Electrical analysis is complete. See the Pareto tradeoffs and winning candidate below."
     : `Optimization evaluation: ${job.progress.evaluation}.`;
   const actions = document.createElement("div");
   actions.className = "job-actions";
@@ -1038,14 +1053,24 @@ async function previewOptimization() {
   }
 }
 
-async function loadOptimizationReference() {
+async function loadOptimizationReference(recoverJob = true) {
   const response = await fetch("/api/examples/mixed-signal-daq-optimization");
   if (!response.ok) throw new Error("DAQ optimization reference could not be loaded");
   optimizationRecipe = await response.json();
+  setCurrentProject(null, null);
+  optId("optimization-save-status").textContent = "";
   optimizationDisplayUnits = new WeakMap();
+  displayedOptimizationStudy = null;
+  optId("optimization-results").hidden = true;
   renderOptimizationEditors();
   await previewOptimization();
-  await recoverOptimizationJob();
+  // recoverOptimizationJob() shows the single most-recently-run job with no
+  // regard for which recipe is currently loaded -- correct once, on initial
+  // page load (resume where you left off), wrong every other time this
+  // function runs (e.g. "Reset DAQ reference" mid-session), where it would
+  // silently redisplay a candidate belonging to whatever was run last,
+  // mislabeled as this recipe's result.
+  if (recoverJob) await recoverOptimizationJob();
 }
 
 optId("optimization-preview").addEventListener("click", previewOptimization);
@@ -1059,7 +1084,11 @@ optId("optimization-file").addEventListener("change", async (event) => {
   if (!file) return;
   try {
     optimizationRecipe = JSON.parse(await file.text());
+    setCurrentProject(null, null);
+    optId("optimization-save-status").textContent = "";
     optimizationDisplayUnits = new WeakMap();
+    displayedOptimizationStudy = null;
+    optId("optimization-results").hidden = true;
     renderOptimizationEditors();
     await previewOptimization();
   } catch (error) {
@@ -1071,17 +1100,42 @@ optId("optimization-file").addEventListener("change", async (event) => {
   }
   event.target.value = "";
 });
-optId("optimization-save").addEventListener("click", () => {
+optId("optimization-save").addEventListener("click", async () => {
   if (!optimizationRecipe) return;
-  const blob = new Blob([`${JSON.stringify(optimizationRecipe, null, 2)}\n`], {type: "application/json"});
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = "mixed-signal-daq.ltopt.json";
-  link.click();
-  URL.revokeObjectURL(link.href);
+  const status = optId("optimization-save-status");
+  if (!currentProjectSlug) {
+    const filenameSlug = (optimizationRecipe.title || "optimization")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "optimization";
+    const blob = new Blob([`${JSON.stringify(optimizationRecipe, null, 2)}\n`], {type: "application/json"});
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `${filenameSlug}.ltopt.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    return;
+  }
+  status.textContent = "Saving…";
+  try {
+    const response = await fetch(`/api/projects/${encodeURIComponent(currentProjectSlug)}/recipe`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify(optimizationRecipe),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Recipe could not be saved");
+    status.textContent = "Saved.";
+    loadProjects();
+  } catch (error) {
+    status.textContent = error.message;
+  }
 });
 optId("optimization-reset").addEventListener("click", () => {
-  loadOptimizationReference().catch((error) => renderOptimizationPreview({
+  loadOptimizationReference(false).catch((error) => renderOptimizationPreview({
     valid: false,
     errors: [{path: "optimization", message: error.message}],
     limits: {maximum_candidates: 512, maximum_points: 1000},
