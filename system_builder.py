@@ -791,10 +791,10 @@ def main() -> None:
     # both launchers when run with no --workspace) -- seeding would write
     # example-project files straight into the tracked working tree. Any real
     # workspace (a fresh --workspace elsewhere, or the packaged app's default
-    # Documents folder) gets the starter project so first launch never shows
+    # Documents folder) gets the starter projects so first launch never shows
     # an empty Projects list.
     if args.workspace.resolve() != PROJECT_ROOT.resolve():
-        project_scaffold.seed_starter_project(args.workspace)
+        project_scaffold.seed_starter_projects(args.workspace)
 
     import uvicorn
 

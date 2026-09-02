@@ -1,0 +1,73 @@
+* Classic discrete 3 op-amp instrumentation amplifier
+* A1/A2 buffer each input with gain set by R1/RG; A3 is a unity-gain
+* difference amplifier (R2/R3) that rejects the common-mode signal and
+* passes the amplified differential signal through.
+*   Gain = (1 + 2*R1_VAL/RG_VAL) * (R3_VAL/R2_VAL)
+*
+* Op-amp: LT1128, Analog Devices/Linear Technology's unity-gain-stable
+* ultra-low-noise precision op-amp (0.85nV/rtHz) -- a natural fit for a
+* discrete in-amp, where the input stage's noise and offset set the
+* whole circuit's floor. The macromodel below is copied verbatim from
+* LTspice's own bundled library (LTC.lib) so this netlist is
+* self-contained and needs no .lib search path on any machine.
+* Pin order: In+ In- V+ V- OUT.
+.param R1_VAL=100k RG_VAL=2.02k R2_VAL=10k R3_VAL=10k
+
+.subckt LT1128 1 2 3 4 5
+A1 2 1 0 0 0 0 0 0 OTA g=0 in=.9p ink=250
+M1 3 N007 5 5 N temp=27
+M2 4 N007 5 5 P temp=27
+C3 3 5 .5p
+C4 5 4 .5p
+B1 0 N008 I=10u*dnlim(uplim(V(1),V(3)-2.7,.1), V(4)+2.7, .1)+1n*V(1)
+B2 N008 0 I=10u*dnlim(uplim(V(2),V(3)-2.69,.1), V(4)+2.69, .1)+1n*V(2)
+C6 3 1 2.5p Rpar=1.2G noiseless
+C7 1 4 2.5p noiseless Rpar=1.2G
+C8 2 4 2.5p Rpar=1.2G noiseless
+C9 3 2 2.5p Rpar=1.2G noiseless
+A2 0 N008 0 0 0 0 X 0 OTA g=630u Iout=78.9u en=.85n+freq*36u/(8k*freq+(freq-400k)**2) Vlow=-1e308 Vhigh=1e308 Cout= 5.9p enk=3
+C10 N008 0 1f Rpar=100K noiseless
+D4 X 3 X
+D5 4 X X
+D1 N007 5 Y
+D6 5 N007 Y
+D7 3 4 DP
+C11 2 1 12.5p Rpar=20k noiseless
+D2 2 1 DIN
+G1 0 N004 X 0 1m
+L3 N004 0 100.47u Rser=1.01636k Rpar=62.1246943765281k noiseless
+G2 0 N006 N005 0 1m
+L4 N006 0 1.86m Cpar=2p Rser=1.39k Rpar=3.564102564102564k noiseless
+G3 0 N005 N004 0 1m
+L5 N005 0 2.56m noiseless Rpar=2.086956521739131k Cpar=.103n Rser=1.92k
+C1 N007 0 1.67p Rpar=1Meg Rser=58.823k noiseless
+G4 0 N007 N006 0 1u
+.model X D(Ron=1K Roff=100G Vfwd=-2 epsilon=.1 noiseless)
+.model Y D(Ron=500 Roff=1T Vfwd=1.375 epsilon=.1 noiseless)
+.model N VDMOS(Vto=-200m Kp=31m)
+.model P VDMOS(Vto=200m Kp=31m pchan)
+.model DP D(Roff=1T Ron=1k Vfwd=0.5 ilimit=6.783m noiseless)
+.model DIN D(Ron=100 Roff=1T Vfwd=1.8 Vrev=1.8 noiseless)
+.ends LT1128
+
+V+ vp 0 15
+V- vm 0 -15
+Vinp inp 0 AC 0.5
+Vinm inm 0 0
+
+* --- Input buffer stage: A1 handles Vin+, A2 handles Vin- ---
+X1 inp n1 vp vm outA LT1128
+X2 inm n2 vp vm outB LT1128
+R1a outA n1 {R1_VAL}
+R1b outB n2 {R1_VAL}
+RG  n1  n2 {RG_VAL}
+
+* --- Output difference-amplifier stage: A3 ---
+X3 n4 n3 vp vm out LT1128
+R2a outB n3 {R2_VAL}
+R3a n3   out {R3_VAL}
+R2b outA n4 {R2_VAL}
+R3b n4   0   {R3_VAL}
+
+.ac dec 100 1 100k
+.end

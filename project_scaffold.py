@@ -24,8 +24,11 @@ RESERVED_NAMES = {"runs", "examples"}
 MAX_PROJECT_NAME_LENGTH = 80
 MAX_PROJECTS_LISTED = 200
 
-STARTER_PROJECT_NAME = "rc-lowpass-starter"
-STARTER_PROJECT_SOURCE = Path(__file__).resolve().parent / "examples" / "rc_lowpass_starter"
+_EXAMPLES_ROOT = Path(__file__).resolve().parent / "examples"
+STARTER_PROJECTS = {
+    "rc-lowpass-starter": _EXAMPLES_ROOT / "rc_lowpass_starter",
+    "instrumentation-amp-starter": _EXAMPLES_ROOT / "instrumentation_amp_starter",
+}
 
 _SLUG_DISALLOWED = re.compile(r"[^a-z0-9]+")
 
@@ -231,21 +234,23 @@ def _template_recipe(display_name: str) -> str:
     return json.dumps(recipe, indent=2) + "\n"
 
 
-def seed_starter_project(workspace_root: Path) -> None:
-    """Give a workspace the bundled RC low-pass starter project, once.
+def seed_starter_projects(workspace_root: Path) -> None:
+    """Give a workspace every bundled starter project it doesn't have yet.
 
-    This is what used to only exist wherever someone happened to have
-    hand-copied it (true on one machine, not the next) -- called once at
-    launch, it makes every workspace's first open show the same small
-    worked example instead of an empty Projects list. Purely additive: if
-    `rc-lowpass-starter` already exists (edited, renamed contents, or just
-    already seeded), it's left completely alone.
+    These used to only exist wherever someone happened to have hand-copied
+    them (true on one machine, not the next) -- called once at launch, this
+    makes every workspace's first open show the same small worked examples
+    instead of an empty Projects list. Purely additive and per-project: any
+    starter folder that already exists (edited, renamed contents, or just
+    already seeded) is left completely alone; only the ones still missing
+    get copied in.
     """
-    destination = workspace_root / STARTER_PROJECT_NAME
-    if destination.exists() or destination.is_symlink():
-        return
-    workspace_root.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(STARTER_PROJECT_SOURCE, destination)
+    for name, source in STARTER_PROJECTS.items():
+        destination = workspace_root / name
+        if destination.exists() or destination.is_symlink():
+            continue
+        workspace_root.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, destination)
 
 
 def create_project(workspace_root: Path, name: object) -> dict[str, object]:

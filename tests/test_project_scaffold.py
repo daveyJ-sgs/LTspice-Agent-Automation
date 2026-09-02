@@ -59,41 +59,68 @@ class ProjectScaffoldTests(unittest.TestCase):
 
         self.assertEqual([project["slug"] for project in projects], ["real-project"])
 
-    def test_seed_starter_project_creates_workspace_and_copies_starter_files(self) -> None:
+    def test_seed_starter_projects_creates_workspace_and_copies_every_starter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             # A workspace that doesn't exist yet at all, matching a fresh
             # --workspace pointed at an empty/nonexistent folder.
             root = Path(tmp) / "brand-new-workspace"
 
-            project_scaffold.seed_starter_project(root)
+            project_scaffold.seed_starter_projects(root)
 
-            project_dir = root / project_scaffold.STARTER_PROJECT_NAME
-            recipe_path = project_dir / "rc_lowpass.ltstudy.json"
-            netlist_path = project_dir / "rc_lowpass_tolerance.cir"
-            self.assertTrue(recipe_path.is_file())
-            self.assertTrue(netlist_path.is_file())
-            recipe = json.loads(recipe_path.read_text())
-            self.assertEqual(recipe["name"], "RC low-pass tolerance study")
+            rc_dir = root / "rc-lowpass-starter"
+            self.assertTrue((rc_dir / "rc_lowpass.ltstudy.json").is_file())
+            self.assertTrue((rc_dir / "rc_lowpass_tolerance.cir").is_file())
+            rc_recipe = json.loads((rc_dir / "rc_lowpass.ltstudy.json").read_text())
+            self.assertEqual(rc_recipe["name"], "RC low-pass tolerance study")
+
+            inamp_dir = root / "instrumentation-amp-starter"
+            self.assertTrue((inamp_dir / "instrumentation_amp_3opamp.ltstudy.json").is_file())
+            self.assertTrue((inamp_dir / "instrumentation_amp_3opamp.cir").is_file())
+            inamp_recipe = json.loads((inamp_dir / "instrumentation_amp_3opamp.ltstudy.json").read_text())
+            self.assertEqual(inamp_recipe["name"], "3 op-amp instrumentation amplifier tolerance study")
 
             projects = project_scaffold.list_projects(root)
-            self.assertEqual([p["slug"] for p in projects], [project_scaffold.STARTER_PROJECT_NAME])
+            self.assertEqual(
+                {p["slug"] for p in projects},
+                {"rc-lowpass-starter", "instrumentation-amp-starter"},
+            )
 
-    def test_seed_starter_project_never_overwrites_an_existing_one(self) -> None:
+    def test_seed_starter_projects_never_overwrites_an_existing_one(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            project_dir = root / project_scaffold.STARTER_PROJECT_NAME
+            project_dir = root / "rc-lowpass-starter"
             project_dir.mkdir()
             (project_dir / "rc_lowpass.ltstudy.json").write_text("user edit\n", encoding="utf-8")
 
             # Whether it was seeded before, hand-copied, or just renamed to
             # match -- if it's already there, it's left completely alone.
-            project_scaffold.seed_starter_project(root)
+            project_scaffold.seed_starter_projects(root)
 
             self.assertEqual(
                 (project_dir / "rc_lowpass.ltstudy.json").read_text(encoding="utf-8"),
                 "user edit\n",
             )
             self.assertEqual(list(project_dir.iterdir()), [project_dir / "rc_lowpass.ltstudy.json"])
+
+    def test_seed_starter_projects_only_backfills_the_ones_still_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Simulates an existing workspace from before the second starter
+            # project existed: it already has the RC one (hand-edited) but
+            # not the instrumentation-amp one.
+            project_dir = root / "rc-lowpass-starter"
+            project_dir.mkdir()
+            (project_dir / "rc_lowpass.ltstudy.json").write_text("user edit\n", encoding="utf-8")
+
+            project_scaffold.seed_starter_projects(root)
+
+            self.assertEqual(
+                (project_dir / "rc_lowpass.ltstudy.json").read_text(encoding="utf-8"),
+                "user edit\n",
+            )
+            self.assertTrue(
+                (root / "instrumentation-amp-starter" / "instrumentation_amp_3opamp.ltstudy.json").is_file()
+            )
 
     def test_create_project_scaffolds_an_empty_shell_recipe_and_rejects_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
