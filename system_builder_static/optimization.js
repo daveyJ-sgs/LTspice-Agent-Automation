@@ -13,6 +13,7 @@ let selectedQualificationSource = null;
 let latestQualificationPreview = null;
 let frozenQualificationLaunch = null;
 let trackedQualificationJob = null;
+let optimizationDirty = false; // true once the loaded recipe has edits Save hasn't persisted yet
 let qualificationPollTimer = null;
 let displayedQualificationStudy = null;
 
@@ -292,6 +293,7 @@ function renderOptimizationSelectors() {
 }
 
 function renderOptimizationEditors() {
+  markClean("optimization-save-status", (v) => { optimizationDirty = v; });
   optId("optimization-title").textContent = optimizationRecipe.title || "Untitled optimization";
   optId("optimization-description").textContent =
     optimizationRecipe.description || "Portable LTspice optimization recipe";
@@ -385,6 +387,7 @@ function invalidateOptimizationLaunch() {
 
 function scheduleOptimizationPreview() {
   if (!optimizationRecipe) return;
+  markDirty("optimization-save-status", (v) => { optimizationDirty = v; });
   invalidateOptimizationLaunch();
   window.clearTimeout(optimizationTimer);
   const status = optId("optimization-status");
@@ -1082,6 +1085,10 @@ optId("optimization-start").addEventListener("click", startOptimization);
 optId("optimization-file").addEventListener("change", async (event) => {
   const [file] = event.target.files;
   if (!file) return;
+  if (!confirmDiscard(optimizationDirty, "Loading a different recipe will discard unsaved changes to this one. Continue?")) {
+    event.target.value = "";
+    return;
+  }
   try {
     optimizationRecipe = JSON.parse(await file.text());
     setCurrentProject(null, null);
@@ -1114,6 +1121,7 @@ optId("optimization-save").addEventListener("click", async () => {
     link.download = `${filenameSlug}.ltopt.json`;
     link.click();
     URL.revokeObjectURL(link.href);
+    markClean("optimization-save-status", (v) => { optimizationDirty = v; });
     return;
   }
   status.textContent = "Saving…";
@@ -1128,6 +1136,8 @@ optId("optimization-save").addEventListener("click", async () => {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error?.message || "Recipe could not be saved");
+    optimizationDirty = false;
+    status.classList.remove("unsaved");
     status.textContent = "Saved.";
     loadProjects();
   } catch (error) {
@@ -1135,6 +1145,7 @@ optId("optimization-save").addEventListener("click", async () => {
   }
 });
 optId("optimization-reset").addEventListener("click", () => {
+  if (!confirmDiscard(optimizationDirty, "Resetting will discard unsaved changes to the current recipe. Continue?")) return;
   loadOptimizationReference(false).catch((error) => renderOptimizationPreview({
     valid: false,
     errors: [{path: "optimization", message: error.message}],

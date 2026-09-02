@@ -15,6 +15,21 @@ let cornerDisplayUnits = new WeakMap();
 let netlistFiles = [];
 let currentProjectPath = null; // workspace-relative folder of the open project, if any
 let currentProjectSlug = null; // the open project's slug, if any -- Save recipe writes here instead of downloading
+let studyDirty = false; // true once the loaded recipe has edits Save hasn't persisted yet
+
+function markDirty(statusId, flagSetter) {
+  flagSetter(true);
+  const status = byId(statusId);
+  status.textContent = "Unsaved changes";
+  status.classList.add("unsaved");
+}
+
+function markClean(statusId, flagSetter) {
+  flagSetter(false);
+  const status = byId(statusId);
+  status.textContent = "";
+  status.classList.remove("unsaved");
+}
 
 function setCurrentProject(slug, path) {
   currentProjectSlug = slug;
@@ -71,6 +86,10 @@ const VIEW_LABELS = {
   faq: "FAQ",
 };
 
+function confirmDiscard(dirty, message) {
+  return !dirty || window.confirm(message);
+}
+
 function showView(view) {
   if (!VIEWS.includes(view)) view = "dashboard";
   for (const name of VIEWS) {
@@ -94,6 +113,11 @@ function routeFromHash() {
 }
 
 window.addEventListener("hashchange", routeFromHash);
+window.addEventListener("beforeunload", (event) => {
+  if (!studyDirty && !optimizationDirty) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
 document.addEventListener("click", (event) => {
   const trigger = event.target.closest("[data-view]");
   if (!trigger) return;
@@ -236,6 +260,7 @@ function invalidateFrozenPlan() {
 
 function schedulePreview() {
   if (!recipe) return;
+  markDirty("save-status", (v) => { studyDirty = v; });
   invalidateFrozenPlan();
   window.clearTimeout(previewTimer);
   const status = byId("preview-status");
@@ -1137,6 +1162,7 @@ function emptyEditor(message) {
 }
 
 function populateRecipeControls() {
+  markClean("save-status", (v) => { studyDirty = v; });
   byId("study-name").textContent = recipe.name || "Untitled study";
   byId("study-description").textContent = recipe.description || "Portable LTspice study recipe";
   byId("sample-count").value = recipe.plan.sample_count;
@@ -1924,6 +1950,9 @@ function renderProjectsError(message) {
 }
 
 async function openProject(project) {
+  const dirty = project.kind === "optimization" ? optimizationDirty : studyDirty;
+  const kind = project.kind === "optimization" ? "optimization recipe" : "study recipe";
+  if (!confirmDiscard(dirty, `Opening "${project.name}" will discard unsaved changes to the current ${kind}. Continue?`)) return;
   try {
     const response = await fetch(`/api/projects/${encodeURIComponent(project.slug)}/recipe`);
     const loaded = await response.json();
@@ -2235,6 +2264,10 @@ byId("add-experiment").addEventListener("click", () => {
 byId("recipe-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!file) return;
+  if (!confirmDiscard(studyDirty, "Loading a different recipe will discard unsaved changes to this one. Continue?")) {
+    event.target.value = "";
+    return;
+  }
   try {
     recipe = JSON.parse(await file.text());
     // This file has nothing to do with whatever project (if any) was open
@@ -2265,6 +2298,7 @@ byId("save-button").addEventListener("click", async () => {
     link.download = "mixed-signal-daq.ltstudy.json";
     link.click();
     URL.revokeObjectURL(link.href);
+    markClean("save-status", (v) => { studyDirty = v; });
     return;
   }
   status.textContent = "Saving…";
@@ -2279,6 +2313,8 @@ byId("save-button").addEventListener("click", async () => {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error?.message || "Recipe could not be saved");
+    studyDirty = false;
+    status.classList.remove("unsaved");
     status.textContent = "Saved.";
     loadProjects();
   } catch (error) {
