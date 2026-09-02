@@ -25,10 +25,95 @@ from typing import Callable
 from ltspice_text import decode_text
 
 
+def _settings_path() -> Path:
+    """Per-machine settings location, independent of any workspace or repo.
+
+    Where LTspice is installed is a fact about this computer, not about any
+    one project -- and it's very often outside any policy that would let a
+    corporate or personal install path be committed to a shared repo. This
+    intentionally never lives inside a --workspace.
+    """
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    elif sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming"))
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+    return base / "ltspice-system-builder" / "settings.json"
+
+
+def _load_settings() -> dict[str, object]:
+    path = _settings_path()
+    if path.is_symlink() or not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_settings(data: dict[str, object]) -> None:
+    path = _settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def get_ltspice_executable_override() -> str | None:
+    """The persisted, GUI-configured LTspice path, if one has been set."""
+    value = _load_settings().get("ltspice_executable")
+    return value if isinstance(value, str) and value else None
+
+
+def set_ltspice_executable(path: str | None) -> Path:
+    """Set (or, given None, clear) the persisted LTspice override.
+
+    Applies to the current process immediately -- no restart needed -- by
+    reassigning the module-level LTSPICE that every simulation call reads
+    fresh. Raises ValueError if a non-None path doesn't identify a real
+    file, so a typo never gets you a silent "LTspice executable not found"
+    on the next simulation instead of an immediate, clear error now.
+    """
+    global LTSPICE
+    settings = _load_settings()
+    if path:
+        candidate = Path(path).expanduser()
+        if not candidate.is_file():
+            raise ValueError(f"'{path}' does not identify a file")
+        settings["ltspice_executable"] = str(candidate)
+        _save_settings(settings)
+        LTSPICE = candidate
+    else:
+        settings.pop("ltspice_executable", None)
+        _save_settings(settings)
+        LTSPICE = _default_ltspice()
+    return LTSPICE
+
+
+def ltspice_status() -> dict[str, object]:
+    """Report the currently resolved LTspice executable and where it came from."""
+    if os.environ.get("LTSPICE_EXECUTABLE"):
+        source = "environment"
+    elif get_ltspice_executable_override():
+        source = "configured"
+    else:
+        source = "discovered"
+    return {
+        "executable": str(LTSPICE),
+        "exists": LTSPICE.is_file(),
+        "source": source,
+    }
+
+
 def _default_ltspice() -> Path:
     configured = os.environ.get("LTSPICE_EXECUTABLE")
     if configured:
         return Path(configured).expanduser()
+    override = get_ltspice_executable_override()
+    if override:
+        return Path(override).expanduser()
 
     candidates = {
         "darwin": [Path("/Applications/LTspice.app/Contents/MacOS/LTspice")],

@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Callable, TypedDict
 
-from ltspice_wrapper import LTSPICE
+import ltspice_wrapper
 
 
 CAPTURE_SCHEMA_VERSION = 1
@@ -431,10 +431,15 @@ def capture_schematic(
     source_path: object,
     *,
     platform_name: str = sys.platform,
-    executable: Path = LTSPICE,
+    executable: Path | None = None,
     native_capture: NativeCapture | None = None,
 ) -> CaptureResult:
     """Capture a workspace `.asc` into a bounded, content-addressed PNG asset."""
+    if executable is None:
+        # Looked up fresh, not bound as a default at import time: LTSPICE can
+        # change at runtime (a GUI-configured override), and a stale default
+        # argument would never see that update.
+        executable = ltspice_wrapper.LTSPICE
     source = resolve_workspace_file(
         workspace_root,
         source_path,

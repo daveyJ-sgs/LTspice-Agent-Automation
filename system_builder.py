@@ -691,6 +691,8 @@ def create_app(
             example_recipe=EXAMPLE_RECIPE,
             example_optimization_recipe=EXAMPLE_OPTIMIZATION_RECIPE,
             authorize_read=authorize_read,
+            authorize_mutation=authorize_mutation,
+            read_json_body=read_json_body,
         )
     )
     app.include_router(

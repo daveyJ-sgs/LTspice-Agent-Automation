@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+import ltspice_wrapper
 import system_builder
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -171,6 +172,7 @@ class SystemBuilderTests(unittest.TestCase):
             ("GET", "/api/schematic/files"),
             ("GET", "/api/schematic/image"),
             ("GET", "/api/session"),
+            ("GET", "/api/settings/ltspice"),
             ("GET", "/assets/app.css"),
             ("GET", "/assets/app.js"),
             ("GET", "/assets/daq-schematic.png"),
@@ -203,6 +205,7 @@ class SystemBuilderTests(unittest.TestCase):
             ("POST", "/api/schematic/capture"),
             ("POST", "/api/start"),
             ("PUT", "/api/recipe/netlist"),
+            ("PUT", "/api/settings/ltspice"),
         }
         self.assertEqual(actual, expected)
 
@@ -1527,6 +1530,71 @@ class SystemBuilderTests(unittest.TestCase):
             )
             self.assertEqual(escaped_import.status_code, 409)
             self.assertFalse((workspace.parent / "escaped.cir").exists())
+
+    def test_ltspice_settings_route_is_authorized_persists_and_rejects_missing_files(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            settings_path = workspace / "settings.json"
+            original_ltspice = ltspice_wrapper.LTSPICE
+            with patch.object(
+                ltspice_wrapper, "_settings_path", return_value=settings_path
+            ):
+                try:
+                    client = TestClient(
+                        system_builder.create_app(workspace, testing=True),
+                        base_url="http://testserver",
+                    )
+
+                    self.assertEqual(
+                        client.get("/api/settings/ltspice").status_code, 401
+                    )
+                    client.get("/")
+
+                    initial = client.get("/api/settings/ltspice")
+                    self.assertEqual(initial.status_code, 200)
+                    self.assertIn("executable", initial.json())
+                    self.assertIn("source", initial.json())
+
+                    with tempfile.NamedTemporaryFile(suffix=".exe") as fake:
+                        denied = client.put(
+                            "/api/settings/ltspice", json={"executable": fake.name}
+                        )
+                        self.assertEqual(denied.status_code, 403)
+
+                        updated = client.put(
+                            "/api/settings/ltspice",
+                            json={"executable": fake.name},
+                            headers=self._headers(),
+                        )
+                        self.assertEqual(updated.status_code, 200)
+                        self.assertEqual(updated.json()["source"], "configured")
+                        self.assertEqual(
+                            Path(updated.json()["executable"]),
+                            Path(fake.name).expanduser(),
+                        )
+                        # Applied immediately, no restart needed.
+                        self.assertEqual(
+                            ltspice_wrapper.LTSPICE, Path(fake.name).expanduser()
+                        )
+
+                    missing = client.put(
+                        "/api/settings/ltspice",
+                        json={"executable": "/definitely/not/real/LTspice.exe"},
+                        headers=self._headers(),
+                    )
+                    self.assertEqual(missing.status_code, 409)
+
+                    cleared = client.put(
+                        "/api/settings/ltspice",
+                        json={"executable": None},
+                        headers=self._headers(),
+                    )
+                    self.assertEqual(cleared.status_code, 200)
+                    self.assertEqual(cleared.json()["source"], "discovered")
+                finally:
+                    ltspice_wrapper.LTSPICE = original_ltspice
 
 
 if __name__ == "__main__":

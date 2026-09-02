@@ -163,6 +163,13 @@ h3 { font-size: 16px; }
 .workspace-strip strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; font: 600 12px "IBM Plex Mono", monospace; }
 .label { color: var(--subtle); font: 600 10px "IBM Plex Mono", monospace; text-transform: uppercase; letter-spacing: .08em; }
 
+.ltspice-settings { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 16px; }
+.ltspice-settings-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.ltspice-settings-heading code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; font: 600 12px "IBM Plex Mono", monospace; background: none; padding: 0; }
+.ltspice-settings-form { display: flex; gap: 10px; margin-top: 12px; }
+.ltspice-settings-form input { flex: 1; }
+.ltspice-settings .muted-copy { margin: 10px 0 0; font-size: 12px; }
+
 .dashboard-section { padding-top: 6px; }
 .attention-note { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 18px; padding: 15px 17px; border: 1px solid var(--warning); border-radius: var(--radius); background: var(--warning-soft); }
 .attention-icon { display: grid; place-items: center; width: 22px; height: 22px; flex: 0 0 auto; border-radius: 50%; color: #fff; background: var(--warning); font: 700 12px "IBM Plex Mono", monospace; }

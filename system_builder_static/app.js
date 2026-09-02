@@ -2057,7 +2057,55 @@ async function loadInitialState() {
   populateRecipeControls();
   await Promise.all([loadSchematicFiles(), loadNetlistFiles()]);
   await preview();
-  await Promise.all([loadHistory(), loadRemoteJobs(), loadProjects()]);
+  await Promise.all([loadHistory(), loadRemoteJobs(), loadProjects(), loadLtspiceStatus()]);
+}
+
+async function loadLtspiceStatus() {
+  const response = await fetch("/api/settings/ltspice");
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error?.message || "LTspice status could not be read");
+  renderLtspiceStatus(result);
+}
+
+function renderLtspiceStatus(status) {
+  byId("ltspice-path").textContent = status.executable;
+  byId("ltspice-path").title = status.executable;
+  byId("ltspice-path-input").value = "";
+  byId("ltspice-path-input").placeholder = status.executable;
+  const pill = byId("ltspice-status-pill");
+  const sourceLabel = {
+    environment: "env var",
+    configured: "configured",
+    discovered: "auto-detected",
+  }[status.source] || status.source;
+  if (status.exists) {
+    pill.className = "status-pill valid";
+    pill.textContent = `Found · ${sourceLabel}`;
+  } else {
+    pill.className = "status-pill invalid";
+    pill.textContent = "Not found";
+  }
+}
+
+async function saveLtspiceExecutable(executable) {
+  const errorEl = byId("ltspice-settings-error");
+  errorEl.hidden = true;
+  try {
+    const response = await fetch("/api/settings/ltspice", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({executable}),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "LTspice setting could not be saved");
+    renderLtspiceStatus(result);
+  } catch (error) {
+    errorEl.textContent = error.message;
+    errorEl.hidden = false;
+  }
 }
 
 byId("preview-button").addEventListener("click", preview);
@@ -2215,6 +2263,14 @@ byId("refresh-netlists").addEventListener("click", async () => {
     button.disabled = false;
   }
 });
+byId("ltspice-settings-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const input = byId("ltspice-path-input");
+  const value = input.value.trim();
+  if (!value) return;
+  saveLtspiceExecutable(value);
+});
+byId("ltspice-auto-detect").addEventListener("click", () => saveLtspiceExecutable(null));
 byId("netlist-import-input").addEventListener("change", async (event) => {
   const input = event.target;
   const file = input.files[0];

@@ -102,6 +102,23 @@
         </div>
       </section>
 
+      <section class="ltspice-settings">
+        <div class="ltspice-settings-heading">
+          <div>
+            <span class="label">LTspice executable</span>
+            <code id="ltspice-path">Checking…</code>
+          </div>
+          <span id="ltspice-status-pill" class="status-pill idle">Checking</span>
+        </div>
+        <form id="ltspice-settings-form" class="ltspice-settings-form">
+          <input id="ltspice-path-input" type="text" spellcheck="false" placeholder="Path to LTspice.exe (or the LTspice app on macOS)">
+          <button type="submit" class="secondary-button">Save</button>
+          <button id="ltspice-auto-detect" type="button" class="text-button">Auto-detect</button>
+        </form>
+        <p id="ltspice-settings-error" class="inline-errors" aria-live="polite" hidden></p>
+        <p class="muted-copy">This is saved per machine, not inside any project or workspace -- useful when LTspice lives somewhere nonstandard, like a corporate-imaged install path you can't check into a shared repo.</p>
+      </section>
+
       <div id="dashboard-attention" class="attention-note" hidden>
         <span class="attention-icon" aria-hidden="true">!</span>
         <div>

@@ -7,11 +7,12 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
+import ltspice_wrapper
 import optimization_recipe
 from study_recipe import load_study_recipe
 from system_builder_history import evidence_file, workspace_history
 
-from .common import Authorization, json_error
+from .common import Authorization, JsonBodyReader, json_error
 
 
 def create_core_router(
@@ -25,6 +26,8 @@ def create_core_router(
     example_recipe: Path,
     example_optimization_recipe: Path,
     authorize_read: Authorization,
+    authorize_mutation: Authorization,
+    read_json_body: JsonBodyReader,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -110,6 +113,40 @@ def create_core_router(
                 example_optimization_recipe
             )
         )
+
+    @router.get("/api/settings/ltspice")
+    def ltspice_settings(request: Request) -> Response:
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        return JSONResponse(ltspice_wrapper.ltspice_status())
+
+    @router.put("/api/settings/ltspice")
+    async def set_ltspice_settings(request: Request) -> Response:
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        payload, error = await read_json_body(request, maximum=4096)
+        if error is not None:
+            return error
+        if not isinstance(payload, dict) or "executable" not in payload:
+            return json_error(
+                400,
+                "invalid_ltspice_setting",
+                "request requires an executable field (a path, or null to clear)",
+            )
+        executable = payload["executable"]
+        if executable is not None and not isinstance(executable, str):
+            return json_error(
+                400,
+                "invalid_ltspice_setting",
+                "executable must be a string path or null",
+            )
+        try:
+            ltspice_wrapper.set_ltspice_executable(executable)
+        except ValueError as exc:
+            return json_error(409, "ltspice_setting_failed", str(exc))
+        return JSONResponse(ltspice_wrapper.ltspice_status())
 
     @router.get("/api/history")
     def history(request: Request, limit: int = 12) -> Response:
