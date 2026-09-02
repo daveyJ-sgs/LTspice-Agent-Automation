@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 import experiment_report
 import optimization_engine
 import optimization_study
+import project_scaffold
 import qualification_study
 import robust_selection
 import schematic_capture
@@ -785,6 +786,15 @@ def main() -> None:
         help="start without opening the default browser",
     )
     args = parser.parse_args()
+
+    # Skip when the workspace is this repo checkout itself (the default for
+    # both launchers when run with no --workspace) -- seeding would write
+    # example-project files straight into the tracked working tree. Any real
+    # workspace (a fresh --workspace elsewhere, or the packaged app's default
+    # Documents folder) gets the starter project so first launch never shows
+    # an empty Projects list.
+    if args.workspace.resolve() != PROJECT_ROOT.resolve():
+        project_scaffold.seed_starter_project(args.workspace)
 
     import uvicorn
 

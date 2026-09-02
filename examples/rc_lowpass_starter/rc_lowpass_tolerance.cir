@@ -1,0 +1,7 @@
+* RC low-pass, ~1 kHz nominal cutoff, tolerance study template
+* R1_VAL and C1_VAL are substituted per point by System Builder.
+V1 in 0 AC 1
+R1 in out {R1_VAL}
+C1 out 0 {C1_VAL}
+.ac dec 100 10 100k
+.end

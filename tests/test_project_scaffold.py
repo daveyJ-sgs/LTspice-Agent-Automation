@@ -59,6 +59,42 @@ class ProjectScaffoldTests(unittest.TestCase):
 
         self.assertEqual([project["slug"] for project in projects], ["real-project"])
 
+    def test_seed_starter_project_creates_workspace_and_copies_starter_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            # A workspace that doesn't exist yet at all, matching a fresh
+            # --workspace pointed at an empty/nonexistent folder.
+            root = Path(tmp) / "brand-new-workspace"
+
+            project_scaffold.seed_starter_project(root)
+
+            project_dir = root / project_scaffold.STARTER_PROJECT_NAME
+            recipe_path = project_dir / "rc_lowpass.ltstudy.json"
+            netlist_path = project_dir / "rc_lowpass_tolerance.cir"
+            self.assertTrue(recipe_path.is_file())
+            self.assertTrue(netlist_path.is_file())
+            recipe = json.loads(recipe_path.read_text())
+            self.assertEqual(recipe["name"], "RC low-pass tolerance study")
+
+            projects = project_scaffold.list_projects(root)
+            self.assertEqual([p["slug"] for p in projects], [project_scaffold.STARTER_PROJECT_NAME])
+
+    def test_seed_starter_project_never_overwrites_an_existing_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_dir = root / project_scaffold.STARTER_PROJECT_NAME
+            project_dir.mkdir()
+            (project_dir / "rc_lowpass.ltstudy.json").write_text("user edit\n", encoding="utf-8")
+
+            # Whether it was seeded before, hand-copied, or just renamed to
+            # match -- if it's already there, it's left completely alone.
+            project_scaffold.seed_starter_project(root)
+
+            self.assertEqual(
+                (project_dir / "rc_lowpass.ltstudy.json").read_text(encoding="utf-8"),
+                "user edit\n",
+            )
+            self.assertEqual(list(project_dir.iterdir()), [project_dir / "rc_lowpass.ltstudy.json"])
+
     def test_create_project_scaffolds_an_empty_shell_recipe_and_rejects_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

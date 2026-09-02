@@ -24,6 +24,9 @@ RESERVED_NAMES = {"runs", "examples"}
 MAX_PROJECT_NAME_LENGTH = 80
 MAX_PROJECTS_LISTED = 200
 
+STARTER_PROJECT_NAME = "rc-lowpass-starter"
+STARTER_PROJECT_SOURCE = Path(__file__).resolve().parent / "examples" / "rc_lowpass_starter"
+
 _SLUG_DISALLOWED = re.compile(r"[^a-z0-9]+")
 
 
@@ -226,6 +229,23 @@ def _template_recipe(display_name: str) -> str:
         "report_context": {"title": display_name},
     }
     return json.dumps(recipe, indent=2) + "\n"
+
+
+def seed_starter_project(workspace_root: Path) -> None:
+    """Give a workspace the bundled RC low-pass starter project, once.
+
+    This is what used to only exist wherever someone happened to have
+    hand-copied it (true on one machine, not the next) -- called once at
+    launch, it makes every workspace's first open show the same small
+    worked example instead of an empty Projects list. Purely additive: if
+    `rc-lowpass-starter` already exists (edited, renamed contents, or just
+    already seeded), it's left completely alone.
+    """
+    destination = workspace_root / STARTER_PROJECT_NAME
+    if destination.exists() or destination.is_symlink():
+        return
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(STARTER_PROJECT_SOURCE, destination)
 
 
 def create_project(workspace_root: Path, name: object) -> dict[str, object]:

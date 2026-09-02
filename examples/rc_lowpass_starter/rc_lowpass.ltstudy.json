@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "kind": "statistical",
+  "name": "RC low-pass tolerance study",
+  "description": "Starter template: manufacturing tolerance on a single-pole RC low-pass, verifying the -3 dB cutoff stays within a target band.",
+  "plan": {
+    "variables": [
+      {
+        "name": "R1_VAL",
+        "distribution": "gaussian",
+        "nominal": 1000,
+        "sigma": 10,
+        "minimum": 950,
+        "maximum": 1050,
+        "unit": "ohm"
+      },
+      {
+        "name": "C1_VAL",
+        "distribution": "gaussian",
+        "nominal": 1.59e-07,
+        "sigma": 8e-09,
+        "minimum": 1.4e-07,
+        "maximum": 1.78e-07,
+        "unit": "F"
+      }
+    ],
+    "sample_count": 8,
+    "seed": 20260831,
+    "correlations": [],
+    "corner_axes": [],
+    "sampling_method": "independent"
+  },
+  "experiments": [
+    {
+      "name": "ac",
+      "netlist_path": "rc-lowpass-starter/rc_lowpass_tolerance.cir",
+      "filename": "rc_lowpass_tolerance.cir",
+      "waveform_analyses": [
+        {
+          "name": "lowpass_response",
+          "variable": "V(out)",
+          "secondary_variable": "V(in)",
+          "requirements": [
+            {
+              "metric": "ac_gain_db",
+              "operator": ">=",
+              "target": -0.5,
+              "frequency_value": 10
+            },
+            {
+              "metric": "cutoff_frequency",
+              "operator": ">=",
+              "target": 750,
+              "reference_frequency": 10
+            },
+            {
+              "metric": "cutoff_frequency",
+              "operator": "<=",
+              "target": 1300,
+              "reference_frequency": 10
+            },
+            {
+              "metric": "peaking_db",
+              "operator": "<=",
+              "target": 0.1,
+              "reference_frequency": 10
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "execution": {
+    "max_concurrency": 2,
+    "reuse_cache": true
+  },
+  "report_context": {
+    "title": "RC Low-Pass Tolerance Study",
+    "circuit_summary": "Single-pole RC low-pass filter, nominal cutoff ~1 kHz."
+  }
+}
