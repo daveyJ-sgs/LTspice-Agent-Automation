@@ -76,8 +76,13 @@ class ProjectScaffoldTests(unittest.TestCase):
             inamp_dir = root / "instrumentation-amp-starter"
             self.assertTrue((inamp_dir / "instrumentation_amp_3opamp.ltstudy.json").is_file())
             self.assertTrue((inamp_dir / "instrumentation_amp_3opamp.cir").is_file())
+            self.assertTrue((inamp_dir / "instrumentation_amp_3opamp.asc").is_file())
             inamp_recipe = json.loads((inamp_dir / "instrumentation_amp_3opamp.ltstudy.json").read_text())
             self.assertEqual(inamp_recipe["name"], "3 op-amp instrumentation amplifier tolerance study")
+            self.assertEqual(
+                inamp_recipe["report_context"]["schematic_source_path"],
+                "instrumentation-amp-starter/instrumentation_amp_3opamp.asc",
+            )
 
             projects = project_scaffold.list_projects(root)
             self.assertEqual(

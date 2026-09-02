@@ -64,6 +64,7 @@
   },
   "report_context": {
     "title": "3 Op-Amp Instrumentation Amplifier Tolerance Study",
-    "circuit_summary": "Classic discrete 3 op-amp instrumentation amplifier (LT1128 precision op-amps), nominal differential gain ~100 (40 dB)."
+    "circuit_summary": "Classic discrete 3 op-amp instrumentation amplifier (LT1128 precision op-amps), nominal differential gain ~100 (40 dB).",
+    "schematic_source_path": "instrumentation-amp-starter/instrumentation_amp_3opamp.asc"
   }
 }

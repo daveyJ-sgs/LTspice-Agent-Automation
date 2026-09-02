@@ -13,8 +13,8 @@ let jobPollTimer = null;
 let variableDisplayUnits = new WeakMap();
 let cornerDisplayUnits = new WeakMap();
 let netlistFiles = [];
-let currentProjectPath = null; // workspace-relative folder of the open project, if any
-let currentProjectSlug = null; // the open project's slug, if any -- Save recipe writes here instead of downloading
+let currentStudyProjectPath = null; // workspace-relative folder of the open Study project, if any
+let currentStudyProjectSlug = null; // the open Study project's slug, if any -- Save recipe writes here instead of downloading
 let studyDirty = false; // true once the loaded recipe has edits Save hasn't persisted yet
 
 function markDirty(statusId, flagSetter) {
@@ -31,14 +31,16 @@ function markClean(statusId, flagSetter) {
   status.classList.remove("unsaved");
 }
 
-function setCurrentProject(slug, path) {
-  currentProjectSlug = slug;
-  currentProjectPath = path;
-  const label = slug ? "Save to project" : "Save recipe";
-  const studyButton = byId("save-button");
-  if (studyButton) studyButton.textContent = label;
-  const optimizationButton = byId("optimization-save");
-  if (optimizationButton) optimizationButton.textContent = label;
+// Study and Optimization are independent documents -- each project is only
+// ever one kind or the other, so each tracks its own project association
+// (and its own Save button label) separately. Setting one must never touch
+// the other's, or opening a Study project relabels Optimization's Save
+// button to "Save to project" too, even though optimizationRecipe is still
+// whatever unrelated thing was loaded there.
+function setCurrentStudyProject(slug, path) {
+  currentStudyProjectSlug = slug;
+  currentStudyProjectPath = path;
+  byId("save-button").textContent = slug ? "Save to project" : "Save recipe";
 }
 
 const byId = (id) => document.getElementById(id);
@@ -1957,14 +1959,15 @@ async function openProject(project) {
     const response = await fetch(`/api/projects/${encodeURIComponent(project.slug)}/recipe`);
     const loaded = await response.json();
     if (!response.ok) throw new Error(loaded.error?.message || "Recipe could not be loaded");
-    setCurrentProject(project.slug, project.path);
     if (project.kind === "optimization") {
+      setCurrentOptimizationProject(project.slug, project.path);
       optimizationRecipe = loaded;
       optimizationDisplayUnits = new WeakMap();
       renderOptimizationEditors();
       await previewOptimization();
       showView("optimization");
     } else {
+      setCurrentStudyProject(project.slug, project.path);
       recipe = loaded;
       variableDisplayUnits = new WeakMap();
       cornerDisplayUnits = new WeakMap();
@@ -2274,7 +2277,7 @@ byId("recipe-file").addEventListener("change", async (event) => {
     // before -- without clearing this, Save would silently write the newly
     // loaded recipe into the previous project, and an unrelated netlist
     // Import would land in its folder too.
-    setCurrentProject(null, null);
+    setCurrentStudyProject(null, null);
     byId("save-status").textContent = "";
     variableDisplayUnits = new WeakMap();
     cornerDisplayUnits = new WeakMap();
@@ -2291,7 +2294,7 @@ byId("save-button").addEventListener("click", async () => {
   if (!recipe) return;
   updateRecipeFromControls();
   const status = byId("save-status");
-  if (!currentProjectSlug) {
+  if (!currentStudyProjectSlug) {
     const blob = new Blob([`${JSON.stringify(recipe, null, 2)}\n`], {type: "application/json"});
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
@@ -2303,7 +2306,7 @@ byId("save-button").addEventListener("click", async () => {
   }
   status.textContent = "Saving…";
   try {
-    const response = await fetch(`/api/projects/${encodeURIComponent(currentProjectSlug)}/recipe`, {
+    const response = await fetch(`/api/projects/${encodeURIComponent(currentStudyProjectSlug)}/recipe`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
@@ -2355,7 +2358,7 @@ byId("netlist-import-input").addEventListener("change", async (event) => {
   }
   try {
     const content = await file.text();
-    const destination = currentProjectPath ? `${currentProjectPath}/${file.name}` : file.name;
+    const destination = currentStudyProjectPath ? `${currentStudyProjectPath}/${file.name}` : file.name;
     const response = await fetch(`/api/recipe/netlist?path=${encodeURIComponent(destination)}`, {
       method: "POST",
       headers: {

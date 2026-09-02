@@ -14,10 +14,33 @@ let latestQualificationPreview = null;
 let frozenQualificationLaunch = null;
 let trackedQualificationJob = null;
 let optimizationDirty = false; // true once the loaded recipe has edits Save hasn't persisted yet
+let currentOptimizationProjectSlug = null; // the open Optimization project's slug, if any
+let currentOptimizationProjectPath = null; // workspace-relative folder of the open Optimization project, if any
 let qualificationPollTimer = null;
 let displayedQualificationStudy = null;
 
 const optId = (id) => document.getElementById(id);
+
+// See setCurrentStudyProject() in app.js -- Optimization tracks its own
+// project association independently so opening a Study project can never
+// mislabel this tab's Save button as attached to it.
+function setCurrentOptimizationProject(slug, path) {
+  currentOptimizationProjectSlug = slug;
+  currentOptimizationProjectPath = path;
+  optId("optimization-save").textContent = slug ? "Save to project" : "Save recipe";
+}
+
+function showOptimizationEmptyState() {
+  optId("optimization-empty").hidden = false;
+  optId("optimization-grid").hidden = true;
+  optId("optimization-results").hidden = true;
+  optId("optimization-save").hidden = true;
+  optId("optimization-preview").hidden = true;
+  optId("optimization-title").textContent = "No optimization recipe loaded";
+  optId("optimization-description").textContent =
+    "Open an optimization project from the Projects tab, or load a .ltopt.json file to get started.";
+}
+
 const OPT_UNITS = {
   F: [["pF", "pF", 1e-12], ["nF", "nF", 1e-9], ["uF", "µF", 1e-6]],
   ohm: [["ohm", "Ω", 1], ["kohm", "kΩ", 1e3], ["Mohm", "MΩ", 1e6]],
@@ -294,6 +317,10 @@ function renderOptimizationSelectors() {
 
 function renderOptimizationEditors() {
   markClean("optimization-save-status", (v) => { optimizationDirty = v; });
+  optId("optimization-empty").hidden = true;
+  optId("optimization-grid").hidden = false;
+  optId("optimization-save").hidden = false;
+  optId("optimization-preview").hidden = false;
   optId("optimization-title").textContent = optimizationRecipe.title || "Untitled optimization";
   optId("optimization-description").textContent =
     optimizationRecipe.description || "Portable LTspice optimization recipe";
@@ -1056,24 +1083,6 @@ async function previewOptimization() {
   }
 }
 
-async function loadOptimizationReference() {
-  // Seeds the Optimization view on initial page load only -- there is no
-  // "reset to the bundled example" control mid-session, so this recipe is
-  // just the starting point until a project or a .ltopt.json file replaces
-  // it via setCurrentProject()/optimizationRecipe assignment elsewhere.
-  const response = await fetch("/api/examples/mixed-signal-daq-optimization");
-  if (!response.ok) throw new Error("DAQ optimization reference could not be loaded");
-  optimizationRecipe = await response.json();
-  setCurrentProject(null, null);
-  optId("optimization-save-status").textContent = "";
-  optimizationDisplayUnits = new WeakMap();
-  displayedOptimizationStudy = null;
-  optId("optimization-results").hidden = true;
-  renderOptimizationEditors();
-  await previewOptimization();
-  await recoverOptimizationJob();
-}
-
 optId("optimization-preview").addEventListener("click", previewOptimization);
 optId("optimization-freeze").addEventListener("click", freezeOptimizationPlan);
 optId("optimization-acknowledgement").addEventListener("change", () => {
@@ -1089,7 +1098,7 @@ optId("optimization-file").addEventListener("change", async (event) => {
   }
   try {
     optimizationRecipe = JSON.parse(await file.text());
-    setCurrentProject(null, null);
+    setCurrentOptimizationProject(null, null);
     optId("optimization-save-status").textContent = "";
     optimizationDisplayUnits = new WeakMap();
     displayedOptimizationStudy = null;
@@ -1108,7 +1117,7 @@ optId("optimization-file").addEventListener("change", async (event) => {
 optId("optimization-save").addEventListener("click", async () => {
   if (!optimizationRecipe) return;
   const status = optId("optimization-save-status");
-  if (!currentProjectSlug) {
+  if (!currentOptimizationProjectSlug) {
     const filenameSlug = (optimizationRecipe.title || "optimization")
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
@@ -1124,7 +1133,7 @@ optId("optimization-save").addEventListener("click", async () => {
   }
   status.textContent = "Saving…";
   try {
-    const response = await fetch(`/api/projects/${encodeURIComponent(currentProjectSlug)}/recipe`, {
+    const response = await fetch(`/api/projects/${encodeURIComponent(currentOptimizationProjectSlug)}/recipe`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
@@ -1149,8 +1158,4 @@ optId("qualification-acknowledgement").addEventListener("change", () => {
 });
 optId("qualification-start").addEventListener("click", startQualification);
 
-loadOptimizationReference().catch((error) => renderOptimizationPreview({
-  valid: false,
-  errors: [{path: "optimization", message: error.message}],
-  limits: {maximum_candidates: 512, maximum_points: 1000},
-}));
+showOptimizationEmptyState();
