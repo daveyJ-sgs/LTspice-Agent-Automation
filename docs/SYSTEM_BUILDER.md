@@ -50,9 +50,43 @@ Pass `--workspace` the same way to point it at your own projects folder:
 ./Start-SystemBuilder.command --workspace=/Users/dave/Documents/LTspice/projects
 ```
 
-The application opens the default browser on a random `127.0.0.1` port. The
-bundled reference recipe is
+The application opens the default browser on a random `127.0.0.1` port. A
+repository-root development launch can load the bundled advanced reference
+recipe at
 [`examples/mixed_signal_daq.ltstudy.json`](../examples/mixed_signal_daq.ltstudy.json).
+
+## Projects, starters, and navigation
+
+System Builder distinguishes the **workspace** selected at launch from the
+**projects** inside it. A project is a first-level workspace folder containing
+a `.ltstudy.json` or `.ltopt.json` recipe. The Projects view lists those
+folders and can create, open, save, and delete them without restarting System
+Builder. The enclosing workspace remains fixed for the life of the process;
+working in a different workspace still requires relaunching with `--workspace`
+or `-Workspace`.
+
+When launched against a user workspace, System Builder adds each missing
+worked example without overwriting an existing folder:
+
+- `rc-lowpass-starter` demonstrates a compact tolerance study.
+- `instrumentation-amp-starter` demonstrates a classic three-op-amp
+  instrumentation amplifier with a real LTspice-compatible schematic and
+  self-contained batch netlist.
+
+**New project** creates an intentionally incomplete recipe shell rather than a
+fake circuit. Select an existing `.cir` or `.net` file from the netlist picker,
+use **Import netlist** to copy one into the open project, or edit the selected
+netlist in the built-in editor. Opening a project attaches its recipe to the
+editor, so **Save to project** writes changes back atomically; loading an
+unrelated recipe detaches that association. Project deletion uses an explicit
+two-step confirmation.
+
+The sidebar separates Projects, Study, Optimization, Qualification, Workspace,
+Guide, and FAQ. Browser Back and Forward follow that navigation, and the app
+warns before an action would discard unsaved Study or Optimization edits. The
+theme control offers the dark **Solder Mask**, light **Copper Print**, and
+schematic-inspired **Wire & Grid** themes; the selection is stored only in the
+local browser.
 
 ## Study definition and immutable plans
 
@@ -243,5 +277,5 @@ only through the explicit remote controls described above; the default session
 still performs no remote action.
 
 See the [MCP reference](MCP_REFERENCE.md) for the parallel agent-facing tool
-contracts and [ROADMAP.md](../ROADMAP.md) for GUI-D packaging and gated remote
-execution.
+contracts and [ROADMAP.md](../ROADMAP.md) for completed System Builder work and
+the next project milestones.

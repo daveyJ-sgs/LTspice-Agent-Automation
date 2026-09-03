@@ -1048,9 +1048,9 @@ GUI-A1 verification gate:
 
 GUI-A2 verification gate:
 
-- Real workspace discovery reports 90 durable experiments, no active jobs,
-  available experiment/decision reports, and the five newest experiments as
-  honestly unindexed rather than silently rebuilding the stale index
+- Discovery against a populated real workspace reports durable experiments,
+  active-job state, available experiment/decision reports, and honestly
+  unindexed recent experiments rather than silently rebuilding a stale index
 - Tests prove byte-for-byte non-mutation, live schema-v2 progress calculation,
   bounded history, invalid-manifest isolation, session enforcement, traversal
   rejection, and symlink rejection
@@ -1348,7 +1348,7 @@ routes and execution policy:
      unchanged; verify with the complete API/unit suite and local browser pass
    - Complete: the entry point now composes focused core, schematic, study,
      optimization, and qualification routers; a committed route-inventory test
-     guards all 38 method/path contracts, and the full 343-test suite passes
+     guards the method/path contracts, and the full suite passes
 2. **H2 — Waveform metric registry**
    - Replace the two large metric dispatch conditionals with explicit
      name-to-handler registries while preserving the public `measure_metric`
@@ -1358,12 +1358,12 @@ routes and execution policy:
    - Complete: all 17 waveform and 9 frequency-domain metrics now use explicit
      handler/parameter registries; public signatures are unchanged, the metric
      modules are covered by strict Mypy and scoped Ruff gates, and the full
-     345-test suite passes
+     suite passes
 3. **H3 — Documentation front-door split**
    - Keep `README.md` as a concise human on-ramp and move detailed reference
      material into linked documents under `docs/`
    - Preserve `LEARNINGS.md` as institutional compatibility history
-   - Complete: the README is now a 235-line project on-ramp with restrained
+   - Complete: the README is a concise project on-ramp with restrained
      first-result previews; detailed System Builder, workflow, and Windows
      guidance lives in focused documents, and a regression test verifies all
      front-door relative links
@@ -1376,16 +1376,16 @@ Hardening-bridge verification gate:
   contracts remain unchanged through H1
 - Retained simulation artifacts and immutable plan identities remain untouched
 
-Next System Builder slices:
+System Builder launch, packaging, remote execution, and project slices:
 
-1. **GUI-D1 — Windows launch contract**
+1. **GUI-D1 — Windows launch contract — complete**
    - Provide no-admin PowerShell and CMD entry points that create a private
      Python 3.13+ environment, install fingerprinted GUI dependencies, diagnose
      LTspice discovery and first-run consent, and start the loopback application
    - Keep missing LTspice non-fatal for recipe editing and pure plan preview;
      fail early only for unusable Python, dependencies, or workspace selection
-   - Complete: local contract coverage and the full 347-test suite pass; Windows
-     CI bootstraps the launcher from a clean checkout, discovers its random
+   - Complete: local contract coverage and the full suite pass; Windows CI
+     bootstraps the launcher from a clean checkout, discovers its random
      loopback URL, verifies `/health`, and terminates the complete process tree
 2. **GUI-D2 — Distributable Windows package — complete**
    - Produce a versioned application bundle in GitHub Actions without bundling
@@ -1421,23 +1421,27 @@ Next System Builder slices:
    - The recovered 264-file, 15,010,763-byte artifact passed manifest identity,
      exact inventory, and per-file SHA-256 verification before both HTML reports
      were admitted and opened locally
-5. **GUI-D5 — Multi-project workspace switching**
-   - Today the workspace is fixed for the life of the process: `--workspace`
-     is read once at startup and every route/manager in the app is built
-     against that single folder, so opening a different project means
-     stopping the server and relaunching it with a different flag
-   - A first cut (list projects under a projects root, scaffold a new one from
-     a template, show the exact launch command for an existing one) ships
-     without touching this constraint
-   - This slice is the definite follow-up: switch the active workspace inside
-     one running server process — no restart, no dropped browser tab — which
-     requires reworking how `create_app()` wires every manager, router, and
-     lock, deciding what happens to jobs still running in a workspace being
-     switched away from, and whether workspaces can ever be active
-     concurrently or switching is strictly exclusive
-   - Needs its own scoped design pass before implementation, given how much
-     of the app's dependency-injection tree currently assumes one workspace
-     per process lifetime
+5. **GUI-D5A — Project workbench foundation — complete**
+   - Added a Projects view for first-level project folders inside the selected
+     workspace, with confined list, create, open, atomic save, and two-step
+     delete operations
+   - Added a real netlist picker, external `.cir`/`.net` import, an in-app
+     netlist editor, unsaved-change protection, browser-history navigation,
+     Guide and FAQ views, and three named display themes
+   - Added independently seeded RC low-pass and three-op-amp instrumentation-
+     amplifier starter projects; seeding is additive and never overwrites an
+     existing project folder
+6. **GUI-D5B — Live cross-workspace switching — deferred**
+   - The workspace remains fixed for the life of the process: `--workspace`
+     is read once at startup and every route/manager is built against that
+     single root. Projects inside it open without a restart, but selecting a
+     different workspace still requires relaunching System Builder
+   - Live switching would require reworking how `create_app()` wires managers,
+     routers, and locks, plus an explicit policy for jobs still running in a
+     workspace being switched away from
+   - Defer this larger dependency-injection change until Phase 5 or real user
+     workflows demonstrate that one process must manage multiple workspace
+     roots; it is not on the critical path to DAQ architecture
 
 ### Phase 5: Flagship portable mixed-signal DAQ/scope
 
@@ -1588,4 +1592,5 @@ Begin Phase 5 architecture by freezing the flagship portable mixed-signal
 DAQ/scope requirements, interfaces, and first hardware partition. Reuse System
 Builder's completed local/Windows execution, optimization, statistical, and
 portable-evidence contracts rather than creating a project-specific simulator
-path.
+path. Live cross-workspace switching remains a deferred System Builder
+enhancement and is not a prerequisite for this phase.

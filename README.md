@@ -137,7 +137,9 @@ System Builder gives a human the same deterministic study contracts used by the
 MCP. It loads and saves portable `.ltstudy.json` recipes, edits manufacturing
 variables and operating corners in engineering units, previews the exact
 future immutable plan and simulation cost, and keeps execution behind a
-separate explicit acknowledgement.
+separate explicit acknowledgement. Its project workbench can create, open,
+save, and delete circuit projects; import or edit netlists; and start from
+worked RC low-pass and instrumentation-amplifier examples.
 
 ```bash
 make system-builder
@@ -156,8 +158,9 @@ and evidence contract. Remote execution is separately acknowledged, uses the
 user's existing GitHub CLI login, and admits downloaded evidence only after its
 manifest and SHA-256 hashes verify.
 
-Read the [System Builder guide](docs/SYSTEM_BUILDER.md) for setup, security,
-schematic capture, optimization, tolerance qualification, and recovery.
+Read the [System Builder guide](docs/SYSTEM_BUILDER.md) for projects,
+navigation, setup, security, schematic capture, optimization, tolerance
+qualification, and recovery.
 Windows users can either run the source launcher or download the verified
 Python-free application bundle described in the [Windows guide](docs/WINDOWS.md).
 

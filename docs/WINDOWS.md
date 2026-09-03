@@ -17,8 +17,11 @@ creates a writable starter workspace at:
 Documents\LTspice System Builder Workspace
 ```
 
-The starter DAQ netlists, schematic, and schematic image are copied there only
-when absent. Existing user files are never replaced. The executable opens the
+The advanced DAQ reference assets are copied there only when absent. System
+Builder also adds missing `rc-lowpass-starter` and
+`instrumentation-amp-starter` project folders, giving a new workspace two
+smaller worked studies before the full DAQ qualification example. Existing
+user files and starter folders are never replaced. The executable opens the
 same random loopback-only application as the source launcher. A console window
 remains open so startup diagnostics are visible and closing it stops the local
 server.

@@ -7,6 +7,11 @@ Reviewer: Claude (Opus 5)
 > All figures below were measured against `db73870`. Several are moving fast — see
 > §2, where the headline metric changed measurably during the review itself.
 
+> **Historical review:** this document preserves the original external review
+> and its measurements. The current implementation has moved beyond several
+> findings and should be judged by the dated remediation notes below, not by
+> treating the original suggested sequence as an active task list.
+
 ## Maintainer verification addendum — 2026-08-29
 
 The review was useful, but its canonical-JSON divergence claim did not survive direct
@@ -34,6 +39,20 @@ Remediation status:
 - Findings 2 and 5, plus the documentation split, remain intentionally separate work.
   They are larger behavior-preserving refactors and should not be mixed into artifact
   identity hardening.
+
+## Final remediation note — 2026-09-03
+
+The intentionally separate follow-up work is now complete where it was
+well-scoped: System Builder's backend routes were split into focused routers,
+both waveform metric families use explicit registries without changing their
+public signatures, and the README was reduced to an on-ramp backed by focused
+documents under `docs/`. The frontend remains substantial and should continue
+to be split only along proven feature boundaries rather than through a broad
+rewrite.
+
+The original sequence below is retained as review history. In particular, its
+`conftest.py` recommendation was superseded by the verified `unittest` solution
+in `tests/support.py`; it is not current implementation guidance.
 
 ---
 
