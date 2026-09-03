@@ -378,9 +378,20 @@ function showSchematicImage(cacheBust = false) {
   image.src = `/api/schematic/image?path=${encodeURIComponent(path)}${version}`;
 }
 
+// Files inside the currently open project show as a bare filename -- the
+// project is already established by context, so the prefix is just noise.
+// Anything outside it (or when no project is open) keeps the full
+// workspace-relative path so it's still unambiguous.
+function schematicSourceDisplayName(path) {
+  if (currentStudyProjectPath && path.startsWith(`${currentStudyProjectPath}/`)) {
+    return path.slice(currentStudyProjectPath.length + 1);
+  }
+  return path;
+}
+
 function populateSchematicControls() {
   const context = schematicContext();
-  byId("schematic-source-path").value = context.schematic_source_path || "";
+  byId("schematic-source-path").value = schematicSourceDisplayName(context.schematic_source_path || "");
   byId("schematic-image-path").value = context.schematic_path || "";
   byId("circuit-title").textContent = context.title || recipe.name || "Circuit under study";
   byId("circuit-summary").textContent = context.circuit_summary || recipe.description || "LTspice study schematic";
@@ -400,7 +411,7 @@ async function loadSchematicFiles() {
     }));
   };
   schematicSourceFiles = result.sources || [];
-  populate("schematic-source-files", schematicSourceFiles);
+  populate("schematic-source-files", schematicSourceFiles.map(schematicSourceDisplayName));
   populate("schematic-image-files", result.images || []);
 }
 
@@ -608,7 +619,7 @@ async function captureSchematic() {
     const context = schematicContext();
     context.schematic_source_path = result.source_path;
     context.schematic_path = result.schematic_path;
-    byId("schematic-source-path").value = result.source_path;
+    byId("schematic-source-path").value = schematicSourceDisplayName(result.source_path);
     byId("schematic-image-path").value = result.schematic_path;
     byId("schematic-status").textContent = `${result.capture_method} · ${result.width} × ${result.height}`;
     showSchematicImage(true);
@@ -2000,7 +2011,9 @@ async function openProject(project) {
       cornerDisplayUnits = new WeakMap();
       invalidateFrozenPlan();
       populateRecipeControls();
-      await loadNetlistFiles();
+      // Re-scopes the schematic-source dropdown's bare filenames to the
+      // newly opened project, not whichever project was open at bootstrap.
+      await Promise.all([loadNetlistFiles(), loadSchematicFiles()]);
       await preview();
       showView("definition");
     }
@@ -2310,7 +2323,9 @@ byId("recipe-file").addEventListener("change", async (event) => {
     cornerDisplayUnits = new WeakMap();
     invalidateFrozenPlan();
     populateRecipeControls();
-    await loadNetlistFiles();
+    // Re-scopes the schematic-source dropdown back to full paths now that no
+    // project is open to shorten filenames against.
+    await Promise.all([loadNetlistFiles(), loadSchematicFiles()]);
     await preview();
   } catch (error) {
     renderPreview({valid: false, errors: [{path: "$", message: `Could not load recipe: ${error.message}`}]});
