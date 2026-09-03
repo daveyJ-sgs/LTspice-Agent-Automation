@@ -13,6 +13,7 @@ let jobPollTimer = null;
 let variableDisplayUnits = new WeakMap();
 let cornerDisplayUnits = new WeakMap();
 let netlistFiles = [];
+let schematicSourceFiles = []; // workspace-relative .asc paths, for bare-filename resolution
 let currentStudyProjectPath = null; // workspace-relative folder of the open Study project, if any
 let currentStudyProjectSlug = null; // the open Study project's slug, if any -- Save recipe writes here instead of downloading
 let studyDirty = false; // true once the loaded recipe has edits Save hasn't persisted yet
@@ -398,7 +399,8 @@ async function loadSchematicFiles() {
       return option;
     }));
   };
-  populate("schematic-source-files", result.sources || []);
+  schematicSourceFiles = result.sources || [];
+  populate("schematic-source-files", schematicSourceFiles);
   populate("schematic-image-files", result.images || []);
 }
 
@@ -555,13 +557,38 @@ function netlistSelect(experiment, path) {
   return select;
 }
 
+// Lets the field take just "my_circuit.asc" instead of the full
+// "project-slug/my_circuit.asc" -- resolved against the currently open
+// project first, then against every .asc in the workspace so it still works
+// with no project open. Ambiguous bare names (same filename in two project
+// folders) are rejected rather than silently guessing.
+function resolveSchematicSourcePath(input) {
+  if (!input || input.includes("/")) return input;
+  const inProject = currentStudyProjectPath ? `${currentStudyProjectPath}/${input}` : null;
+  if (inProject && schematicSourceFiles.includes(inProject)) return inProject;
+  const matches = schematicSourceFiles.filter((path) => path.split("/").pop() === input);
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    throw new Error(`"${input}" matches more than one file: ${matches.join(", ")}. Use the full path to pick one.`);
+  }
+  // No match anywhere yet -- fall back to the open project (if any) so the
+  // resulting "not found" error at least points at the right folder.
+  return inProject || input;
+}
+
 async function captureSchematic() {
   if (!recipe) return;
-  const sourcePath = byId("schematic-source-path").value.trim();
+  let sourcePath = byId("schematic-source-path").value.trim();
   const button = byId("capture-schematic");
   renderSchematicErrors();
   if (!sourcePath) {
     renderSchematicErrors([{message: "Select a workspace-relative LTspice .asc file first."}]);
+    return;
+  }
+  try {
+    sourcePath = resolveSchematicSourcePath(sourcePath);
+  } catch (error) {
+    renderSchematicErrors([{message: error.message}]);
     return;
   }
   button.disabled = true;
