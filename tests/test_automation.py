@@ -33,9 +33,9 @@ class AutomationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "bad.log"
             for value in ("(1.#INF,0°)", "1e+", "1.2.3"):
-                path.write_text(f"gain={value}\n")
+                path.write_text(f"gain={value}\n", encoding="utf-8")
                 self.assertEqual(parse_measurements(path), {})
-                path.write_text(f"Measurement: gain\n step value\n 1 {value}\n")
+                path.write_text(f"Measurement: gain\n step value\n 1 {value}\n", encoding="utf-8")
                 self.assertEqual(parse_stepped_measurements(path, "gain"), [])
                 self.assertEqual(parse_stepped_measurement_rows(path), {"gain": {}})
             for scalar in (True, False):
