@@ -14,6 +14,23 @@ def response(gain_db: float, phase_degrees: float = 0.0) -> complex:
 
 
 class FrequencyDomainMetricTests(unittest.TestCase):
+    def test_spectral_peak_rejects_zero_duration_before_dividing(self) -> None:
+        for axis, values, parameters in (
+            ([0], [1], {}),
+            ([0, 1], [0, 1], {"window_start": 0.5, "window_end": 0.5}),
+        ):
+            with self.subTest(parameters=parameters), self.assertRaisesRegex(ValueError, "duration"):
+                measure_metric(axis, values, "spectral_peak", frequency_min=1,
+                               frequency_max=2, **parameters)
+
+    def test_highpass_cutoff_is_below_its_passband_reference(self) -> None:
+        measured = measure_metric(
+            [10, 100, 1000], [.01+0j, .1+0j, 1+0j], "cutoff_frequency",
+            reference_frequency=1000, direction="rising",
+        )
+        self.assertAlmostEqual(measured.value, 1000 / math.sqrt(2), places=4)
+
+
     def test_registry_is_complete_and_routes_metric_parameters(self) -> None:
         self.assertEqual(
             set(frequency_domain_metrics._METRIC_REGISTRY),

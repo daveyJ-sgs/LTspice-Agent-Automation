@@ -255,6 +255,7 @@ def run_study() -> dict[str, object]:
                 "peaking, and 10 MHz alias rejection for every candidate and ADC corner."
             ),
         },
+        workspace_root=str(EXAMPLES_DIR.parent),
     )
     transient_report = build_experiment_report(
         transient["experiment_id"],
@@ -265,6 +266,7 @@ def run_study() -> dict[str, object]:
                 "tracking error, and held-voltage droop for the same immutable candidates."
             ),
         },
+        workspace_root=str(EXAMPLES_DIR.parent),
     )
     optimization = evaluate_optimization_study(
         plan["plan_id"],

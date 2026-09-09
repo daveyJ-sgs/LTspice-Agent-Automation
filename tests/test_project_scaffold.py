@@ -10,6 +10,60 @@ import project_scaffold
 
 
 class ProjectScaffoldTests(unittest.TestCase):
+    def test_project_reads_and_saves_require_bounded_finite_json_objects(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_scaffold.create_project(root, "safe")
+            path = root / "safe" / "safe.ltstudy.json"
+            for content in ('[]', '{"target": NaN}', '{"target": Infinity}',
+                            '{"name": "' + 'x' * (1024 * 1024) + '"}'):
+                path.write_text(content)
+                with self.subTest(content=content[:30]):
+                    with self.assertRaises(ValueError):
+                        project_scaffold.project_recipe(root, "safe")
+                    self.assertFalse(project_scaffold.list_projects(root)[0]["valid"])
+            path.write_text('{}')
+            with self.assertRaises(ValueError):
+                project_scaffold.save_project_recipe(root, "safe", {"target": float("nan")})
+            self.assertEqual(path.read_text(), '{}')
+
+    def test_reserved_names_are_case_insensitive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("EXAMPLES", "Runs"):
+                directory = root / name
+                directory.mkdir()
+                recipe = directory / "sample.ltstudy.json"
+                recipe.write_text("{}")
+                with self.assertRaises(ValueError):
+                    project_scaffold.delete_project(root, name)
+                self.assertTrue(recipe.is_file())
+            self.assertEqual(project_scaffold.list_projects(root), [])
+
+    def test_save_does_not_follow_predictable_temporary_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_scaffold.create_project(root, "safe")
+            sentinel = root / "sentinel.txt"
+            sentinel.write_text("KEEP")
+            (root / "safe" / ".safe.ltstudy.json.tmp").symlink_to(sentinel)
+            project_scaffold.save_project_recipe(root, "safe", {"name": "updated"})
+            self.assertEqual(sentinel.read_text(), "KEEP")
+            self.assertEqual(project_scaffold.project_recipe(root, "safe"), {"name": "updated"})
+
+    def test_delete_rejects_hidden_and_nonproject_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in (".git", ".venv", "notes", "runs", "examples"):
+                target = root / name
+                target.mkdir()
+                sentinel = target / ("fake.ltstudy.json" if name.startswith(".") else "keep.txt")
+                sentinel.write_text("keep")
+                with self.subTest(name=name), self.assertRaises(ValueError):
+                    project_scaffold.delete_project(root, name)
+                self.assertEqual(sentinel.read_text(), "keep")
+
+
     def test_slugify_normalizes_and_rejects_bad_names(self) -> None:
         self.assertEqual(
             project_scaffold.slugify_project_name("Sensor Front-End v2"),

@@ -9,10 +9,38 @@ import artifacts
 import experiment_index
 import robust_selection
 import statistical_engine
+from examples import qualify_mixed_signal_daq_finalists
 from support import TemporaryRunsTestCase
 
 
 class RobustSelectionTests(TemporaryRunsTestCase):
+    def test_strict_qualification_requirements_retain_failure_evidence(self) -> None:
+        for operator, value in (("<", 2), ("<=", 2), (">", 0), (">=", 0)):
+            margins = robust_selection._requirement_margins("ac", {"analyses": [{
+                "name": "check", "analysis": {"results": [{"metric": "maximum",
+                    "value": value, "threshold": {"operator": operator, "target": 1},
+                    "passed": False}]}
+            }]})
+            self.assertEqual(len(margins), 1)
+            self.assertEqual(margins[0]["margin"], -1)
+            self.assertFalse(margins[0]["passed"])
+            self.assertEqual(margins[0]["operator"], operator)
+
+
+
+    def test_qualification_example_defaults_follow_verified_selected_candidates(self) -> None:
+        example = qualify_mixed_signal_daq_finalists
+        with (
+            patch.object(example.optimization_engine, "_load_verified_optimization_study",
+                         side_effect=[({"selected_candidate_index": 3}, {}),
+                                      ({"selected_candidate_index": 2}, {})]),
+            patch.object(example, "_variables", return_value=[]),
+            patch.object(example.mcp_server, "generate_robust_selection_plan",
+                         side_effect=RuntimeError("stop before simulations")) as generate,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "stop before simulations"):
+                example.run_study("coarse", "refined")
+        self.assertEqual([item["candidate_index"] for item in generate.call_args.args[0]], [3, 2])
 
     @staticmethod
     def _source(label: str, rank: int) -> dict[str, object]:
@@ -194,6 +222,13 @@ class RobustSelectionTests(TemporaryRunsTestCase):
             saved["plan_id"], plan, documents, evidence
         )
         self.assertEqual(tied["selected_finalist"], "coarse")
+        for finalist in tied["finalists"]:
+            self.assertIsNone(finalist["worst_corner_confidence_low"])
+            for corner in finalist["corner_results"]:
+                self.assertIsNone(corner["confidence_low"])
+                self.assertIsNone(corner["confidence_high"])
+                self.assertEqual(corner["confidence_method"], "unavailable")
+                self.assertIn("halton", corner["confidence_reason"])
         self.assertEqual(
             [item["worst_corner_yield"] for item in tied["finalists"]],
             [1.0, 1.0],

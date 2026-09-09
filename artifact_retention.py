@@ -25,6 +25,7 @@ REFERENCE_FILENAMES = {
     "comparison.json",
     "optimization_comparison.json",
     "optimization_job.json",
+    "qualification_job.json",
     "optimization_results.json",
     "robust_selection_results.json",
 }

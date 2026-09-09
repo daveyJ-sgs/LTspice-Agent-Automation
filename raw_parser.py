@@ -29,15 +29,12 @@ class RawData:
 
 def step_slices(data: RawData) -> list[slice]:
     """Return each stepped block using resets in the independent axis."""
+    if data.points_per_step == 1 and data.step_count == data.points:
+        return [slice(index, index + 1) for index in range(data.points)]
     axis = data.values[data.variables[0]]
-    real_axis = [float(value.real if isinstance(value, complex) else value) for value in axis]
-    boundaries = [
-        index
-        for index in range(1, len(real_axis))
-        if real_axis[index] < real_axis[index - 1]
-    ]
+    boundaries = _step_boundaries(axis)
     starts = [0, *boundaries]
-    stops = [*boundaries, len(real_axis)]
+    stops = [*boundaries, len(axis)]
     slices = [slice(start, stop) for start, stop in zip(starts, stops)]
     if len(slices) != data.step_count:
         raise ValueError(
@@ -46,16 +43,23 @@ def step_slices(data: RawData) -> list[slice]:
     return slices
 
 
-def _step_shape(values: list[float | complex]) -> tuple[int, int | None]:
-    """Infer stepped blocks from a reset in the first, monotonic axis."""
-    if len(values) < 2:
-        return 1, len(values)
+def _step_boundaries(values: list[float | complex]) -> list[int]:
+    """A reset reverses the sweep's initial nonzero direction (including DC)."""
     axis = [float(value.real if isinstance(value, complex) else value) for value in values]
-    boundaries = [index for index in range(1, len(axis)) if axis[index] < axis[index - 1]]
+    direction = next((after > before for before, after in zip(axis, axis[1:]) if after != before), True)
+    return [
+        index for index in range(1, len(axis))
+        if (axis[index] < axis[index - 1] if direction else axis[index] > axis[index - 1])
+    ]
+
+
+def _step_shape(values: list[float | complex]) -> tuple[int, int | None]:
+    """Infer stepped blocks from resets in an ascending or descending axis."""
+    boundaries = _step_boundaries(values)
     if not boundaries:
-        return 1, len(axis)
+        return 1, len(values)
     starts = [0, *boundaries]
-    lengths = [end - start for start, end in zip(starts, [*boundaries, len(axis)])]
+    lengths = [end - start for start, end in zip(starts, [*boundaries, len(values)])]
     return len(lengths), lengths[0] if len(set(lengths)) == 1 else None
 
 
@@ -86,8 +90,14 @@ def parse_raw(path: Path) -> RawData:
         raise ValueError(f"Missing {prefix} header in {path}")
 
     flags = header_value("Flags")
+    point_steps = (
+        "stepped" in flags.lower().split()
+        and any(line.strip().casefold() == "plotname: operating point" for line in lines)
+    )
     variable_count = int(header_value("No. Variables"))
     point_count = int(header_value("No. Points"))
+    if variable_count < 1 or point_count < 1:
+        raise ValueError("RAW variable and point counts must be positive")
 
     variables: list[str] = []
     in_variables = False
@@ -98,15 +108,21 @@ def parse_raw(path: Path) -> RawData:
         if in_variables and line.strip():
             parts = re.split(r"\s+", line.strip(), maxsplit=2)
             if len(parts) >= 2 and parts[0].isdigit():
+                if int(parts[0]) != len(variables):
+                    raise ValueError("RAW variable indexes must be consecutive from zero")
                 variables.append(parts[1])
     if len(variables) != variable_count:
         raise ValueError(
             f"Expected {variable_count} variables, found {len(variables)} in {path}"
         )
+    if len({name.casefold() for name in variables}) != variable_count:
+        raise ValueError("RAW variable names must be unique")
 
     if data_mode == "values":
         text = raw[data_offset:].decode(text_encoding_name)
         rows = [line for line in text.splitlines() if line.strip()]
+        if len(rows) != point_count * variable_count:
+            raise ValueError("Values row count does not match RAW dimensions")
         values = {name: [] for name in variables}
         is_complex = "complex" in flags.lower()
 
@@ -128,12 +144,14 @@ def parse_raw(path: Path) -> RawData:
                     raise ValueError(f"Unexpected end of Values data in {path}")
                 parts = rows[cursor].split()
                 if variable_index == 0:
+                    if not parts or parts[0] != str(point):
+                        raise ValueError("Values point indexes must be consecutive from zero")
                     parts = parts[1:]
                 if not parts:
                     raise ValueError(f"Missing value at point {point} in {path}")
                 values[name].append(ascii_value(parts[-1]))
                 cursor += 1
-        step_count, points_per_step = _step_shape(values[variables[0]])
+        step_count, points_per_step = (point_count, 1) if point_steps else _step_shape(values[variables[0]])
         return RawData(flags=flags, variables=variables, values=values, step_count=step_count, points_per_step=points_per_step)
 
     is_complex = "complex" in flags.lower()
@@ -152,7 +170,7 @@ def parse_raw(path: Path) -> RawData:
             precision = "double"
             point_bytes = variable_count * 8
             expected_bytes = double_bytes
-        elif remaining >= compact_bytes:
+        elif remaining == compact_bytes:
             precision = "compact"
             point_bytes = 8 + (variable_count - 1) * 4
             expected_bytes = compact_bytes
@@ -161,9 +179,9 @@ def parse_raw(path: Path) -> RawData:
             point_bytes = 8 + (variable_count - 1) * 4
             precision = "compact"
     data = raw[data_offset : data_offset + expected_bytes]
-    if len(data) != expected_bytes:
+    if remaining != expected_bytes:
         raise ValueError(
-            f"Expected {expected_bytes} data bytes, found {len(data)} in {path}"
+            f"Expected {expected_bytes} data bytes, found {remaining} in {path}"
         )
 
     values = {name: [] for name in variables}
@@ -206,7 +224,7 @@ def parse_raw(path: Path) -> RawData:
     if variables[0].casefold() == "time":
         values[variables[0]] = [abs(value) for value in values[variables[0]]]
 
-    step_count, points_per_step = _step_shape(values[variables[0]])
+    step_count, points_per_step = (point_count, 1) if point_steps else _step_shape(values[variables[0]])
     return RawData(flags=flags, variables=variables, values=values, step_count=step_count, points_per_step=points_per_step)
 
 

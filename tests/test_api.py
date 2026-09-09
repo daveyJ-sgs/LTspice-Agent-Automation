@@ -14,6 +14,39 @@ from support import TemporaryRunsTestCase
 
 
 class ApiTests(TemporaryRunsTestCase):
+    def test_rejects_foreign_host_and_origin_before_submitting_jobs(self) -> None:
+        server = api_server.create_server(port=0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        try:
+            with patch.object(server.job_manager, "submit", return_value="job-test") as submit:
+                for headers in (
+                    {"Host": "foreign.example"},
+                    {"Origin": "https://foreign.example"},
+                    {"Origin": "null"},
+                ):
+                    request = Request(
+                        f"{base_url}/simulate/async", method="POST",
+                        data=json.dumps({"netlist": "* test\n.end\n"}).encode(),
+                        headers={"Content-Type": "application/json", **headers},
+                    )
+                    with self.subTest(headers=headers), self.assertRaises(HTTPError) as caught:
+                        urlopen(request, timeout=5)
+                    self.assertEqual(caught.exception.code, 403)
+                    caught.exception.close()
+                submit.assert_not_called()
+            request = Request(f"{base_url}/jobs", headers={"Host": "foreign.example"})
+            with self.assertRaises(HTTPError) as caught:
+                urlopen(request, timeout=5)
+            self.assertEqual(caught.exception.code, 403)
+            caught.exception.close()
+        finally:
+            server.shutdown()
+            server.job_manager.shutdown()
+            server.server_close()
+            thread.join()
+
     def setUp(self) -> None:
         super().setUp()
         for name, value in (

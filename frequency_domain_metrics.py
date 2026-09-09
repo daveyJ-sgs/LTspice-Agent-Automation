@@ -399,6 +399,8 @@ def _measure_spectral_peak(
     if minimum <= 0.0 or maximum <= minimum:
         raise ValueError("spectral frequency band must satisfy 0 < minimum < maximum")
     duration = x[-1] - x[0]
+    if duration <= 0.0:
+        raise ValueError("spectral metrics require a positive analysis duration")
     resolution = (
         1.0 / duration
         if request.frequency_resolution is None
@@ -656,7 +658,7 @@ def _measure_cutoff(
     events = [
         event
         for event in _crossings_log(frequency, gain, cutoff_level, request.direction)
-        if event[0] > reference
+        if (event[0] < reference if request.direction == "rising" else event[0] > reference)
     ]
     event = _single_crossing(events, "cutoff")
     evidence = {

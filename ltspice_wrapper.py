@@ -56,9 +56,13 @@ def _load_settings() -> dict[str, object]:
 def _save_settings(data: dict[str, object]) -> None:
     path = _settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            handle.write(json.dumps(data, indent=2) + "\n")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def get_ltspice_executable_override() -> str | None:
@@ -293,7 +297,7 @@ _UNSUPPORTED_EXTERNAL_INPUT = re.compile(
 
 def _stage_netlist(source: Path, destination: Path) -> None:
     """Stage a deck while keeping resolvable relative include paths meaningful."""
-    text = source.read_text(encoding="utf-8")
+    text = decode_text(source.read_bytes())
 
     def absolute_reference(match: re.Match[str]) -> str:
         group = next(index for index in range(1, 4) if match.group(index) is not None)
@@ -754,6 +758,15 @@ def run_netlist(
         )
         _write_manifest(manifest_path, manifest)
         raise RuntimeError(manifest["error"]) from exc
+    except OSError as exc:
+        manifest.update(
+            status="failed",
+            finished_at=datetime.now().astimezone().isoformat(),
+            duration_seconds=time.monotonic() - started_clock,
+            error=f"LTspice could not be launched: {exc}",
+        )
+        _write_manifest(manifest_path, manifest)
+        raise RuntimeError(manifest["error"]) from exc
 
     if completed.returncode != 0:
         manifest.update(
@@ -849,11 +862,15 @@ def parse_measurements(log_path: Path) -> dict[str, float]:
     measurements: dict[str, float] = {}
     pattern = re.compile(
         r"^\s*([A-Za-z_][\w]*)\s*(?::.*?=\s*|=\s*)\(?\s*"
-        r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)(?:[A-Za-z°]+)?",
+        r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
+        r"(?![eE])(?:[A-Za-z°]+)?(?=\s|[),]|$)",
         re.MULTILINE,
     )
     for match in pattern.finditer(text):
-        measurements[match.group(1)] = float(match.group(2))
+        value = float(match.group(2))
+        if not math.isfinite(value):
+            raise ValueError(f"Non-finite measurement: {match.group(1)}")
+        measurements[match.group(1)] = value
     return measurements
 
 
@@ -865,24 +882,10 @@ def _decode_log(log_path: Path) -> str:
 
 def parse_stepped_measurements(log_path: Path, name: str) -> list[float]:
     """Read the step table emitted for a named .meas result."""
-    text = _decode_log(log_path)
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        if line.strip() == f"Measurement: {name}":
-            values: list[float] = []
-            for row in lines[index + 1 :]:
-                parts = row.split()
-                if not parts or not parts[0].isdigit():
-                    if values:
-                        break
-                    continue
-                if len(parts) < 2:
-                    continue
-                match = re.search(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", parts[1])
-                if match:
-                    values.append(float(match.group(0)))
-            return values
-    raise KeyError(f"Measurement not found: {name}")
+    tables = parse_stepped_measurement_rows(log_path)
+    if name not in tables:
+        raise KeyError(f"Measurement not found: {name}")
+    return [value for _, value in sorted(tables[name].items())]
 
 
 def parse_stepped_measurement_rows(log_path: Path) -> dict[str, dict[int, float]]:
@@ -894,7 +897,7 @@ def parse_stepped_measurement_rows(log_path: Path) -> dict[str, dict[int, float]
     row_pattern = re.compile(
         r"^\s*(\d+)\s+\(?\s*"
         r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
-        r"(?=\s|[A-Za-z°),]|$)"
+        r"(?![eE])(?:[A-Za-z°]+)?(?=\s|[),]|$)"
     )
     for line in text.splitlines():
         measurement = measurement_pattern.match(line.strip())

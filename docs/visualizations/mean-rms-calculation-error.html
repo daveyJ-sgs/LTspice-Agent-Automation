@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The sample-counting trap · LTspice audit</title>
+<style>
+:root{color-scheme:dark;--bg:#0d141c;--panel:#14212c;--ink:#eef5f8;--muted:#aec0ce;--line:#314352;--good:#59e2bd;--bad:#ffa17e;--blue:#85beff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1200px;margin:auto;padding:44px 32px 60px}.eyebrow{font-size:12px;letter-spacing:.15em;text-transform:uppercase;color:var(--good);font-weight:700}h1{font-size:clamp(30px,4.5vw,54px);letter-spacing:-.045em;line-height:1.12;margin:14px 0 18px}h2{font-size:19px;margin:0 0 12px}p{margin:8px 0;color:var(--muted)}.intro{max-width:830px;font-size:19px}.intro strong{color:var(--ink)}.controls{display:flex;gap:9px;flex-wrap:wrap;margin:28px 0 15px}button{font:inherit;font-size:14px;color:var(--ink);background:transparent;border:1px solid var(--line);border-radius:7px;padding:10px 15px;cursor:pointer}button[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}button:focus-visible{outline:3px solid var(--blue);outline-offset:3px}.note{min-height:50px;font-size:14px}.grid{display:grid;grid-template-columns:1.55fr 1fr;gap:24px;margin:20px 0}.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:24px}.legend{display:flex;gap:20px;flex-wrap:wrap;font-size:13px;color:var(--muted)}.legend span:before{content:"";display:inline-block;width:20px;border-top:3px solid;margin-right:8px;vertical-align:middle}.legend .saved:before{width:9px;height:9px;background:var(--blue);border:0;border-radius:50%}.legend .correct:before{color:var(--good)}.legend .old:before{color:var(--bad);border-top-style:dashed}svg{display:block;width:100%;overflow:visible}svg text{fill:var(--muted);font:12px -apple-system,BlinkMacSystemFont,sans-serif}.numbers{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;margin:14px 0 20px}.numbers th{font-size:13px;text-align:right;color:var(--muted);font-weight:500}.numbers th:first-child,.numbers td:first-child{text-align:left}.numbers td{text-align:right;padding:14px 0;border-bottom:1px solid var(--line);font-size:18px}.numbers .oldval{color:var(--bad)}.numbers .newval{color:var(--good)}.delta{font-size:13px;display:block;color:var(--muted)}.takeaway{font-size:16px}.takeaway strong{color:var(--ink)}.explain{display:grid;grid-template-columns:1fr 1fr;gap:32px;padding-top:12px}.explain section{border-top:2px solid var(--line);padding-top:20px}.formula{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;line-height:1.8;color:var(--ink);margin:14px 0;overflow-wrap:anywhere}.stamp{font-size:12px;margin-top:26px;color:var(--muted)}.small{font-size:13px}a{color:var(--blue)}@media(max-width:800px){main{padding:26px 18px}.grid,.explain{grid-template-columns:1fr}.panel{padding:18px}.note{min-height:0}}@media print{body{background:white;color:black}.panel{background:white}button{display:none}}
+</style>
+</head>
+<body><main>
+<div class="eyebrow">LTspice automation / Calculation audit / 01</div>
+<h1>The waveform was right.<br>The averaging was wrong.</h1>
+<p class="intro">LTspice saves samples at <strong>uneven time intervals</strong>. The old code gave every saved point an equal vote. That let the recording schedule change the reported mean and RMS of the same signal.</p>
+<div class="controls" role="group" aria-label="Choose sample placement">
+<button type="button" data-mode="real" aria-pressed="true">Actual LTspice run</button>
+<button type="button" data-mode="early" aria-pressed="false">Samples near the start</button>
+<button type="button" data-mode="uniform" aria-pressed="false">Evenly spaced samples</button>
+</div>
+<p id="scenario" class="note"></p>
+<div class="grid">
+<section class="panel"><h2>One ramp. Different sample spacing.</h2>
+<div class="legend"><span class="saved">Saved samples</span><span class="correct">Correct mean</span><span class="old">Old mean</span></div>
+<svg id="wave" role="img" aria-label="Voltage over time with saved sample locations, the old sample average, and the corrected time average"></svg>
+<p class="small">The shaded area is the voltage integrated over time. Divide it by the 1-second duration to get the mean.</p>
+</section>
+<section class="panel" aria-live="polite"><h2>What the code reports</h2>
+<table class="numbers"><thead><tr><th scope="col">Metric</th><th scope="col">Old code</th><th scope="col">Corrected</th></tr></thead><tbody>
+<tr><td>Mean</td><td class="oldval"><span id="oldMean"></span><span class="delta" id="meanErr"></span></td><td class="newval" id="newMean"></td></tr>
+<tr><td>RMS</td><td class="oldval"><span id="oldRms"></span><span class="delta" id="rmsErr"></span></td><td class="newval" id="newRms"></td></tr>
+</tbody></table>
+<svg id="compare" role="img" aria-label="Comparison of old and corrected mean and RMS values on a common voltage scale"></svg>
+<p id="takeaway" class="takeaway"></p>
+</section>
+</div>
+<div class="explain">
+<section><div class="eyebrow" style="color:var(--bad)">Before / count the points</div><h2>Every sample gets the same weight.</h2><div class="formula">mean = Σ Vᵢ / N<br>RMS = √(Σ Vᵢ² / N)</div><p id="votes"></p><p>This is a sample statistic. It does not account for how long the signal spends between saved points.</p></section>
+<section><div class="eyebrow">After / account for time</div><h2>Every segment contributes its area.</h2><div class="formula">mean = Σ [Δt · (a + b) / 2] / T<br>RMS = √(Σ [Δt · (a² + ab + b²) / 3] / T)</div><p>Here a and b are adjacent voltages, Δt is their time gap, and T is the total duration. These formulas integrate the linear segments exactly, including the square used for RMS.</p></section>
+</div>
+<p class="stamp">Verified ramp: 0 → 1 V in 1 second. Analytic mean = 0.5 V; RMS = 1/√3 ≈ 0.577350 V. Actual data: macOS LTspice 17.2.4, September 7, 2026. LTspice’s own .meas reported AVG 0.500 V and RMS 0.577343 V; the small RMS difference reflects numerical approximation. The other two presets are illustrative samples of the same ideal ramp.</p>
+<p class="stamp">Fix: <a href="../../waveform_metrics.py">waveform_metrics.py</a> · <a href="../AUDIT_FIXES.md">Full audit-fix notes</a></p>
+</main>
+<script>
+'use strict';
+const datasets={real:{t:[0,0.9922785831242806,1],v:[0,0.9922785758972168,1],note:'Real saved data: just 3 points, at 0, 0.992279 and 1.000000 seconds. Two of the three votes land near the top of the ramp.'},early:{t:[0,.01,.02,1],v:[0,.01,.02,1],note:'Illustration: the same ideal ramp sampled at 0, 0.01, 0.02 and 1 second. Concentrating samples near zero pushes the old average downward.'},uniform:{t:[0,.25,.5,.75,1],v:[0,.25,.5,.75,1],note:'Illustration: 5 evenly spaced samples. The old mean happens to be exact for this linear ramp, but the old RMS is still biased by finite endpoint sampling.'}};
+let mode='real';const ns='http://www.w3.org/2000/svg';
+function add(svg,tag,attrs,text){const e=document.createElementNS(ns,tag);for(const [k,v] of Object.entries(attrs))e.setAttribute(k,v);if(text!==undefined)e.textContent=text;svg.appendChild(e);return e}
+function metrics(d){let mean=0,square=0;for(let i=1;i<d.t.length;i++){const dt=d.t[i]-d.t[i-1],a=d.v[i-1],b=d.v[i];mean+=dt*(a+b)/2;square+=dt*(a*a+a*b+b*b)/3}const T=d.t.at(-1)-d.t[0];return{mean:mean/T,rms:Math.sqrt(square/T),oldMean:d.v.reduce((s,v)=>s+v,0)/d.v.length,oldRms:Math.sqrt(d.v.reduce((s,v)=>s+v*v,0)/d.v.length)}}
+function draw(){const d=datasets[mode],m=metrics(d);document.getElementById('scenario').textContent=d.note;for(const [id,value] of Object.entries({oldMean:m.oldMean,newMean:m.mean,oldRms:m.oldRms,newRms:m.rms}))document.getElementById(id).textContent=value.toFixed(6)+' V';for(const [id,a,b] of [['meanErr',m.oldMean,m.mean],['rmsErr',m.oldRms,m.rms]]){const pct=100*(a/b-1);document.getElementById(id).textContent=Math.abs(pct)<.0001?'0% error':(pct>0?'+':'')+pct.toFixed(1)+'% error'}
+document.getElementById('votes').textContent=mode==='real'?'Each of the 3 samples gets ⅓ of the weight, even though the last two are only 7.72 milliseconds apart.':`Each of the ${d.t.length} saved samples gets ${(100/d.t.length).toFixed(0)}% of the weight, regardless of the time gaps.`;
+document.getElementById('takeaway').innerHTML=mode==='uniform'?'<strong>Even spacing does not fully rescue the old RMS.</strong> It averages squared endpoints instead of integrating the squared waveform.':'<strong>Sample placement changes the old answer.</strong> The corrected answer stays at 0.500 V mean and 0.577350 V RMS for this ramp.';
+const svg=document.getElementById('wave'),w=svg.clientWidth,h=320,L=50,R=18,T=28,B=48,x=t=>L+t*(w-L-R),y=v=>h-B-v*(h-B-T);svg.replaceChildren();svg.setAttribute('viewBox',`0 0 ${w} ${h}`);
+for(const t of [0,.25,.5,.75,1]){add(svg,'line',{x1:x(t),x2:x(t),y1:T,y2:h-B,stroke:'var(--line)'});add(svg,'text',{x:x(t),y:h-B+23,'text-anchor':'middle'},t.toFixed(2));add(svg,'line',{x1:L,x2:w-R,y1:y(t),y2:y(t),stroke:'var(--line)'});add(svg,'text',{x:L-10,y:y(t)+4,'text-anchor':'end'},t.toFixed(2))}
+add(svg,'text',{x:L,y:15},'Voltage (V)');add(svg,'text',{x:(L+w-R)/2,y:h-5,'text-anchor':'middle'},'Elapsed time (s)');
+const pts=d.t.map((t,i)=>[x(t),y(d.v[i])]);add(svg,'path',{d:`M ${x(0)} ${y(0)} `+pts.map(p=>'L '+p.join(' ')).join(' ')+` L ${x(1)} ${y(0)} Z`,fill:'var(--good)','fill-opacity':'.09'});
+add(svg,'polyline',{points:pts.map(p=>p.join(',')).join(' '),fill:'none',stroke:'var(--blue)','stroke-width':2});
+for(const [v,color,dash]of[[m.mean,'var(--good)',''],[m.oldMean,'var(--bad)','6 5']])add(svg,'line',{x1:L,x2:w-R,y1:y(v),y2:y(v),stroke:color,'stroke-width':2,'stroke-dasharray':dash});
+for(let i=0;i<pts.length;i++){const c=add(svg,'circle',{cx:pts[i][0],cy:pts[i][1],r:5,fill:'var(--blue)',stroke:'var(--bg)','stroke-width':1.5});add(c,'title',{},`t = ${d.t[i].toFixed(6)} s, V = ${d.v[i].toFixed(6)} V`)}
+const s=document.getElementById('compare'),sw=s.clientWidth,sh=147,left=55,right=8,width=sw-left-right;s.replaceChildren();s.setAttribute('viewBox',`0 0 ${sw} ${sh}`);for(const [i,label,a,b]of[[0,'Mean',m.oldMean,m.mean],[1,'RMS',m.oldRms,m.rms]]){const yy=15+i*56;add(s,'text',{x:0,y:yy+17},label);add(s,'rect',{x:left,y:yy,width:width*a,height:13,fill:'var(--bad)',rx:2});add(s,'rect',{x:left,y:yy+19,width:width*b,height:13,fill:'var(--good)',rx:2})}for(const v of [0,.5,1])add(s,'text',{x:left+width*v,y:sh-7,'text-anchor':v===1?'end':'middle'},v+' V');
+}
+for(const b of document.querySelectorAll('button[data-mode]'))b.addEventListener('click',()=>{mode=b.dataset.mode;for(const other of document.querySelectorAll('button[data-mode]'))other.setAttribute('aria-pressed',String(other===b));draw()});new ResizeObserver(draw).observe(document.getElementById('wave'));draw();
+</script></body></html>

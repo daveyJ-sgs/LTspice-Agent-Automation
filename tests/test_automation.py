@@ -29,6 +29,112 @@ from examples.design_search_rc import choose_best
 
 
 class AutomationTests(unittest.TestCase):
+    def test_all_measurement_parsers_reject_nonfinite_numeric_prefixes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bad.log"
+            for value in ("(1.#INF,0°)", "1e+", "1.2.3"):
+                path.write_text(f"gain={value}\n")
+                self.assertEqual(parse_measurements(path), {})
+                path.write_text(f"Measurement: gain\n step value\n 1 {value}\n")
+                self.assertEqual(parse_stepped_measurements(path, "gain"), [])
+                self.assertEqual(parse_stepped_measurement_rows(path), {"gain": {}})
+            for scalar in (True, False):
+                path.write_text("gain=1e999\n" if scalar else "Measurement: gain\n step value\n 1 1e999\n")
+                with self.assertRaises(ValueError):
+                    if scalar:
+                        parse_measurements(path)
+                    else:
+                        parse_stepped_measurements(path, "gain")
+
+    def test_stepped_operating_points_are_separate_single_point_blocks(self) -> None:
+        header = "Title: stepped OP\nPlotname: Operating Point\nFlags: real stepped\nNo. Variables: 2\nNo. Points: 3\nVariables:\n0 r param\n1 V(out) voltage\n"
+        for axis in ([1000, 2000, 3000], [3000, 1000, 2000]):
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "op.raw"
+                for binary in (False, True):
+                    with self.subTest(axis=axis, binary=binary):
+                        payload = (b"".join(struct.pack("<df", value, index) for index, value in enumerate(axis))
+                                   if binary else "".join(f"{index} {value}\n {index}\n" for index, value in enumerate(axis)).encode())
+                        path.write_bytes((header + ("Binary:\n" if binary else "Values:\n")).encode() + payload)
+                        data = parse_raw(path)
+                        self.assertEqual((data.step_count, data.points_per_step), (3, 1))
+                        self.assertEqual([data.values["V(out)"][part] for part in step_slices(data)], [[0], [1], [2]])
+
+    def test_raw_rejects_invalid_dimensions_duplicate_vectors_and_rows(self) -> None:
+        header = "Title: test\nFlags: real\nNo. Variables: 2\nNo. Points: 2\nVariables:\n0 time time\n1 V(out) voltage\n"
+        values = "Values:\n0 0\n 1\n1 1\n 2\n"
+        malformed = [
+            (header + values).replace("No. Points: 2", "No. Points: 0"),
+            (header + values).replace("No. Points: 2", "No. Points: -1"),
+            (header + values).replace("V(out)", "time"),
+            (header + values).replace("1 V(out)", "3 V(out)"),
+            header + values.replace("1 1", "9 1"),
+            header + values + "2 2\n 3\n",
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "invalid.raw"
+            for document in malformed:
+                with self.subTest(document=document):
+                    path.write_text(document)
+                    with self.assertRaises(ValueError):
+                        parse_raw(path)
+            # A partially written double-precision payload must not be
+            # silently decoded as compact float data.
+            path.write_bytes((header + "Binary:\n").encode() + struct.pack("<dddd", 0, 1, 1, 2)[:-1])
+            with self.assertRaises(ValueError):
+                parse_raw(path)
+
+    def test_descending_dc_preserves_single_and_multiple_sweeps(self) -> None:
+        for stepped in (False, True):
+            axis = [2, 1, 0] * (2 if stepped else 1)
+            header = (f"Title: DC\nFlags: real{' stepped' if stepped else ''}\n"
+                      f"No. Variables: 2\nNo. Points: {len(axis)}\n"
+                      "Variables:\n0 V(in) voltage\n1 V(out) voltage\n")
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "dc.raw"
+                for binary in (False, True):
+                    payload = (b"".join(struct.pack("<df", x, x / 2) for x in axis) if binary else
+                               "".join(f"{i} {x}\n{x / 2}\n" for i, x in enumerate(axis)).encode())
+                    path.write_bytes((header + ("Binary:\n" if binary else "Values:\n")).encode() + payload)
+                    data = parse_raw(path)
+                    self.assertEqual(data.step_count, 2 if stepped else 1)
+                    self.assertEqual(data.points_per_step, 3)
+                    self.assertEqual([data.values["V(in)"][part] for part in step_slices(data)],
+                                     [[2, 1, 0]] * data.step_count)
+
+    def test_netlist_staging_decodes_utf16_and_keeps_include_paths(self) -> None:
+        text = '* Circuit µ\n.include "model.inc"\n.end\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "model.inc").write_text("R1 out 0 1k\n")
+            for encoding in ("utf-8", "utf-8-sig", "utf-16", "utf-16le"):
+                with self.subTest(encoding=encoding):
+                    source = root / "source.cir"
+                    source.write_bytes(text.encode(encoding))
+                    staged = root / "staged.cir"
+                    ltspice_wrapper._stage_netlist(source, staged)
+                    result = staged.read_text(encoding="utf-8")
+                    self.assertNotIn("\0", result)
+                    self.assertIn("µ", result)
+                    self.assertIn(str((root / "model.inc").resolve()), result)
+
+    def test_process_launch_os_errors_write_terminal_manifests(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "circuit.cir"
+            source.write_text("* Test\nR1 in 0 1k\n.end\n")
+            for index, error in enumerate((PermissionError("denied"), FileNotFoundError("removed"))):
+                output = root / f"run-{index}"
+                with patch.object(ltspice_wrapper, "LTSPICE", Path(sys.executable)), patch.object(
+                    ltspice_wrapper.subprocess, "run", side_effect=error
+                ), self.assertRaisesRegex(RuntimeError, "could not be launched"):
+                    run_netlist(source, output)
+                manifest = json.loads((output / "run_manifest.json").read_text())
+                self.assertEqual(manifest["status"], "failed")
+                self.assertIn("finished_at", manifest)
+                self.assertGreaterEqual(manifest["duration_seconds"], 0)
+
+
     def test_experiment_manager_lock_excludes_another_process(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "manager.lock"

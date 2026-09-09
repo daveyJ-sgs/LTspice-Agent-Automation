@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import uuid
 from pathlib import Path, PurePosixPath
 
 import artifacts
@@ -134,6 +136,71 @@ def _confined_file(
             f"netlists are limited to {MAX_NETLIST_BYTES} bytes",
         )
     return resolved, None
+
+
+
+_DEPENDENCY_LINE = re.compile(
+    r"^[ \t]*\.(include|inc|lib)[ \t]+(?:\"([^\"]+)\"|'([^']+)'|([^\s;]+))([^\r\n]*)$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _resolved_netlist_text(path: Path, workspace_root: Path) -> str:
+    """Freeze local include/library text into a bounded, portable study deck."""
+    root = workspace_root.resolve()
+    remaining = MAX_NETLIST_BYTES
+
+    def expand(source: Path, section: str | None, stack: tuple[Path, ...]) -> str:
+        nonlocal remaining
+        source = source.resolve(strict=True)
+        if not source.is_relative_to(root):
+            raise ValueError("netlist dependencies must remain inside the workspace")
+        cursor = root
+        for part in source.relative_to(root).parts:
+            cursor /= part
+            if cursor.is_symlink():
+                raise ValueError("netlist dependencies must not traverse symbolic links")
+        if source in stack or len(stack) >= 32:
+            raise ValueError("cyclic or excessively nested netlist dependency")
+        if source.stat().st_size > remaining:
+            raise ValueError("expanded netlist exceeds the netlist size limit")
+        text = decode_text(source.read_bytes()).replace("\r\n", "\n").replace("\r", "\n")
+        remaining -= len(text.encode("utf-8"))
+        if remaining < 0:
+            raise ValueError("expanded netlist exceeds the netlist size limit")
+        if section is not None:
+            start = re.search(
+                rf"^[ \t]*\.lib[ \t]+{re.escape(section)}[ \t]*(?:;[^\r\n]*)?$",
+                text, re.IGNORECASE | re.MULTILINE,
+            )
+            end = None if start is None else re.search(
+                r"^[ \t]*\.endl\b[^\r\n]*", text[start.end():],
+                re.IGNORECASE | re.MULTILINE,
+            )
+            if start is None or end is None:
+                raise ValueError(f"library section {section!r} was not found")
+            text = text[start.end():start.end() + end.start()]
+
+        def include(match: re.Match[str]) -> str:
+            directive = match.group(1).lower()
+            reference = next(value for value in match.group(2, 3, 4) if value is not None)
+            reference_path = Path(reference.replace("\\", "/"))
+            candidate = source.parent / reference_path
+            # Preserve native simulator lookup of bare built-in libraries.
+            if directive == "lib" and not candidate.exists() and len(reference_path.parts) == 1:
+                return match.group(0)
+            # Check unresolved components as well as the final resolved target.
+            if any(parent.is_symlink() for parent in (candidate, *candidate.parents)):
+                raise ValueError("netlist dependencies must not traverse symbolic links")
+            arguments = match.group(5).split(";", 1)[0].split()
+            if len(arguments) > (1 if directive == "lib" else 0):
+                raise ValueError("invalid netlist dependency directive")
+            selected = arguments[0] if arguments else None
+            return expand(candidate, selected, (*stack, source)).rstrip("\r\n") + "\n"
+
+        return _DEPENDENCY_LINE.sub(include, text)
+
+    return expand(path, None, ())
 
 
 def load_study_recipe(path: Path) -> dict[str, object]:
@@ -293,13 +360,13 @@ def preview_study_recipe(
                 continue
             assert netlist_path is not None
             try:
-                netlist = decode_text(netlist_path.read_bytes())
-            except (OSError, UnicodeError):
+                netlist = _resolved_netlist_text(netlist_path, workspace_root)
+            except (OSError, UnicodeError, ValueError) as exc:
                 errors.append(
                     _error(
                         f"{base}.netlist_path",
                         "invalid_encoding",
-                        "netlist must be readable UTF-8 or UTF-16 text",
+                        f"netlist or dependency could not be loaded: {exc}",
                     )
                 )
                 continue
@@ -575,7 +642,7 @@ def load_recipe_experiments(
         if error is not None or path is None:
             raise ValueError("experiment netlist is no longer available")
         try:
-            netlist_template = decode_text(path.read_bytes())
+            netlist_template = _resolved_netlist_text(path, workspace_root)
         except (OSError, UnicodeError) as exc:
             raise ValueError("experiment netlist is no longer available") from exc
         resolved.append(
@@ -637,9 +704,13 @@ def write_netlist_text(workspace_root: Path, relative_path: object, content: str
         raise ValueError("netlist content must be a string")
     if len(content.encode("utf-8")) > MAX_NETLIST_BYTES:
         raise ValueError(f"netlists are limited to {MAX_NETLIST_BYTES} bytes")
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(content, encoding="utf-8", newline="\n")
-    os.replace(temporary, path)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+            handle.write(content)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def create_netlist_file(workspace_root: Path, relative_path: object, content: str) -> Path:
@@ -684,5 +755,9 @@ def create_netlist_file(workspace_root: Path, relative_path: object, content: st
     if destination.exists():
         raise ValueError(f"'{relative_path}' already exists; choose a different name")
 
-    destination.write_text(content, encoding="utf-8", newline="\n")
+    try:
+        with destination.open("x", encoding="utf-8", newline="\n") as handle:
+            handle.write(content)
+    except FileExistsError as exc:
+        raise ValueError(f"'{relative_path}' already exists; choose a different name") from exc
     return destination

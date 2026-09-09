@@ -246,7 +246,7 @@ without writing artifacts.
 
 Publication freezes the immutable statistical and qualification plans; a second
 acknowledgement starts a recoverable job with cancel/resume controls. The
-completed view places joint corner yield, Wilson confidence intervals, worst
+completed view places joint corner yield, sampling-appropriate confidence information, worst
 requirement margins, rank sensitivities, failed samples, and portable evidence
 beside the nominal optimization decision. Nominal selection and tolerance
 qualification remain separate claims.

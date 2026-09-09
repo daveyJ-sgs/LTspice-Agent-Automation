@@ -420,6 +420,16 @@ def _execute_native_experiment(
             log_path, experiment_engine._NATIVE_STEP_PARAMETER
         )
         expected_steps = [float(index) for index in range(len(combinations))]
+        if not step_values:
+            # Stepped .op logs can omit .step lines; the RAW axis carries
+            # the generated step identity instead of time or frequency.
+            raw_data = raw_parser.parse_raw(_find_raw(output_dir, None))
+            if (
+                raw_data.variables[0].casefold() == experiment_engine._NATIVE_STEP_PARAMETER
+                and raw_data.points_per_step == 1
+                and raw_data.step_count == len(combinations)
+            ):
+                step_values = raw_data.values[raw_data.variables[0]]
         if step_values != expected_steps:
             raise ValueError(
                 "Native batch step order mismatch: "
@@ -1729,8 +1739,14 @@ def build_experiment_report(
     experiment_id: str,
     report_context: ReportContext | None = None,
     max_traces_per_plot: int | None = None,
+    workspace_root: str | None = None,
 ) -> ExperimentReportResult:
     """Build a portable offline HTML report from completed experiment artifacts."""
+    if workspace_root is not None:
+        return experiment_report.build_experiment_report(
+            RUNS_DIR, experiment_id, report_context, max_traces_per_plot,
+            workspace_root=Path(workspace_root).expanduser(),
+        )
     if report_context is None:
         return experiment_report.build_experiment_report(RUNS_DIR, experiment_id)
     return experiment_report.build_experiment_report(

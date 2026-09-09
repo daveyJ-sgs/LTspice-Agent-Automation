@@ -9,6 +9,28 @@ import statistical_engine
 
 
 class StatisticalResultsTests(unittest.TestCase):
+    def test_confidence_respects_sampling_design_and_repeated_corners(self) -> None:
+        results = {"experiment_id": "example", "point_count": 2,
+                   "points": [self.point(0, passed=True), self.point(1, passed=True)]}
+        provenance = statistical_results._sampling_provenance(self.provenance_source())
+        for method in ("halton", "latin_hypercube"):
+            summary = statistical_results.build_statistics(results, sampling_provenance={**provenance, "sampling_method": method})
+            interval = summary["yield_confidence_interval"]
+            self.assertEqual(interval["method"], "unavailable")
+            self.assertIsNone(interval["low"])
+            self.assertIsNone(interval["high"])
+            self.assertIn(method, interval["reason"])
+        metadata = [{"index": i, "sample_index": 0, "corners": {"load": name}}
+                    for i, name in enumerate(("light", "heavy"))]
+        summary = statistical_results.build_statistics(
+            results, point_metadata=metadata, corner_aggregate=True,
+            sampling_provenance={**provenance, "sampling_method": "independent"},
+        )
+        self.assertEqual(summary["observed_yield"], 1)
+        self.assertIsNone(summary["yield_confidence_interval"]["low"])
+        self.assertTrue(all(c["yield_confidence_interval"]["method"] == "wilson" for c in summary["corner_results"]))
+
+
     @staticmethod
     def provenance_source(*, include_method: bool = True) -> dict[str, object]:
         plan_sha256 = "0123456789abcdef" + "0" * 48

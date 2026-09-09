@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import statistical_engine
 import study_recipe
@@ -16,6 +17,79 @@ RECIPE_PATH = PROJECT_ROOT / "examples/mixed_signal_daq.ltstudy.json"
 
 
 class StudyRecipeTests(unittest.TestCase):
+    def test_netlist_save_does_not_follow_temporary_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "circuit.cir").write_text("* original\n.end\n")
+            sentinel = root / "sentinel.txt"
+            sentinel.write_text("KEEP")
+            (root / ".circuit.cir.tmp").symlink_to(sentinel)
+            study_recipe.write_netlist_text(root, "circuit.cir", "* updated\n.end\n")
+            self.assertEqual(sentinel.read_text(), "KEEP")
+            self.assertEqual(study_recipe.read_netlist_text(root, "circuit.cir"), "* updated\n.end\n")
+
+    def test_netlist_import_does_not_overwrite_a_concurrent_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            destination = root / "circuit.cir"
+            exists = Path.exists
+
+            def race(path: Path) -> bool:
+                result = exists(path)
+                if path == destination and not result:
+                    path.write_text("* concurrent creation\n.end\n")
+                return result
+
+            with patch.object(Path, "exists", race):
+                with self.assertRaises(ValueError):
+                    study_recipe.create_netlist_file(root, "circuit.cir", "* overwrite\n.end\n")
+            self.assertEqual(destination.read_text(), "* concurrent creation\n.end\n")
+
+    def test_local_dependencies_are_frozen_portably_with_nested_libraries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            recipe = self._workspace_recipe(root)
+            source = root / recipe["experiments"][0]["netlist_path"]
+            source.write_text(source.read_text().replace(".end", '.include "parts/drive.inc"\n.lib "parts/corner.lib" TT\n.end'))
+            parts = root / "parts"
+            parts.mkdir()
+            (parts / "drive.inc").write_text('.include "nested.inc"\r\n')
+            (parts / "nested.inc").write_bytes("* nested µ\r\nR_EXTRA dummy 0 1000\r\n".encode("utf-16"))
+            (parts / "corner.lib").write_text(".lib TT\nR_TT dummy2 0 2k\n.endl TT\n.lib FF\nR_FF dummy2 0 1k\n.endl FF\n")
+            preview = study_recipe.preview_study_recipe(recipe, root)
+            self.assertTrue(preview["valid"], preview)
+            frozen = study_recipe.load_recipe_experiments(recipe, root)[0]["netlist_template"]
+            self.assertIn("R_EXTRA", frozen)
+            self.assertIn("R_TT", frozen)
+            self.assertNotIn("R_FF", frozen)
+            self.assertNotIn(".include", frozen)
+            self.assertNotIn(str(root), frozen)
+            (parts / "nested.inc").write_text("R_CHANGED dummy 0 2k\n")
+            updated = study_recipe.preview_study_recipe(recipe, root)
+            self.assertNotEqual(preview["experiments"][0]["netlist_sha256"], updated["experiments"][0]["netlist_sha256"])
+            self.assertIn("R_EXTRA", frozen)
+            (parts / "nested.inc").write_text('.include "drive.inc"\n')
+            self.assertFalse(study_recipe.preview_study_recipe(recipe, root)["valid"])
+
+
+    def test_dependency_loading_rejects_missing_escaped_linked_and_oversized_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            root.mkdir()
+            recipe = self._workspace_recipe(root)
+            source = root / recipe["experiments"][0]["netlist_path"]
+            original = source.read_text()
+            outside = root.parent / "outside.inc"
+            outside.write_text("R_EXTRA dummy 0 1k\n")
+            (root / "linked.inc").symlink_to(outside)
+            (root / "large.inc").write_bytes(b"*" * (study_recipe.MAX_NETLIST_BYTES + 1))
+            for reference in ("missing.inc", "../outside.inc", "linked.inc", "large.inc"):
+                with self.subTest(reference=reference):
+                    source.write_text(original.replace(".end", f'.include "{reference}"\n.end'))
+                    self.assertFalse(study_recipe.preview_study_recipe(recipe, root)["valid"])
+                    with self.assertRaises(ValueError):
+                        study_recipe.load_recipe_experiments(recipe, root)
+
     def setUp(self) -> None:
         self.recipe = study_recipe.load_study_recipe(RECIPE_PATH)
 

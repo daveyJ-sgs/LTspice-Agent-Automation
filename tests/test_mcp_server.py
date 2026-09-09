@@ -1933,6 +1933,36 @@ class MCPServerTests(TemporaryRunsTestCase):
         )
         self.assertTrue(Path(report["report_html"]).is_file())
 
+    def test_native_operating_point_order_can_be_verified_from_raw(self) -> None:
+        for order in ([0, 1], [1, 0]):
+            def execute(netlist, filename, ascii_raw, timeout, dest):
+                dest.mkdir(parents=True)
+                (dest / "circuit.log").write_text("Operating Bias Point Solution:\n")
+                (dest / "circuit.raw").write_text(
+                    "Title: OP\nPlotname: Operating Point\nFlags: real stepped\n"
+                    "No. Variables: 2\nNo. Points: 2\nVariables:\n"
+                    "0 __mcp_step_index param\n1 V(out) voltage\nValues:\n"
+                    f"0 {order[0]}\n 1\n1 {order[1]}\n 2\n"
+                )
+                return dest
+
+            with patch.object(mcp_server, "_run_netlist_text", side_effect=execute), patch.object(
+                mcp_server, "_summarize_run", return_value={"status": "completed"}
+            ):
+                result = mcp_server.run_experiment(
+                    "* OP\nR1 in out {R}\n.op\n.end\n",
+                    [{"name": "R", "values": ["1k", "2k"]}],
+                    waveform_analyses=[{"name": "dc", "variable": "V(out)", "requirements": [
+                        {"metric": "maximum", "operator": "<=", "target": 2}
+                    ]}], execution_mode="native",
+                )
+            with self.subTest(order=order):
+                self.assertEqual(result["error_points"], 0 if order == [0, 1] else 2)
+                if order == [0, 1]:
+                    self.assertTrue(result["all_passed"])
+                    self.assertEqual([p["analyses"][0]["analysis"]["results"][0]["value"]
+                                      for p in result["points"]], [1, 2])
+
     def test_run_experiment_native_maps_one_validated_batch(self) -> None:
         rendered_netlists: list[str] = []
 
@@ -4211,6 +4241,25 @@ class MCPServerTests(TemporaryRunsTestCase):
 
         self.assertEqual(finished["status"], "failed")
         self.assertIn("engine version", finished["error"])
+
+    def test_recovery_rejects_jobs_from_before_numerical_corrections(self) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        defined = manager.define("R1 in out {R}\n.end\n",
+                                 [{"name": "R", "values": ["1k"]}], max_concurrency=1)
+        manager.shutdown()
+        path = Path(defined["manifest"])
+        manifest = json.loads(path.read_text())
+        manifest.update(status="running", engine_version=1)
+        mcp_server._write_json(path, manifest)
+        with patch.object(mcp_server, "_execute_experiment_point") as execute:
+            recovered = mcp_server.ExperimentJobManager(self.runs, workers=1)
+            try:
+                finished = recovered.wait(defined["experiment_id"])
+            finally:
+                recovered.shutdown()
+        self.assertEqual(finished["status"], "failed")
+        self.assertIn("engine version", finished["error"])
+        execute.assert_not_called()
 
     def test_coordinator_continues_after_one_job_crashes(self) -> None:
         manager = mcp_server.ExperimentJobManager(self.runs, workers=1)

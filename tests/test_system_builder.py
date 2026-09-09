@@ -1451,6 +1451,15 @@ class SystemBuilderTests(unittest.TestCase):
             reserved_delete = client.delete("/api/projects/runs", headers=self._headers())
             self.assertEqual(reserved_delete.status_code, 409)
 
+            for slug in (".git", ".venv", "unrelated"):
+                directory = workspace / slug
+                directory.mkdir()
+                marker = directory / "keep.txt"
+                marker.write_text("preserve")
+                rejected = client.delete(f"/api/projects/{slug}", headers=self._headers())
+                self.assertEqual(rejected.status_code, 409)
+                self.assertEqual(marker.read_text(), "preserve")
+
     def test_netlist_files_route_is_authorized_and_lists_workspace_netlists(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)

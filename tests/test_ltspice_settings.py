@@ -15,6 +15,14 @@ import ltspice_wrapper
 
 
 class LTspiceSettingsTests(unittest.TestCase):
+    def test_settings_save_does_not_follow_temporary_symlink(self) -> None:
+        sentinel = self.settings_path.with_name("sentinel.txt")
+        sentinel.write_text("KEEP")
+        self.settings_path.with_name(".settings.json.tmp").symlink_to(sentinel)
+        ltspice_wrapper._save_settings({"ltspice_executable": "test"})
+        self.assertEqual(sentinel.read_text(), "KEEP")
+        self.assertEqual(ltspice_wrapper._load_settings(), {"ltspice_executable": "test"})
+
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)

@@ -12,6 +12,27 @@ REFERENCE_IMAGE = PROJECT_ROOT / "docs/images/mixed-signal-daq-schematic.png"
 
 
 class SchematicCaptureTests(unittest.TestCase):
+    def test_metadata_save_does_not_follow_temporary_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            source = workspace / "circuit.asc"
+            source.write_text("Version 4\nSHEET 1 880 680\n")
+            assets = schematic_capture._managed_asset_directory(workspace)
+            digest = schematic_capture.hashlib.sha256(source.read_bytes()).hexdigest()
+            name = f"schematic-{digest[:20]}-{schematic_capture.CAPTURE_VERSION}.json"
+            sentinel = workspace / "sentinel.txt"
+            sentinel.write_text("KEEP")
+            (assets / f".{name}.tmp").symlink_to(sentinel)
+
+            def capture(_source: Path, output: Path, _executable: Path) -> str:
+                shutil.copyfile(REFERENCE_IMAGE, output)
+                return "test-native-window"
+
+            schematic_capture.capture_schematic(workspace, "circuit.asc", native_capture=capture)
+            self.assertEqual(sentinel.read_text(), "KEEP")
+            self.assertTrue((assets / name).is_file())
+            self.assertFalse((assets / name).is_symlink())
+
     def test_windows_title_check_accepts_ltspice_stem_only_titles(self) -> None:
         self.assertIn(
             "GetFileNameWithoutExtension($Source)",

@@ -57,7 +57,12 @@ def write_once(path: Path, content: bytes) -> None:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        # Publish a complete file without replacing a concurrent writer's result.
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if path.is_symlink() or not path.is_file() or path.read_bytes() != content:
+                raise ValueError(f"existing artifact differs: {path}")
     finally:
         temporary.unlink(missing_ok=True)
 

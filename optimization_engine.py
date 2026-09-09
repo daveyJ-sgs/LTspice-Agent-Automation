@@ -21,7 +21,7 @@ OPTIMIZATION_PLAN_SCHEMA_VERSION = 1
 OPTIMIZATION_RESULT_SCHEMA_VERSION = 1
 OPTIMIZATION_GENERATOR_VERSION = "deterministic-cartesian-v1"
 OPTIMIZATION_REFINEMENT_GENERATOR_VERSION = "deterministic-pareto-refinement-v1"
-OPTIMIZATION_RESULT_GENERATOR_VERSION = "pareto-evidence-v3"
+OPTIMIZATION_RESULT_GENERATOR_VERSION = "pareto-evidence-v4"
 SELECTION_POLICY = "equal-weight-normalized-regret-v1"
 TOLERANCE_SELECTION_POLICY = "tolerance-aware-normalized-regret-v2"
 MAX_OPTIMIZATION_PARAMETERS = 16
@@ -1130,11 +1130,13 @@ def _dominates(
         tolerance = float(objective.get("absolute_tolerance", 0.0)) + float(
             objective.get("relative_tolerance", 0.0)
         ) * max(abs(left_value), abs(right_value))
+        # Never allow an objective to worsen: tolerance-relaxed comparisons
+        # can form dominance cycles and erase the entire feasible frontier.
         if objective["goal"] == "minimize":
-            no_worse &= left_value <= right_value + tolerance
+            no_worse &= left_value <= right_value
             strictly_better |= left_value < right_value - tolerance
         else:
-            no_worse &= left_value >= right_value - tolerance
+            no_worse &= left_value >= right_value
             strictly_better |= left_value > right_value + tolerance
     return no_worse and strictly_better
 

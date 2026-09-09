@@ -18,12 +18,12 @@ import artifacts
 import experiment_index
 import optimization_engine
 import statistical_engine
-from statistical_results import _wilson
+from statistical_results import yield_interval
 
 ROBUST_PLAN_SCHEMA_VERSION = 1
 ROBUST_PLAN_GENERATOR_VERSION = "optimization-finalist-yield-v1"
 ROBUST_RESULT_SCHEMA_VERSION = 1
-ROBUST_RESULT_GENERATOR_VERSION = "joint-ac-transient-selection-v1"
+ROBUST_RESULT_GENERATOR_VERSION = "joint-ac-transient-selection-v2"
 MAX_FINALISTS = 8
 FINALIST_LABEL = re.compile(r"[a-z][a-z0-9_-]{0,63}")
 
@@ -576,13 +576,13 @@ def _requirement_margins(
             operator = threshold.get("operator")
             value = result.get("value")
             target = threshold.get("target")
-            if operator not in {"<=", ">="}:
+            if operator not in {"<", "<=", ">", ">="}:
                 continue
             numeric_value = float(_decimal(value, "requirement value"))
             numeric_target = float(_decimal(target, "requirement target"))
             margin = (
                 numeric_target - numeric_value
-                if operator == "<="
+                if operator in {"<", "<="}
                 else numeric_value - numeric_target
             )
             margins.append(
@@ -713,13 +713,18 @@ def _joint_candidate(
         bucket = corner_counts[key]
         evaluated = int(bucket["evaluated"])
         passed = int(bucket["passed"])
-        low, high = _wilson(passed, evaluated)
+        interval = yield_interval(
+            passed, evaluated,
+            str(statistical_plan.get("definition", {}).get("sampling_method", "independent")),
+        )
         corner_results.append(
             {
                 **bucket,
                 "observed_yield": None if evaluated == 0 else passed / evaluated,
-                "confidence_low": low,
-                "confidence_high": high,
+                "confidence_low": interval["low"],
+                "confidence_high": interval["high"],
+                "confidence_method": interval["method"],
+                "confidence_reason": interval.get("reason"),
             }
         )
     complete = all(int(item["invalid"]) == 0 for item in corner_results)
@@ -783,7 +788,8 @@ def build_robust_selection_result(
         eligible,
         key=lambda item: (
             float(item["worst_corner_yield"]),
-            float(item["worst_corner_confidence_low"]),
+            float(item["worst_corner_confidence_low"])
+            if item["worst_corner_confidence_low"] is not None else -1.0,
             -int(item["tie_break_rank"]),
         ),
         default=None,
@@ -958,7 +964,7 @@ def _html_document(result: dict[str, object]) -> bytes:
             f"<td>{html.escape(', '.join(f'{key}={value}' for key, value in corner['corners'].items()))}</td>"
             f"<td>{corner['passed']} / {corner['evaluated']}</td>"
             f"<td>{_percent(corner['observed_yield'])}</td>"
-            f"<td>{_percent(corner['confidence_low'])}–{_percent(corner['confidence_high'])}</td>"
+            f"<td>{html.escape(str(corner.get('confidence_reason') or (_percent(corner['confidence_low']) + '–' + _percent(corner['confidence_high']))))}</td>"
             "</tr>"
             for corner in finalist["corner_results"]
         )

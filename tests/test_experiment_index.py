@@ -373,8 +373,8 @@ class ExperimentIndexTests(TemporaryRunsTestCase):
         record = all_statistical["experiments"][0]
         self.assertEqual(record["sampling_method"], "halton")
         self.assertEqual(record["observed_yield"], 0.5)
-        self.assertLess(record["confidence_low"], 0.2)
-        self.assertGreater(record["confidence_high"], 0.8)
+        self.assertIsNone(record["confidence_low"])
+        self.assertIsNone(record["confidence_high"])
         self.assertEqual(record["statistical_variables"], ["R"])
         self.assertEqual(
             record["statistical_corners"], {"process": ["fast", "slow"]}
@@ -386,13 +386,8 @@ class ExperimentIndexTests(TemporaryRunsTestCase):
         filters = [
             {"circuit_sha256": record["circuit_sha256"]},
             {"minimum_yield": 0.5},
-            {"minimum_confidence_low": 0.1},
             {"corner": {"process": "slow"}},
             {"corner": {"process": "fast"}, "minimum_yield": 0.9},
-            {
-                "corner": {"process": "fast"},
-                "minimum_confidence_low": 0.3,
-            },
             {"variable": "R"},
             {"requirement_metric": "cutoff_frequency"},
         ]
@@ -403,6 +398,8 @@ class ExperimentIndexTests(TemporaryRunsTestCase):
                     1,
                 )
         misses = [
+            {"minimum_confidence_low": 0.1},
+            {"corner": {"process": "fast"}, "minimum_confidence_low": 0.3},
             {"minimum_yield": 0.51},
             {"minimum_confidence_low": 0.2},
             {"corner": {"process": "typical"}},

@@ -308,8 +308,10 @@ Observed yield is electrical
 passes divided by electrically evaluated samples. Simulation errors, waveform
 analysis errors, and cancelled samples are reported separately and excluded
 from that denominator; `planned_pass_fraction` also shows passes divided by
-the full planned population. The summary includes a Wilson 95% binomial
-interval, mean, sample standard deviation, 5th/50th/95th percentiles,
+the full planned population. Independent random samples receive a Wilson 95%
+binomial interval. Halton, Latin-hypercube, and pooled repeated-corner summaries
+report unavailable confidence bounds with a reason; they do not support this
+independent-trial coverage claim. The summary also includes mean, sample standard deviation, 5th/50th/95th percentiles,
 requirement-margin statistics, contributing point ordinals, and exact failed
 sample evidence.
 
@@ -614,9 +616,10 @@ must match exactly, while each objective must remain within its named absolute
 plus relative tolerance. The comparison is itself content-addressed JSON and
 offline HTML evidence. The DAQ qualification's versioned tolerance-aware
 selection policy uses 0.05 dB absolute tolerance for 10 MHz alias gain and
-50 ns for settling time; both relative tolerances are zero. Values within those
-declared resolution limits cannot create a platform-specific dominance or
-selection decision.
+50 ns for settling time; both relative tolerances are zero. Dominance requires no objective to get worse and at least one improvement
+beyond its tolerance. This prevents cyclic dominance and an empty feasible
+frontier. Tolerances do not guarantee identical platform decisions; verify the
+frontier and selected candidate with the portability comparison.
 
 Phase 4C can derive a bounded local plan from a completed optimization study
 with `optimization_engine.generate_optimization_refinement_plan`. It verifies
@@ -666,7 +669,8 @@ pass only when both experiments complete and every AC and transient requirement
 passes. Named corners remain separate; selection maximizes the worst-corner
 joint yield and uses the frozen source rank only for an exact statistical tie.
 
-The content-addressed result includes per-corner Wilson intervals, worst signed
+The content-addressed result includes per-corner Wilson intervals for independent
+sampling (unavailable bounds and a reason for Halton/Latin-hypercube), worst signed
 requirement margins, Phase 3 Spearman sensitivity summaries, the selection
 rationale, and direct experiment/RAW/JSON/CSV/manifest links. `query_studies`
 searches optimization and robust-selection studies by kind, selected result,
@@ -922,3 +926,41 @@ Stability metrics reject absent or multiple crossovers; narrow
 `window_start`/`window_end` when a response legitimately contains several.
 The default axis unit is inferred as `Hz` for a `frequency` vector and `s`
 otherwise.
+
+Stepped operating-point RAW files contain one point per step. Native batches
+verify the generated step index from that RAW axis when LTspice omits `.step`
+lines from the operating-point log. Malformed RAW dimensions, duplicate vectors,
+invalid indexes, and unsupported payload lengths are rejected. Measurement log
+parsers do not accept numeric prefixes of failed or non-finite results.
+
+Durable experiment engine version 2 prevents recovery from checkpoints created
+before the numerical audit corrections. Define a new experiment for an unfinished
+version-1 job; completed historical version-1 evidence remains readable without
+being recalculated. See [the second audit pass](AUDIT_SECOND_PASS.md).
+
+
+### Audit corrections (September 2026)
+
+Transient `mean` and `rms` integrate the piecewise-linear waveform over elapsed
+time, including interpolated analysis-window endpoints. They require at least
+two points on a strictly increasing axis. RMS integrates the square of each
+linear segment exactly. Statistical sample summaries retain their usual sample
+mean and standard deviation.
+
+For `cutoff_frequency`, a falling crossing is searched above the passband
+`reference_frequency`; a rising crossing is searched below it.
+
+Study recipes inline confined local `.include`/`.inc` dependencies and selected
+`.lib file SECTION` contents before handing the deck to local or remote
+execution. Nested paths resolve relative to each source file. Cycles, symbolic
+links, workspace escapes and oversized dependency trees are rejected. Unresolved
+bare `.lib` names retain native simulator library lookup and still require the
+corresponding library on the executing host.
+
+`build_experiment_report` accepts optional `workspace_root` for schematic assets.
+Set it when the evidence directory is outside the source workspace; omitted,
+it defaults to the runs directory's parent for compatibility.
+
+Optimization result generator v4 and robust-selection generator v2 distinguish
+corrected decisions from older saved results. Re-evaluate affected decisions;
+do not change version fields on old evidence to make it appear recalculated.

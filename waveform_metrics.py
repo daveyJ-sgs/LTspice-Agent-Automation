@@ -392,18 +392,38 @@ def _measure_maximum(request: _WaveformMetricRequest) -> MetricMeasurement:
 
 
 def _measure_mean(request: _WaveformMetricRequest) -> MetricMeasurement:
+    _require_increasing(request.axis)
+    if len(request.axis) < 2:
+        raise ValueError("mean requires a positive analysis duration")
+    duration = request.axis[-1] - request.axis[0]
     return _measurement(
         request,
-        math.fsum(request.values) / len(request.values),
+        math.fsum(
+            (after_time - before_time) / duration * (before / 2 + after / 2)
+            for before_time, after_time, before, after in zip(
+                request.axis, request.axis[1:], request.values, request.values[1:]
+            )
+        ),
         request.signal_unit,
         _region(request.axis, request.origins),
     )
 
 
 def _measure_rms(request: _WaveformMetricRequest) -> MetricMeasurement:
-    value = math.sqrt(
-        math.fsum(number * number for number in request.values) / len(request.values)
-    )
+    _require_increasing(request.axis)
+    if len(request.axis) < 2:
+        raise ValueError("rms requires a positive analysis duration")
+    duration = request.axis[-1] - request.axis[0]
+    scale = max(abs(value) for value in request.values)
+    normalized = [value / scale if scale else 0.0 for value in request.values]
+    # Integrate the square of each linear segment, not a line through y**2.
+    value = scale * math.sqrt(math.fsum(
+        (after_time - before_time) / duration
+        * (before * before + before * after + after * after) / 3
+        for before_time, after_time, before, after in zip(
+            request.axis, request.axis[1:], normalized, normalized[1:]
+        )
+    ))
     return _measurement(
         request,
         value,

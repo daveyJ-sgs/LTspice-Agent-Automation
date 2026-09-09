@@ -96,6 +96,7 @@ def _finish(experiment_id: str, summary: str) -> dict[str, object]:
         experiment_id,
         {**REPORT_CONTEXT, "simulation_summary": summary},
         max_traces_per_plot=16,
+        workspace_root=str(EXAMPLES_DIR.parent),
     )
     return {
         "experiment_id": experiment_id,
@@ -110,11 +111,23 @@ def run_study(
     coarse_study_id: str,
     refined_study_id: str,
     *,
-    coarse_candidate_index: int = 15,
-    refined_candidate_index: int = 7,
+    coarse_candidate_index: int | None = None,
+    refined_candidate_index: int | None = None,
     sample_count: int = SAMPLE_COUNT,
     reuse_cache: bool = True,
 ) -> dict[str, object]:
+    if coarse_candidate_index is None:
+        result, _ = optimization_engine._load_verified_optimization_study(
+            mcp_server.RUNS_DIR, coarse_study_id
+        )
+        coarse_candidate_index = result["selected_candidate_index"]
+    if refined_candidate_index is None:
+        result, _ = optimization_engine._load_verified_optimization_study(
+            mcp_server.RUNS_DIR, refined_study_id
+        )
+        refined_candidate_index = result["selected_candidate_index"]
+    if type(coarse_candidate_index) is not int or type(refined_candidate_index) is not int:
+        raise ValueError("both source studies must have a selected candidate")
     finalists = [
         {
             "label": "coarse-winner",

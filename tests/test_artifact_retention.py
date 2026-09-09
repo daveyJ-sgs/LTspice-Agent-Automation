@@ -8,6 +8,25 @@ import artifact_retention
 
 
 class ArtifactRetentionTests(unittest.TestCase):
+    def test_qualification_children_are_retained_at_plan_and_apply(self):
+        target = self._entry("mcp-experiment-child", "experiment_manifest.json", {
+            "status": "cancelled", "finished_at": "2026-01-01T00:00:00+00:00",
+            "experiment_id": "mcp-experiment-child",
+        })
+        options = dict(scopes=("experiments",), older_than_days=1, keep_recent=0,
+                       now=datetime(2026, 1, 10, tzinfo=timezone.utc))
+        unreferenced = artifact_retention.plan_prune(self.runs, **options)
+        parent = self.runs / "qualification-jobs" / "qualification-job-one"
+        parent.mkdir(parents=True)
+        (parent / "qualification_job.json").write_text(json.dumps({
+            "definition": {"experiments": {"ac": {"experiment_id": target.name}}}
+        }))
+        self.assertEqual(artifact_retention.plan_prune(self.runs, **options).entries, ())
+        with self.assertRaisesRegex(RuntimeError, "became referenced"):
+            artifact_retention.apply_prune(self.runs, unreferenced)
+        self.assertTrue(target.exists())
+
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.runs = Path(self.temporary.name) / "runs"

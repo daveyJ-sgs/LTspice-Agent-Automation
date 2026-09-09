@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Callable, TypedDict
@@ -481,13 +482,13 @@ def capture_schematic(
         "capture_version": CAPTURE_VERSION,
         "ltspice_executable": str(executable),
     }
-    temporary_metadata = metadata_path.with_name(f".{metadata_path.name}.tmp")
-    temporary_metadata.write_text(
-        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    os.replace(temporary_metadata, metadata_path)
+    temporary_metadata = metadata_path.with_name(f".{metadata_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary_metadata.open("x", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+        os.replace(temporary_metadata, metadata_path)
+    finally:
+        temporary_metadata.unlink(missing_ok=True)
     return result
 
 

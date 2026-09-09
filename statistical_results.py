@@ -177,6 +177,23 @@ def _classification(point: dict[str, object]) -> str:
     return "electrical_pass" if point.get("all_passed") is True else "electrical_failure"
 
 
+def yield_interval(
+    successes: int, total: int, sampling_method: str, *, pooled_corners: bool = False
+) -> dict[str, object]:
+    """Binomial confidence requires independent trials, not repeated corners/QMC."""
+    reason = (
+        "Pooled corners reuse manufacturing samples; trials are not independent."
+        if pooled_corners
+        else f"{sampling_method} sampling does not support a binomial confidence interval."
+        if sampling_method != "independent"
+        else None
+    )
+    if reason is not None:
+        return {"method": "unavailable", "low": None, "high": None, "reason": reason}
+    low, high = _wilson(successes, total)
+    return {"method": "wilson", "low": low, "high": high}
+
+
 def _point_metadata(
     point_metadata: list[dict[str, object]] | None,
     point_count: int,
@@ -385,12 +402,20 @@ def build_statistics(
         + classifications["cancelled"]
         + classifications["unfinished"]
     )
-    low, high = _wilson(passed, evaluated)
+    sampling_method = (
+        sampling_provenance["sampling_method"] if sampling_provenance else "independent"
+    )
+    interval = yield_interval(
+        passed, evaluated, sampling_method,
+        pooled_corners=metadata is not None and len(corner_groups) > 1,
+    )
     pooled = metadata is None or corner_aggregate
+    if not pooled:
+        interval = {**interval, "low": None, "high": None}
     result: dict[str, object] = {
         "schema_version": STATISTICS_SCHEMA_VERSION,
         "experiment_id": results["experiment_id"],
-        "confidence_level": CONFIDENCE_LEVEL,
+        "confidence_level": CONFIDENCE_LEVEL if interval["method"] == "wilson" else None,
         "planned_points": planned_points,
         "finished_points": len(points),
         "classifications": classifications,
@@ -402,11 +427,7 @@ def build_statistics(
         "planned_pass_fraction": (
             None if not pooled else passed / planned_points
         ),
-        "yield_confidence_interval": {
-            "method": "wilson",
-            "low": low if pooled else None,
-            "high": high if pooled else None,
-        },
+        "yield_confidence_interval": interval,
         "measurements": {
             name: {
                 **_descriptive(group["values"]),
@@ -447,7 +468,7 @@ def build_statistics(
                     "unfinished",
                 )
             )
-            group_low, group_high = _wilson(group_passed, group_evaluated)
+            group_interval = yield_interval(group_passed, group_evaluated, sampling_method)
             corner_results.append(
                 {
                     "corners": group["corners"],
@@ -460,11 +481,7 @@ def build_statistics(
                         if group_evaluated == 0
                         else group_passed / group_evaluated
                     ),
-                    "yield_confidence_interval": {
-                        "method": "wilson",
-                        "low": group_low,
-                        "high": group_high,
-                    },
+                    "yield_confidence_interval": group_interval,
                 }
             )
         result["corner_aggregate"] = "pooled" if corner_aggregate else None

@@ -734,7 +734,7 @@ def _statistical_panel(summary: dict[str, object] | None) -> str:
     observed = summary["observed_yield"]
     yield_text = "—" if observed is None else f"{100 * observed:.2f}%"
     interval_text = (
-        "—"
+        _text(str(interval.get("reason", "—")))
         if interval["low"] is None
         else f"{100 * interval['low']:.2f}%–{100 * interval['high']:.2f}%"
     )
@@ -763,7 +763,7 @@ def _statistical_panel(summary: dict[str, object] | None) -> str:
                 + ("—" if corner_yield is None else f"{100 * corner_yield:.2f}%")
                 + "</td><td>"
                 + (
-                    "—"
+                    _text(str(corner_interval.get("reason", "—")))
                     if corner_interval["low"] is None
                     else f"{100 * corner_interval['low']:.2f}%–"
                     f"{100 * corner_interval['high']:.2f}%"
@@ -1179,18 +1179,16 @@ def build_experiment_report(
     experiment_id: str,
     report_context: ReportContext | None = None,
     max_traces_per_plot: int | None = None,
+    *,
+    workspace_root: Path | None = None,
 ) -> ExperimentReportResult:
     """Build a deterministic, self-contained report for one completed experiment."""
     experiment_dir, manifest, results, record = _load_artifacts(runs_dir, experiment_id)
-    # runs_dir is always <workspace>/runs (every caller constructs it that way,
-    # including mcp_server's own RUNS_DIR default), so its parent is the
-    # workspace a report_context.schematic_path is relative to. Resolving
-    # against the automation repo's own directory instead -- the previous
-    # behavior -- silently broke schematic images for any workspace that
-    # isn't the repo itself, exactly the class of bug already found and
-    # fixed once this session in mcp_server.py's RUNS_DIR confinement.
+    # Most callers use <workspace>/runs; external evidence directories must
+    # supply the asset workspace explicitly rather than silently guessing it.
     context, image_data = _validated_context(
-        experiment_dir, report_context, runs_dir.resolve().parent
+        experiment_dir, report_context,
+        runs_dir.resolve().parent if workspace_root is None else workspace_root.resolve(),
     )
     if (
         max_traces_per_plot is not None

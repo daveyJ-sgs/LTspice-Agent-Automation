@@ -236,6 +236,7 @@ def _finish(
     report = build_experiment_report(
         experiment_id,
         {**COMMON_REPORT_CONTEXT, "simulation_summary": simulation_summary},
+        workspace_root=str(EXAMPLES_DIR.parent),
     )
     return {"summary": summary, "report": report}
 

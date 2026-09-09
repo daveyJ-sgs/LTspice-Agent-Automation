@@ -399,7 +399,7 @@ def _manifest_record(
         raise ValueError("unsupported experiment manifest schema_version")
     engine_version = manifest.get("engine_version")
     if engine_version is not None and (
-        type(engine_version) is not int or engine_version != 1
+        type(engine_version) is not int or engine_version not in {1, 2}
     ):
         raise ValueError("unsupported experiment engine_version")
     status = manifest.get("status")

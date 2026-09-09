@@ -1,87 +1,211 @@
 {
-  "portability_signature": "3fe75927e03db62e9ce1ef9d40d31b30257c9825bf8cf0159ed3b7261eeb5601",
-  "selected_finalist": "coarse-winner",
+  "portability_signature": "d2a7ece159a854830ca596cfe2a36f9eda95dfb9ec768207598f53ddf71c557e",
+  "selected_finalist": "refined-finalist",
   "finalists": [
     {
       "label": "coarse-winner",
       "parameters": {
-        "CAA1": "1e-10",
-        "CAA2": "1e-10",
+        "CAA1": "8.2e-11",
+        "CAA2": "8.2e-11",
         "RAA1": "1e+3",
         "ROUT": "65"
       },
       "complete_evidence": true,
       "corner_results": [
         {
-          "corners": {"adc_load": "heavy"},
+          "confidence_high": null,
+          "confidence_low": null,
+          "confidence_method": "unavailable",
+          "confidence_reason": "halton sampling does not support a binomial confidence interval.",
+          "corners": {
+            "adc_load": "heavy"
+          },
           "evaluated": 32,
-          "passed": 32,
           "invalid": 0,
-          "observed_yield": 1.0,
-          "confidence_low": 0.8928208017449293,
-          "confidence_high": 1.0
+          "observed_yield": 0.9375,
+          "passed": 30
         },
         {
-          "corners": {"adc_load": "light"},
+          "confidence_high": null,
+          "confidence_low": null,
+          "confidence_method": "unavailable",
+          "confidence_reason": "halton sampling does not support a binomial confidence interval.",
+          "corners": {
+            "adc_load": "light"
+          },
           "evaluated": 32,
-          "passed": 32,
           "invalid": 0,
-          "observed_yield": 1.0,
-          "confidence_low": 0.8928208017449293,
-          "confidence_high": 1.0
+          "observed_yield": 0.9375,
+          "passed": 30
         }
       ],
       "worst_requirements": [
-        {"experiment": "ac", "analysis": "analog_performance", "metric": "ac_gain_db", "operator": ">=", "value": 3.970181008055285},
-        {"experiment": "ac", "analysis": "analog_performance", "metric": "ac_gain_db", "operator": "<=", "value": -27.197013031190433},
-        {"experiment": "ac", "analysis": "analog_performance", "metric": "cutoff_frequency", "operator": ">=", "value": 915699.7078093749},
-        {"experiment": "ac", "analysis": "analog_performance", "metric": "cutoff_frequency", "operator": "<=", "value": 1088788.8821984492},
-        {"experiment": "ac", "analysis": "analog_performance", "metric": "peaking_db", "operator": "<=", "value": 0.0},
-        {"experiment": "transient", "analysis": "frontend_settling", "metric": "settling_time", "operator": "<=", "value": 1.202e-06},
-        {"experiment": "transient", "analysis": "hold_droop", "metric": "ripple", "operator": "<=", "value": 0.0015570298636942148},
-        {"experiment": "transient", "analysis": "track_error", "metric": "maximum", "operator": "<=", "value": -0.0002462516952944768},
-        {"experiment": "transient", "analysis": "track_error", "metric": "minimum", "operator": ">=", "value": -0.0015571327789360508}
+        {
+          "experiment": "ac",
+          "analysis": "analog_performance",
+          "metric": "ac_gain_db",
+          "operator": ">=",
+          "value": 3.9813319276764134
+        },
+        {
+          "experiment": "ac",
+          "analysis": "analog_performance",
+          "metric": "ac_gain_db",
+          "operator": "<=",
+          "value": -23.86661279305454
+        },
+        {
+          "experiment": "ac",
+          "analysis": "analog_performance",
+          "metric": "cutoff_frequency",
+          "operator": ">=",
+          "value": 1116540.800358047
+        },
+        {
+          "experiment": "ac",
+          "analysis": "analog_performance",
+          "metric": "cutoff_frequency",
+          "operator": "<=",
+          "value": 1327590.7562041525
+        },
+        {
+          "experiment": "ac",
+          "analysis": "analog_performance",
+          "metric": "peaking_db",
+          "operator": "<=",
+          "value": 0.0
+        },
+        {
+          "experiment": "transient",
+          "analysis": "frontend_settling",
+          "metric": "settling_time",
+          "operator": "<=",
+          "value": 1.081885130734353e-06
+        },
+        {
+          "experiment": "transient",
+          "analysis": "hold_droop",
+          "metric": "ripple",
+          "operator": "<=",
+          "value": 0.0015654549566543885
+        },
+        {
+          "experiment": "transient",
+          "analysis": "track_error",
+          "metric": "maximum",
+          "operator": "<=",
+          "value": -7.627651614939945e-05
+        },
+        {
+          "experiment": "transient",
+          "analysis": "track_error",
+          "metric": "minimum",
+          "operator": ">=",
+          "value": -0.0006793968959062981
+        }
       ]
     },
     {
       "label": "refined-finalist",
       "parameters": {
-        "CAA1": "1e-10",
+        "CAA1": "8.2e-11",
         "CAA2": "1e-10",
-        "RAA1": "1e+3",
+        "RAA1": "8.2e+2",
         "ROUT": "5e+1"
       },
       "complete_evidence": true,
       "corner_results": [
         {
-          "corners": {"adc_load": "heavy"},
+          "confidence_high": null,
+          "confidence_low": null,
+          "confidence_method": "unavailable",
+          "confidence_reason": "halton sampling does not support a binomial confidence interval.",
+          "corners": {
+            "adc_load": "heavy"
+          },
           "evaluated": 32,
-          "passed": 32,
           "invalid": 0,
           "observed_yield": 1.0,
-          "confidence_low": 0.8928208017449293,
-          "confidence_high": 1.0
+          "passed": 32
         },
         {
-          "corners": {"adc_load": "light"},
+          "confidence_high": null,
+          "confidence_low": null,
+          "confidence_method": "unavailable",
+          "confidence_reason": "halton sampling does not support a binomial confidence interval.",
+          "corners": {
+            "adc_load": "light"
+          },
           "evaluated": 32,
-          "passed": 32,
           "invalid": 0,
           "observed_yield": 1.0,
-          "confidence_low": 0.8928208017449293,
-          "confidence_high": 1.0
+          "passed": 32
         }
       ],
       "worst_requirements": [
-        {"experiment": "ac", "analysis": "analog_performance", "metric": "ac_gain_db", "operator": ">=", "value": 3.970325263359265},
-        {"experiment": "ac", "analysis": "analog_performance", "metric": "ac_gain_db", "operator": "<=", "value": -27.13783302230012},
-        {"experiment": "ac", "analysis": "analog_performance", "metric": "cutoff_frequency", "operator": ">=", "value": 915823.9729146613},
-        {"experiment": "ac", "analysis": "analog_performance", "metric": "cutoff_frequency", "operator": "<=", "value": 1088942.5095476506},
-        {"experiment": "ac", "analysis": "analog_performance", "metric": "peaking_db", "operator": "<=", "value": 0.0},
-        {"experiment": "transient", "analysis": "frontend_settling", "metric": "settling_time", "operator": "<=", "value": 1.202e-06},
-        {"experiment": "transient", "analysis": "hold_droop", "metric": "ripple", "operator": "<=", "value": 0.0015573236913000166},
-        {"experiment": "transient", "analysis": "track_error", "metric": "maximum", "operator": "<=", "value": -0.00024235675583311517},
-        {"experiment": "transient", "analysis": "track_error", "metric": "minimum", "operator": ">=", "value": -0.0015212877667924566}
+        {
+          "experiment": "ac",
+          "analysis": "analog_performance",
+          "metric": "ac_gain_db",
+          "operator": ">=",
+          "value": 3.979577527613165
+        },
+        {
+          "experiment": "ac",
+          "analysis": "analog_performance",
+          "metric": "ac_gain_db",
+          "operator": "<=",
+          "value": -23.920342290579704
+        },
+        {
+          "experiment": "ac",
+          "analysis": "analog_performance",
+          "metric": "cutoff_frequency",
+          "operator": ">=",
+          "value": 1101861.842466212
+        },
+        {
+          "experiment": "ac",
+          "analysis": "analog_performance",
+          "metric": "cutoff_frequency",
+          "operator": "<=",
+          "value": 1286843.6530128287
+        },
+        {
+          "experiment": "ac",
+          "analysis": "analog_performance",
+          "metric": "peaking_db",
+          "operator": "<=",
+          "value": 0.0
+        },
+        {
+          "experiment": "transient",
+          "analysis": "frontend_settling",
+          "metric": "settling_time",
+          "operator": "<=",
+          "value": 1.0946649651384405e-06
+        },
+        {
+          "experiment": "transient",
+          "analysis": "hold_droop",
+          "metric": "ripple",
+          "operator": "<=",
+          "value": 0.0015648290885414973
+        },
+        {
+          "experiment": "transient",
+          "analysis": "track_error",
+          "metric": "maximum",
+          "operator": "<=",
+          "value": -0.00010217216957885557
+        },
+        {
+          "experiment": "transient",
+          "analysis": "track_error",
+          "metric": "minimum",
+          "operator": ">=",
+          "value": -0.000708718449231705
+        }
       ]
     }
   ]

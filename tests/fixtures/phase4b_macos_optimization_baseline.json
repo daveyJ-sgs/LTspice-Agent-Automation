@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
-  "generator_version": "pareto-evidence-v3",
+  "generator_version": "pareto-evidence-v4",
   "plan_id": "optimization-plan-2b6f2d62d7ca7c14",
-  "study_id": "optimization-study-15a3b0b178405e19",
+  "study_id": "optimization-study-1c097f21c493ae2e",
   "candidate_count": 16,
-  "selected_candidate_index": 15,
+  "selected_candidate_index": 3,
   "qualification": {
     "platform": "macOS 26.3.1 Apple Silicon",
     "simulator": "LTspice 17.2.4",
-    "recorded_date": "2026-08-26",
+    "recorded_date": "2026-09-07",
     "selection_policy": "tolerance-aware-normalized-regret-v2"
   },
   "candidates": [
@@ -31,7 +31,7 @@
         },
         "settling_time": {
           "unit": "s",
-          "value": 9.710846081385235E-7,
+          "value": 9.710846081385235e-07,
           "worst_point_index": 1
         }
       }
@@ -55,7 +55,7 @@
         },
         "settling_time": {
           "unit": "s",
-          "value": 9.706012812769903E-7,
+          "value": 9.706012812769903e-07,
           "worst_point_index": 3
         }
       }
@@ -79,7 +79,7 @@
         },
         "settling_time": {
           "unit": "s",
-          "value": 0.0000010030793470176409,
+          "value": 1.0030793470176409e-06,
           "worst_point_index": 5
         }
       }
@@ -93,8 +93,8 @@
         "ROUT": "65"
       },
       "status": "feasible",
-      "pareto": false,
-      "selected": false,
+      "pareto": true,
+      "selected": true,
       "objectives": {
         "alias_gain": {
           "unit": "dB",
@@ -103,7 +103,7 @@
         },
         "settling_time": {
           "unit": "s",
-          "value": 0.0000010299566333772234,
+          "value": 1.0299566333772234e-06,
           "worst_point_index": 6
         }
       }
@@ -117,7 +117,7 @@
         "ROUT": "35"
       },
       "status": "feasible",
-      "pareto": false,
+      "pareto": true,
       "selected": false,
       "objectives": {
         "alias_gain": {
@@ -127,7 +127,7 @@
         },
         "settling_time": {
           "unit": "s",
-          "value": 0.0000010200783102158308,
+          "value": 1.0200783102158308e-06,
           "worst_point_index": 9
         }
       }
@@ -141,7 +141,7 @@
         "ROUT": "65"
       },
       "status": "feasible",
-      "pareto": false,
+      "pareto": true,
       "selected": false,
       "objectives": {
         "alias_gain": {
@@ -151,7 +151,7 @@
         },
         "settling_time": {
           "unit": "s",
-          "value": 0.0000010439542703542838,
+          "value": 1.0439542703542838e-06,
           "worst_point_index": 10
         }
       }
@@ -175,7 +175,7 @@
         },
         "settling_time": {
           "unit": "s",
-          "value": 0.0000010590721849012382,
+          "value": 1.0590721849012382e-06,
           "worst_point_index": 13
         }
       }
@@ -199,7 +199,7 @@
         },
         "settling_time": {
           "unit": "s",
-          "value": 0.0000010869378942363702,
+          "value": 1.0869378942363702e-06,
           "worst_point_index": 14
         }
       }
@@ -213,7 +213,7 @@
         "ROUT": "35"
       },
       "status": "feasible",
-      "pareto": false,
+      "pareto": true,
       "selected": false,
       "objectives": {
         "alias_gain": {
@@ -223,7 +223,7 @@
         },
         "settling_time": {
           "unit": "s",
-          "value": 0.00000100307900646895,
+          "value": 1.00307900646895e-06,
           "worst_point_index": 17
         }
       }
@@ -237,7 +237,7 @@
         "ROUT": "65"
       },
       "status": "feasible",
-      "pareto": false,
+      "pareto": true,
       "selected": false,
       "objectives": {
         "alias_gain": {
@@ -247,7 +247,7 @@
         },
         "settling_time": {
           "unit": "s",
-          "value": 0.0000010305969258038877,
+          "value": 1.0305969258038877e-06,
           "worst_point_index": 19
         }
       }
@@ -271,7 +271,7 @@
         },
         "settling_time": {
           "unit": "s",
-          "value": 0.0000010810719389506712,
+          "value": 1.0810719389506712e-06,
           "worst_point_index": 21
         }
       }
@@ -285,7 +285,7 @@
         "ROUT": "65"
       },
       "status": "feasible",
-      "pareto": false,
+      "pareto": true,
       "selected": false,
       "objectives": {
         "alias_gain": {
@@ -295,7 +295,7 @@
         },
         "settling_time": {
           "unit": "s",
-          "value": 0.0000010805913066969697,
+          "value": 1.0805913066969697e-06,
           "worst_point_index": 23
         }
       }
@@ -309,7 +309,7 @@
         "ROUT": "35"
       },
       "status": "feasible",
-      "pareto": false,
+      "pareto": true,
       "selected": false,
       "objectives": {
         "alias_gain": {
@@ -319,7 +319,7 @@
         },
         "settling_time": {
           "unit": "s",
-          "value": 0.0000010590717962867885,
+          "value": 1.0590717962867885e-06,
           "worst_point_index": 25
         }
       }
@@ -333,7 +333,7 @@
         "ROUT": "65"
       },
       "status": "feasible",
-      "pareto": false,
+      "pareto": true,
       "selected": false,
       "objectives": {
         "alias_gain": {
@@ -343,7 +343,7 @@
         },
         "settling_time": {
           "unit": "s",
-          "value": 0.0000010869368890959756,
+          "value": 1.0869368890959756e-06,
           "worst_point_index": 26
         }
       }
@@ -367,7 +367,7 @@
         },
         "settling_time": {
           "unit": "s",
-          "value": 0.0000011150638649191325,
+          "value": 1.1150638649191325e-06,
           "worst_point_index": 29
         }
       }
@@ -382,7 +382,7 @@
       },
       "status": "feasible",
       "pareto": true,
-      "selected": true,
+      "selected": false,
       "objectives": {
         "alias_gain": {
           "unit": "dB",
@@ -391,7 +391,7 @@
         },
         "settling_time": {
           "unit": "s",
-          "value": 0.0000011145848529851942,
+          "value": 1.1145848529851942e-06,
           "worst_point_index": 31
         }
       }

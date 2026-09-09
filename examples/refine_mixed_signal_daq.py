@@ -90,6 +90,7 @@ def run_study(
         reports[name] = mcp_server.build_experiment_report(
             child["experiment_id"],
             {**REFINEMENT_REPORT_CONTEXT, "simulation_summary": summary},
+            workspace_root=str(EXAMPLES_DIR.parent),
         )
     return {"plan": plan, "job": current, "reports": reports}
 

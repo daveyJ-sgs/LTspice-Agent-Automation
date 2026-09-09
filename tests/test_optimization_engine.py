@@ -11,6 +11,33 @@ from support import TemporaryRunsTestCase
 
 
 class OptimizationEngineTests(TemporaryRunsTestCase):
+    def test_tolerances_cannot_erase_a_feasible_frontier(self) -> None:
+        objectives = [{"name": n, "experiment": "ac", "analysis": n,
+                       "metric": "maximum", "goal": "minimize", "weight": 1,
+                       "absolute_tolerance": 1} for n in ("x", "y", "z")]
+        plan = optimization_engine.build_optimization_plan(
+            [{"name": "R", "kind": "continuous", "minimum": 1, "maximum": 3, "count": 3}],
+            objectives, [{"name": "limit", "experiment": "ac", "analysis": "x", "metric": "maximum", "operator": "<=", "target": 3}],
+        )
+        saved = optimization_engine.save_optimization_plan(self.runs, plan)
+        points = []
+        for point, values in zip(plan["points"], ((0, 1, 2), (2, 0, 1), (1, 2, 0))):
+            points.append({"index": point["index"], "parameters": point["parameters"],
+                           "simulation_status": "completed", "error": None,
+                           "analyses": [self._analysis(n, "maximum", v) for n, v in zip(("x", "y", "z"), values)]})
+        results = {"status": "completed", "points": points}
+        directory = self.runs / "experiment-cycle"
+        directory.mkdir()
+        (directory / "results.json").write_text(json.dumps(results))
+        with patch.object(optimization_engine.experiment_index, "load_terminal_experiment",
+                          return_value=(directory, {"status": "completed"}, results, {})):
+            result = optimization_engine.evaluate_optimization_study(self.runs, saved["plan_id"], {"ac": directory.name})
+        self.assertEqual(result["feasible_candidates"], 3)
+        self.assertEqual(result["pareto_candidates"], 3)
+        self.assertEqual(result["selected_candidate_index"], 0)
+        self.assertNotIn("No feasible", result["selection_explanation"])
+
+
 
     @staticmethod
     def parameters() -> list[optimization_engine.OptimizationParameter]:
@@ -742,7 +769,7 @@ class OptimizationEngineTests(TemporaryRunsTestCase):
                 "settling_time": {"value": 1.00e-6},
             }
         }
-        self.assertTrue(
+        self.assertFalse(
             optimization_engine._dominates(
                 stronger_alias, faster_within_resolution, normalized
             )

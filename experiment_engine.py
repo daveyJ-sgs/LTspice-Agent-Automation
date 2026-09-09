@@ -28,7 +28,8 @@ MAX_EXPERIMENT_WORKERS = 4
 MAX_WAVEFORM_ANALYSES = 32
 MAX_REQUIREMENTS_PER_EXPERIMENT = 256
 MAX_TIMEOUT_SECONDS = 3_600
-EXPERIMENT_ENGINE_VERSION = 1
+# Version 2 prevents resuming checkpoints measured before the numerical audit fixes.
+EXPERIMENT_ENGINE_VERSION = 2
 
 
 def _netlist_filename(filename: str) -> str:
@@ -2023,7 +2024,7 @@ class ExperimentJobManager:
             if not isinstance(definition, dict):
                 raise ValueError("experiment definition is missing")
             if manifest.get("engine_version") != EXPERIMENT_ENGINE_VERSION:
-                raise ValueError("experiment engine version is not supported")
+                raise ValueError("experiment engine version is not supported; define a new experiment to avoid mixing calculation versions")
             if manifest.get("definition_hash") != _definition_hash(definition):
                 raise ValueError("experiment definition hash does not match")
             analyses = definition["waveform_analyses"]

@@ -14,6 +14,23 @@ from support import TemporaryRunsTestCase
 
 
 class ExperimentReportTests(TemporaryRunsTestCase):
+    def test_report_accepts_an_explicit_asset_workspace_for_external_evidence(self) -> None:
+        assets = self.root / "assets-workspace"
+        assets.mkdir()
+        (assets / "schematic.png").write_bytes(b"test image bytes")
+        with patch.object(experiment_report.raw_parser, "parse_raw", return_value=self._raw_data()):
+            result = experiment_report.build_experiment_report(
+                self.runs, self.experiment_id, {"schematic_path": "schematic.png"},
+                workspace_root=assets,
+            )
+        self.assertIn("data:image/png;base64,", Path(result["report_html"]).read_text())
+        with self.assertRaisesRegex(ValueError, "inside the selected workspace"):
+            experiment_report.build_experiment_report(
+                self.runs, self.experiment_id, {"schematic_path": "../outside.png"},
+                workspace_root=assets,
+            )
+
+
     def setUp(self) -> None:
         super().setUp()
         self.runs.mkdir()

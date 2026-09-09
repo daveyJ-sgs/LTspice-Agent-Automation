@@ -176,6 +176,17 @@ class JobManager:
 class SimulationHandler(BaseHTTPRequestHandler):
     server_version = "LTspiceAutomation/1.1"
 
+    def _authorize_local_request(self) -> bool:
+        host = self.headers.get("Host", "")
+        origin = self.headers.get("Origin")
+        if (
+            re.fullmatch(r"(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?", host) is None
+            or (origin is not None and origin != f"http://{host}")
+        ):
+            _json_response(self, HTTPStatus.FORBIDDEN, {"error": "request must use a local host and origin"})
+            return False
+        return True
+
     @property
     def manager(self) -> JobManager:
         return self.server.job_manager  # type: ignore[attr-defined]
@@ -184,6 +195,8 @@ class SimulationHandler(BaseHTTPRequestHandler):
         print(f"[{self.log_date_time_string()}] {format % args}")
 
     def do_GET(self) -> None:  # noqa: N802
+        if not self._authorize_local_request():
+            return
         path = urlparse(self.path).path
         if path == "/health":
             _json_response(self, HTTPStatus.OK, {"status": "ok", "workers": self.manager.workers})
@@ -246,6 +259,8 @@ class SimulationHandler(BaseHTTPRequestHandler):
             return None
 
     def do_POST(self) -> None:  # noqa: N802
+        if not self._authorize_local_request():
+            return
         path = urlparse(self.path).path
         if path not in ("/simulate", "/simulate/async"):
             _json_response(self, HTTPStatus.NOT_FOUND, {"error": "unknown endpoint"})

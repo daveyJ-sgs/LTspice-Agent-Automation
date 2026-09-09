@@ -9,6 +9,20 @@ from waveform_metrics import evaluate_requirement, measure_metric
 
 
 class WaveformMetricTests(unittest.TestCase):
+    def test_time_weighted_mean_and_rms_are_invariant_to_ramp_sampling(self) -> None:
+        for axis in ([0, 1], [0, .01, .02, 1], [0, .5, 1]):
+            with self.subTest(axis=axis):
+                self.assertAlmostEqual(measure_metric(axis, axis, "mean").value, .5)
+                self.assertAlmostEqual(measure_metric(axis, axis, "rms").value, math.sqrt(1 / 3))
+                self.assertAlmostEqual(measure_metric(axis, axis, "mean", window_start=.1, window_end=.9).value, .5)
+        self.assertAlmostEqual(measure_metric([0, 1], [-1, 1], "rms").value, math.sqrt(1 / 3))
+        self.assertEqual(measure_metric([0, 1], [0, 0], "rms").value, 0)
+        for metric in ("mean", "rms"):
+            for axis, values in (([0], [1]), ([0, 0], [1, 1]), ([1, 0], [1, 0])):
+                with self.subTest(metric=metric, axis=axis), self.assertRaises(ValueError):
+                    measure_metric(axis, values, metric)
+
+
     def test_registry_is_complete_and_routes_metric_parameters(self) -> None:
         self.assertEqual(
             set(waveform_metrics._METRIC_REGISTRY),
@@ -62,7 +76,7 @@ class WaveformMetricTests(unittest.TestCase):
         self.assertEqual((minimum.value, minimum.evidence["index"]), (0.0, 0))
         self.assertEqual((maximum.value, maximum.evidence["index"]), (4.0, 4))
         self.assertEqual(mean.value, 2.0)
-        self.assertAlmostEqual(rms.value, math.sqrt(6.0))
+        self.assertAlmostEqual(rms.value, 4 / math.sqrt(3.0))
         self.assertEqual(peak_to_peak.value, 4.0)
         self.assertEqual(peak_to_peak.unit, "V")
 

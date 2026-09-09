@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import uuid
 from pathlib import Path
 
 import study_recipe
@@ -76,7 +77,7 @@ def _project_summary(directory: Path, root: Path) -> dict[str, object] | None:
         "valid": True,
     }
     try:
-        recipe = json.loads(recipe_file.read_text(encoding="utf-8"))
+        recipe = study_recipe.load_study_recipe(recipe_file)
         if isinstance(recipe, dict):
             if isinstance(recipe.get("name"), str):
                 summary["name"] = recipe["name"]
@@ -118,10 +119,7 @@ def project_recipe(workspace_root: Path, slug: object) -> dict[str, object]:
     recipe_file = _first_recipe_file(directory)
     if recipe_file is None:
         raise FileNotFoundError(f"project '{slug}' has no recipe file")
-    recipe = json.loads(recipe_file.read_text(encoding="utf-8"))
-    if not isinstance(recipe, dict):
-        raise ValueError(f"project '{slug}' recipe is not a JSON object")
-    return recipe
+    return study_recipe.load_study_recipe(recipe_file)
 
 
 def save_project_recipe(
@@ -143,14 +141,18 @@ def save_project_recipe(
         raise FileNotFoundError(f"project '{slug}' has no recipe file")
     if not isinstance(recipe, dict):
         raise ValueError("recipe must be a JSON object")
-    text = json.dumps(recipe, indent=2) + "\n"
+    text = json.dumps(recipe, indent=2, allow_nan=False) + "\n"
     if len(text.encode("utf-8")) > study_recipe.MAX_RECIPE_BYTES:
         raise ValueError(
             f"recipe is limited to {study_recipe.MAX_RECIPE_BYTES} bytes"
         )
-    temporary = recipe_file.with_name(f".{recipe_file.name}.tmp")
-    temporary.write_text(text, encoding="utf-8")
-    os.replace(temporary, recipe_file)
+    temporary = recipe_file.with_name(f".{recipe_file.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(temporary, recipe_file)
+    finally:
+        temporary.unlink(missing_ok=True)
     summary = _project_summary(directory, workspace_root.resolve(strict=True))
     assert summary is not None
     return summary
@@ -165,7 +167,7 @@ def list_projects(workspace_root: Path) -> list[dict[str, object]]:
             not entry.is_dir()
             or entry.is_symlink()
             or entry.name.startswith(".")
-            or entry.name in RESERVED_NAMES
+            or entry.name.casefold() in RESERVED_NAMES
         ):
             continue
         summary = _project_summary(entry, root)
@@ -286,7 +288,9 @@ def delete_project(workspace_root: Path, slug: object) -> None:
     depth -- the UI never lists runs/ or examples/ as a project to delete,
     but this keeps a stray or crafted request from ever reaching them.
     """
-    if isinstance(slug, str) and slug in RESERVED_NAMES:
+    if isinstance(slug, str) and (slug.casefold() in RESERVED_NAMES or slug.startswith(".")):
         raise ValueError(f"'{slug}' is a reserved name and cannot be deleted")
     directory = _project_directory(workspace_root, slug)
+    if _first_recipe_file(directory) is None:
+        raise ValueError("only a project containing a recipe file can be deleted")
     shutil.rmtree(directory)

@@ -172,7 +172,7 @@ make mixed-signal-daq
 
 The AC contract checks passband gain, cutoff, and peaking. The transient
 contract checks front-end settling, full-resolution track error, and hold
-droop. Each run emits yield, Wilson intervals, worst evidenced cases, global
+droop. Each run emits yield, sampling-appropriate confidence information, worst evidenced cases, global
 sensitivity, and interactive offline HTML. Reports place the schematic,
 plain-language circuit and simulation context, and plots first; complete
 parameters and evidence remain in a collapsed appendix.
