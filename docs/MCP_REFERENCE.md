@@ -9,6 +9,27 @@ The MCP server keeps LTspice as the numerical simulation engine while adding
 deterministic experiment definitions, structured evidence, statistical and
 optimization studies, durable orchestration, and portable human-facing reports.
 
+MCP simulations disable LTspice waveform compression by adding
+`.options plotwinsize=0` after the staged netlist's title, before existing
+options or includes (LTspice uses the first option value). This applies to
+individual runs, native batches, System Builder, optimization, and statistical
+qualification. Source files are preserved. The executed netlist bytes determine
+the simulation cache key, and `run_manifest.json` records
+`disable_compression: true`. Uncompressed RAW files can be larger; existing
+artifact limits still apply. Adaptive time steps still require time-weighted
+mean/RMS calculations.
+
+Direct Python wrapper callers can request the same behavior with
+`ltspice_wrapper.run_netlist(path, disable_compression=True)`, or use
+`python ltspice_wrapper.py circuit.cir --disable-compression`. The direct wrapper
+defaults to preserving the deck's compression settings.
+
+Durable engine version 3 prevents unfinished jobs from versions 1 or 2 from
+mixing old measurements with uncompressed runs. Define a new experiment for
+those jobs; completed historical evidence remains readable. See the
+[compression qualification record](COMPRESSION_QUALIFICATION.md) for the
+cross-platform discrepancy and validation.
+
 ## Tool inventory
 
 `mcp_server.py` currently exposes:

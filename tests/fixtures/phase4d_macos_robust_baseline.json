@@ -1,6 +1,6 @@
 {
-  "portability_signature": "d2a7ece159a854830ca596cfe2a36f9eda95dfb9ec768207598f53ddf71c557e",
-  "selected_finalist": "refined-finalist",
+  "portability_signature": "9076eee2d9dd180e2e9797f3a476b247f29170b25bafdf4af39c4c13ae4a4e49",
+  "selected_finalist": "coarse-winner",
   "finalists": [
     {
       "label": "coarse-winner",
@@ -8,7 +8,7 @@
         "CAA1": "8.2e-11",
         "CAA2": "8.2e-11",
         "RAA1": "1e+3",
-        "ROUT": "65"
+        "ROUT": "35"
       },
       "complete_evidence": true,
       "corner_results": [
@@ -45,28 +45,28 @@
           "analysis": "analog_performance",
           "metric": "ac_gain_db",
           "operator": ">=",
-          "value": 3.9813319276764134
+          "value": 3.981618267575754
         },
         {
           "experiment": "ac",
           "analysis": "analog_performance",
           "metric": "ac_gain_db",
           "operator": "<=",
-          "value": -23.86661279305454
+          "value": -23.7631354285248
         },
         {
           "experiment": "ac",
           "analysis": "analog_performance",
           "metric": "cutoff_frequency",
           "operator": ">=",
-          "value": 1116540.800358047
+          "value": 1116936.2872528082
         },
         {
           "experiment": "ac",
           "analysis": "analog_performance",
           "metric": "cutoff_frequency",
           "operator": "<=",
-          "value": 1327590.7562041525
+          "value": 1328079.6984692279
         },
         {
           "experiment": "ac",
@@ -80,28 +80,28 @@
           "analysis": "frontend_settling",
           "metric": "settling_time",
           "operator": "<=",
-          "value": 1.081885130734353e-06
+          "value": 1.05272050143457e-06
         },
         {
           "experiment": "transient",
           "analysis": "hold_droop",
           "metric": "ripple",
           "operator": "<=",
-          "value": 0.0015654549566543885
+          "value": 0.0015654563903813035
         },
         {
           "experiment": "transient",
           "analysis": "track_error",
           "metric": "maximum",
           "operator": "<=",
-          "value": -7.627651614939945e-05
+          "value": -7.319651922443899e-05
         },
         {
           "experiment": "transient",
           "analysis": "track_error",
           "metric": "minimum",
           "operator": ">=",
-          "value": -0.0006793968959062981
+          "value": -0.0006332000155172159
         }
       ]
     },
@@ -109,8 +109,8 @@
       "label": "refined-finalist",
       "parameters": {
         "CAA1": "8.2e-11",
-        "CAA2": "1e-10",
-        "RAA1": "8.2e+2",
+        "CAA2": "8.2e-11",
+        "RAA1": "1e+3",
         "ROUT": "5e+1"
       },
       "complete_evidence": true,
@@ -125,8 +125,8 @@
           },
           "evaluated": 32,
           "invalid": 0,
-          "observed_yield": 1.0,
-          "passed": 32
+          "observed_yield": 0.9375,
+          "passed": 30
         },
         {
           "confidence_high": null,
@@ -138,8 +138,8 @@
           },
           "evaluated": 32,
           "invalid": 0,
-          "observed_yield": 1.0,
-          "passed": 32
+          "observed_yield": 0.9375,
+          "passed": 30
         }
       ],
       "worst_requirements": [
@@ -148,28 +148,28 @@
           "analysis": "analog_performance",
           "metric": "ac_gain_db",
           "operator": ">=",
-          "value": 3.979577527613165
+          "value": 3.9814761829803946
         },
         {
           "experiment": "ac",
           "analysis": "analog_performance",
           "metric": "ac_gain_db",
           "operator": "<=",
-          "value": -23.920342290579704
+          "value": -23.807432784164224
         },
         {
           "experiment": "ac",
           "analysis": "analog_performance",
           "metric": "cutoff_frequency",
           "operator": ">=",
-          "value": 1101861.842466212
+          "value": 1116768.0958354173
         },
         {
           "experiment": "ac",
           "analysis": "analog_performance",
           "metric": "cutoff_frequency",
           "operator": "<=",
-          "value": 1286843.6530128287
+          "value": 1327871.75840183
         },
         {
           "experiment": "ac",
@@ -183,28 +183,28 @@
           "analysis": "frontend_settling",
           "metric": "settling_time",
           "operator": "<=",
-          "value": 1.0946649651384405e-06
+          "value": 1.0564875586568662e-06
         },
         {
           "experiment": "transient",
           "analysis": "hold_droop",
           "metric": "ripple",
           "operator": "<=",
-          "value": 0.0015648290885414973
+          "value": 0.0015654563903808594
         },
         {
           "experiment": "transient",
           "analysis": "track_error",
           "metric": "maximum",
           "operator": "<=",
-          "value": -0.00010217216957885557
+          "value": -7.462339999619889e-05
         },
         {
           "experiment": "transient",
           "analysis": "track_error",
           "metric": "minimum",
           "operator": ">=",
-          "value": -0.000708718449231705
+          "value": -0.0006520492404452856
         }
       ]
     }

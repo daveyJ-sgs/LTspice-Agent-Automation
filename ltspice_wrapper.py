@@ -606,10 +606,13 @@ def run_netlist(
     ascii_raw: bool = False,
     reuse_cache: bool = False,
     cache_dir: Path | None = None,
+    disable_compression: bool = False,
 ) -> Path:
     """Run one netlist and return the directory containing LTspice outputs."""
     if not isinstance(reuse_cache, bool):
         raise ValueError("reuse_cache must be a boolean")
+    if not isinstance(disable_compression, bool):
+        raise ValueError("disable_compression must be a boolean")
     if not LTSPICE.is_file():
         raise FileNotFoundError(f"LTspice executable not found: {LTSPICE}")
 
@@ -628,6 +631,13 @@ def run_netlist(
 
     run_netlist_path = output_dir / netlist_path.name
     _stage_netlist(netlist_path, run_netlist_path)
+    if disable_compression:
+        text = run_netlist_path.read_text(encoding="utf-8")
+        # LTspice keeps the first option value. Put the override after the title,
+        # ahead of deck options and includes that could set plotwinsize.
+        title, _, body = text.partition("\n")
+        text = title + "\n.options plotwinsize=0\n" + body
+        run_netlist_path.write_text(text, encoding="utf-8", newline="\n")
     manifest_path = output_dir / "run_manifest.json"
     started_at = datetime.now().astimezone()
     started_clock = time.monotonic()
@@ -649,6 +659,7 @@ def run_netlist(
         "working_directory": str(output_dir),
         "timeout_seconds": timeout_seconds,
         "ascii_raw": ascii_raw,
+        "disable_compression": disable_compression,
         "cache": {
             "requested": reuse_cache,
             "eligible": False,
@@ -958,9 +969,17 @@ def main() -> None:
         action="store_true",
         help="Ask LTspice for an ASCII raw file; useful for transient decoding.",
     )
+    parser.add_argument(
+        "--disable-compression",
+        action="store_true",
+        help="Preserve all saved time steps with .options plotwinsize=0.",
+    )
     args = parser.parse_args()
 
-    output_dir = run_netlist(args.netlist, args.output_dir, args.timeout, args.ascii)
+    output_dir = run_netlist(
+        args.netlist, args.output_dir, args.timeout, args.ascii,
+        disable_compression=args.disable_compression,
+    )
     print(f"Simulation complete: {output_dir}")
     for artifact in sorted(output_dir.iterdir()):
         print(f"  {artifact.name}")

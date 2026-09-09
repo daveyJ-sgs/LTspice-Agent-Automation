@@ -41,6 +41,9 @@ def _require_child(name: str, child: dict[str, object], evidence_dir: Path) -> d
             f"{name} evidence is incomplete: {raw_count} RAW, "
             f"{manifest_count} run manifests"
         )
+    for path in experiment_dir.glob("point-*/attempt-*/run_manifest.json"):
+        if json.loads(path.read_text(encoding="utf-8")).get("disable_compression") is not True:
+            raise AssertionError(f"{name} run did not disable waveform compression: {path}")
     return {
         "experiment_id": child["experiment_id"],
         "experiment_relative_path": str(experiment_dir.relative_to(evidence_dir)),

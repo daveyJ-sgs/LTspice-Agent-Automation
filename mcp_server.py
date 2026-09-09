@@ -247,6 +247,7 @@ def _run_netlist_text(
             ascii_raw=ascii_raw,
             reuse_cache=reuse_cache,
             cache_dir=_simulation_cache_dir() if reuse_cache else None,
+            disable_compression=True,
         )
 
 
@@ -615,6 +616,7 @@ def run_netlist_file(
         ascii_raw=ascii_raw,
         reuse_cache=reuse_cache,
         cache_dir=_simulation_cache_dir() if reuse_cache else None,
+        disable_compression=True,
     )
     return _summarize_run(result_dir)
 

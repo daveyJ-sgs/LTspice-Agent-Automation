@@ -302,6 +302,36 @@ class AutomationTests(unittest.TestCase):
 
             self.assertIsNone(validated)
 
+    def test_compression_control_stages_utf16_decks_without_changing_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            executable = root / "LTspice.exe"
+            executable.write_bytes(b"simulator")
+            for ending in (".END ; done\n", ""):
+                source = root / "input.cir"
+                original = ("* title\n.options plotwinsize=300\nV1 in 0 1\n" + ending).encode("utf-16")
+                source.write_bytes(original)
+                output = root / ("with-end" if ending else "without-end")
+
+                def simulate(command, **kwargs):
+                    staged = Path(command[-1])
+                    text = staged.read_text(encoding="utf-8")
+                    self.assertIn(".options plotwinsize=300\n", text)
+                    self.assertTrue(text.startswith("* title\n.options plotwinsize=0\n.options plotwinsize=300\n"))
+                    self.assertTrue(text.endswith(ending))
+                    staged.with_suffix(".log").write_text("gain=1\n", encoding="utf-8")
+                    return subprocess.CompletedProcess(command, 0, "", "")
+
+                with patch.object(ltspice_wrapper, "LTSPICE", executable), patch.object(
+                    ltspice_wrapper.subprocess, "run", side_effect=simulate
+                ):
+                    run_netlist(source, output, disable_compression=True)
+                self.assertEqual(source.read_bytes(), original)
+                manifest = json.loads((output / "run_manifest.json").read_text())
+                self.assertTrue(manifest["disable_compression"])
+            with self.assertRaisesRegex(ValueError, "disable_compression"):
+                run_netlist(source, disable_compression="yes")
+
     def test_simulation_cache_reuses_verified_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -340,9 +370,18 @@ class AutomationTests(unittest.TestCase):
                     cache_dir=cache,
                 )
 
+                uncompressed = run_netlist(
+                    source, root / "uncompressed", reuse_cache=True,
+                    cache_dir=cache, disable_compression=True,
+                )
+                repeated = run_netlist(
+                    source, root / "repeated", reuse_cache=True,
+                    cache_dir=cache, disable_compression=True,
+                )
+
             first_manifest = json.loads((first / "run_manifest.json").read_text())
             second_manifest = json.loads((second / "run_manifest.json").read_text())
-            self.assertEqual(calls, 1)
+            self.assertEqual(calls, 2)
             self.assertFalse(first_manifest["cache"]["hit"])
             self.assertTrue(first_manifest["cache"]["stored"])
             self.assertEqual(first_manifest["execution_source"], "simulator")
@@ -353,6 +392,12 @@ class AutomationTests(unittest.TestCase):
             self.assertEqual(
                 first_manifest["cache"]["key"], second_manifest["cache"]["key"]
             )
+
+            new_manifest = json.loads((uncompressed / "run_manifest.json").read_text())
+            repeated_manifest = json.loads((repeated / "run_manifest.json").read_text())
+            self.assertNotEqual(first_manifest["cache"]["key"], new_manifest["cache"]["key"])
+            self.assertFalse(new_manifest["cache"]["hit"])
+            self.assertTrue(repeated_manifest["cache"]["hit"])
 
     def test_simulation_cache_invalidates_changed_inputs_and_dependencies(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

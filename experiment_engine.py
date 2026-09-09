@@ -29,7 +29,7 @@ MAX_WAVEFORM_ANALYSES = 32
 MAX_REQUIREMENTS_PER_EXPERIMENT = 256
 MAX_TIMEOUT_SECONDS = 3_600
 # Version 2 prevents resuming checkpoints measured before the numerical audit fixes.
-EXPERIMENT_ENGINE_VERSION = 2
+EXPERIMENT_ENGINE_VERSION = 3
 
 
 def _netlist_filename(filename: str) -> str:

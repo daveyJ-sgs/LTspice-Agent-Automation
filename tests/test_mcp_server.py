@@ -40,6 +40,14 @@ class MCPServerTests(TemporaryRunsTestCase):
         self.examples_patch.stop()
         self.runs_patch.stop()
 
+    def test_simulation_entry_points_disable_compression(self) -> None:
+        with patch.object(mcp_server.wrapper, "run_netlist", return_value=self.runs) as run:
+            mcp_server._run_netlist_text("* circuit\n.end\n", "test.cir", False, 30, self.runs)
+            self.assertTrue(run.call_args.kwargs["disable_compression"])
+            with patch.object(mcp_server, "_summarize_run", return_value={}):
+                mcp_server.run_netlist_file(str(self.examples / "test.cir"))
+            self.assertTrue(run.call_args.kwargs["disable_compression"])
+
     def test_experiment_timeout_has_a_finite_upper_bound(self) -> None:
         mcp_server._validate_timeout(mcp_server.experiment_engine.MAX_TIMEOUT_SECONDS)
         for value in (0, True, mcp_server.experiment_engine.MAX_TIMEOUT_SECONDS + 1):
@@ -4243,23 +4251,24 @@ class MCPServerTests(TemporaryRunsTestCase):
         self.assertIn("engine version", finished["error"])
 
     def test_recovery_rejects_jobs_from_before_numerical_corrections(self) -> None:
-        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
-        defined = manager.define("R1 in out {R}\n.end\n",
-                                 [{"name": "R", "values": ["1k"]}], max_concurrency=1)
-        manager.shutdown()
-        path = Path(defined["manifest"])
-        manifest = json.loads(path.read_text())
-        manifest.update(status="running", engine_version=1)
-        mcp_server._write_json(path, manifest)
-        with patch.object(mcp_server, "_execute_experiment_point") as execute:
-            recovered = mcp_server.ExperimentJobManager(self.runs, workers=1)
-            try:
-                finished = recovered.wait(defined["experiment_id"])
-            finally:
-                recovered.shutdown()
-        self.assertEqual(finished["status"], "failed")
-        self.assertIn("engine version", finished["error"])
-        execute.assert_not_called()
+        for version in (1, 2):
+            manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+            defined = manager.define("R1 in out {R}\n.end\n",
+                                     [{"name": "R", "values": ["1k"]}], max_concurrency=1)
+            manager.shutdown()
+            path = Path(defined["manifest"])
+            manifest = json.loads(path.read_text())
+            manifest.update(status="running", engine_version=version)
+            mcp_server._write_json(path, manifest)
+            with patch.object(mcp_server, "_execute_experiment_point") as execute:
+                recovered = mcp_server.ExperimentJobManager(self.runs, workers=1)
+                try:
+                    finished = recovered.wait(defined["experiment_id"])
+                finally:
+                    recovered.shutdown()
+            self.assertEqual(finished["status"], "failed")
+            self.assertIn("engine version", finished["error"])
+            execute.assert_not_called()
 
     def test_coordinator_continues_after_one_job_crashes(self) -> None:
         manager = mcp_server.ExperimentJobManager(self.runs, workers=1)

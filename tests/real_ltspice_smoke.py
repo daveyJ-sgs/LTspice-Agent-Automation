@@ -24,6 +24,7 @@ def main() -> None:
         PROJECT_DIR / "examples" / "rc_lowpass.cir",
         output_dir=evidence_dir,
         timeout_seconds=30,
+        disable_compression=True,
     )
     raw = parse_raw(output_dir / "rc_lowpass.raw")
     measurements = parse_measurements(output_dir / "rc_lowpass.log")
@@ -46,6 +47,22 @@ def main() -> None:
     manifest = json.loads(
         (output_dir / "run_manifest.json").read_text(encoding="utf-8")
     )
+    probe = output_dir / "compression-probe.cir"
+    probe.write_text(
+        "* Verify compression override precedence\n"
+        ".options plotwinsize=300\n"
+        "V1 in 0 PULSE(0 1 0.1u 1n 1n 10u 20u)\n"
+        "R1 in out 1k\nC1 out 0 100p\n.tran 0 2u 0 1n\n.end\n",
+        encoding="utf-8",
+    )
+    probe_dir = run_netlist(
+        probe, output_dir / "compression-probe", disable_compression=True,
+    )
+    probe_raw = parse_raw(probe_dir / "compression-probe.raw")
+    times = probe_raw.values["time"]
+    largest_gap = max(b - a for a, b in zip(times, times[1:]))
+    if probe_raw.points < 2000 or largest_gap > 1.01e-9:
+        raise AssertionError("compression override did not preserve the 1 ns time steps")
     summary = {
         "platform": platform.platform(),
         "python": platform.python_version(),
@@ -54,6 +71,8 @@ def main() -> None:
         "raw_points": raw.points,
         "gain_at_1k_db": gain_at_1k,
         "cutoff_frequency_hz": cutoff.value,
+        "compression_probe_points": probe_raw.points,
+        "compression_probe_maximum_gap_seconds": largest_gap,
     }
     (output_dir / "smoke_summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True, allow_nan=False) + "\n",

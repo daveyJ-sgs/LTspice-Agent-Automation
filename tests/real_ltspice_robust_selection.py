@@ -46,6 +46,9 @@ def _evidence_count(experiment_id: str, evidence_dir: Path) -> dict[str, object]
             f"incomplete robust evidence for {experiment_id}: "
             f"{raw_files} RAW, {run_manifests} manifests"
         )
+    for path in experiment_dir.glob("point-*/**/run_manifest.json"):
+        if json.loads(path.read_text(encoding="utf-8")).get("disable_compression") is not True:
+            raise AssertionError(f"qualification run did not disable waveform compression: {path}")
     return {
         "experiment_id": experiment_id,
         "raw_files": raw_files,
