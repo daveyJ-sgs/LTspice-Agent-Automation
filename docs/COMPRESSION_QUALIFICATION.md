@@ -61,6 +61,19 @@ The controlled investigation is under
 `/private/tmp/ltspice-discrepancy-uncompressed`.
 These are temporary local evidence directories, not committed run data.
 
-Remote acceptance is checked by the automatic macOS/Windows Tests matrix and
-manual Real LTspice Windows qualification. Final run results are recorded below
-once completed. Packaged executable builds are outside this qualification.
+Remote acceptance passed on implementation commit `777c1d5`:
+
+- [Tests 34357073649](https://github.com/daveyJ-sgs/LTspice-Agent-Automation/actions/runs/34357073649):
+  both macOS and Windows passed, including Windows MCP stdio and launcher checks.
+- [Real LTspice Windows qualification 34357107794](https://github.com/daveyJ-sgs/LTspice-Agent-Automation/actions/runs/34357107794):
+  schematic capture, compression override probe, RC smoke, full DAQ study,
+  optimization, and paired finalist qualification all passed with LTspice 26.0.2.
+  The override probe saved 2,023 points and preserved its 1 ns maximum gap.
+  Optimization selected candidate 2 with zero exact/objective mismatches.
+  Finalist qualification selected `coarse-winner` with zero exact/numeric
+  mismatches. The workflow retained its simulation evidence as a GitHub artifact.
+
+This resolves the compression-related platform discrepancy. Tolerances do not
+guarantee identical decisions for every possible circuit; continue checking
+exact decisions when qualifying other studies. Packaged executable builds are
+outside this qualification.
