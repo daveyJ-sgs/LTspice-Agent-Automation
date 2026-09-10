@@ -815,8 +815,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Skip when the workspace is this repo checkout itself (the default for
-    # both launchers when run with no --workspace) -- seeding would write
+    # Skip when the workspace is this repo checkout itself -- seeding would write
     # example-project files straight into the tracked working tree. Any real
     # workspace (a fresh --workspace elsewhere, or the packaged app's default
     # Documents folder) gets the starter projects so first launch never shows

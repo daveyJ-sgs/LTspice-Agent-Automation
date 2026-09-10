@@ -11,30 +11,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class WindowsBundleTests(unittest.TestCase):
-    def test_default_workspace_is_seeded_without_overwriting_files(self) -> None:
+    def test_default_workspace_starts_empty_without_copying_daq_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             profile = Path(directory)
             with mock.patch.dict("os.environ", {"USERPROFILE": str(profile)}):
                 arguments = system_builder_windows.packaged_arguments(["--no-browser"])
-
-            workspace = profile / "Documents" / system_builder_windows.WORKSPACE_NAME
-            self.assertEqual(arguments[:2], ["--workspace", str(workspace)])
-            for relative in system_builder_windows.STARTER_FILES:
-                self.assertEqual(
-                    (workspace / relative).read_bytes(),
-                    (ROOT / relative).read_bytes(),
-                )
-
-            protected = workspace / system_builder_windows.STARTER_FILES[0]
-            protected.write_text("user edit\n", encoding="utf-8")
-            system_builder_windows.seed_workspace(workspace, ROOT)
-            self.assertEqual(protected.read_text(encoding="utf-8"), "user edit\n")
+                workspace = profile / "Documents" / system_builder_windows.WORKSPACE_NAME
+                self.assertEqual(arguments[:2], ["--workspace", str(workspace)])
+                self.assertEqual(list(workspace.iterdir()), [])
+                protected = workspace / "user.cir"
+                protected.write_text("user edit\n", encoding="utf-8")
+                system_builder_windows.packaged_arguments([])
+                self.assertEqual(protected.read_text(encoding="utf-8"), "user edit\n")
 
     def test_explicit_workspace_is_left_untouched(self) -> None:
         arguments = ["--workspace", "C:\\Circuits", "--no-browser"]
-        with mock.patch.object(system_builder_windows, "seed_workspace") as seed:
+        with mock.patch.object(system_builder_windows, "default_workspace") as default:
             self.assertEqual(system_builder_windows.packaged_arguments(arguments), arguments)
-        seed.assert_not_called()
+        default.assert_not_called()
 
     def test_packaging_contract_builds_and_smokes_the_exact_archive(self) -> None:
         workflow = (

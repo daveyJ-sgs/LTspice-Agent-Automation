@@ -242,9 +242,11 @@ no-admin first-start path: it creates a private `.venv`, installs the GUI
 dependencies, finds LTspice at `/Applications/LTspice.app`, and opens System
 Builder in the default browser on a random loopback-only port. Install
 LTspice first with `brew install --cask ltspice`, then launch it once to
-answer its usage-data prompt. Pass `--workspace=/path/to/your/projects` from
-a terminal to point it at your own circuit projects instead of the
-repository's dogfooding examples.
+answer its usage-data prompt. The default workspace is
+`~/Documents/LTspice/projects`, with RC low-pass and three-opamp instrumentation
+amplifier starter projects added without overwriting existing projects. The GUI
+starts empty until you open or create a project. Pass
+`--workspace=/path/to/your/projects` to use another workspace.
 
 ## Tests and quality gates
 

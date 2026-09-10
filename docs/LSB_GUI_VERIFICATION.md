@@ -15,6 +15,16 @@ Verified locally on September 10, 2026 with macOS LTspice 17.2.4.
 - Standalone optimization plan preview still works without execution definitions;
   launching requires them. See WORKFLOWS.md for the explicit qualification schema.
 
+## Mac launcher and blank display follow-up
+
+- The Mac launcher now defaults to `~/Documents/LTspice/projects`, enabling
+  starter project discovery and additive seeding outside the repository.
+- The unloaded schematic panel has no image source and shows neutral text.
+- The Windows packaged launcher no longer copies DAQ netlists or screenshots
+  into new workspaces; common startup still seeds the two starter projects.
+- Browser verification in a fresh workspace confirmed both recipes start null,
+  both starters open with their own variables, and no browser errors occur.
+
 ## Evidence
 
 - 426 tests passed; configured Ruff and mypy checks passed.

@@ -119,6 +119,14 @@ class SystemBuilderTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
 
+    def test_unloaded_page_has_no_daq_schematic_or_circuit_details(self) -> None:
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('id="schematic-preview" hidden', response.text)
+        self.assertIn('id="circuit-title">No project open</h3>', response.text)
+        self.assertNotIn('/assets/daq-schematic.png', response.text)
+        self.assertNotIn('1 MHz acquisition channel', response.text)
+
     def _headers(self, origin: str = "http://testserver") -> dict[str, str]:
         return {
             "origin": origin,

@@ -11,7 +11,7 @@ set -eo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_ROOT"
 
-WORKSPACE="$PROJECT_ROOT"
+WORKSPACE="$HOME/Documents/LTspice/projects"
 NO_BROWSER_FLAG=""
 for arg in "$@"; do
     case "$arg" in
