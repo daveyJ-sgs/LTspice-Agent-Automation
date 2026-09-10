@@ -145,16 +145,24 @@ worked RC low-pass and instrumentation-amplifier examples.
   <a href="docs/images/system-builder-welcome.png"><img src="docs/images/system-builder-welcome.png" width="1100" alt="LTspice System Builder Projects screen showing the RC low-pass and three-opamp instrumentation amplifier starter projects"></a>
 </p>
 
-The Projects screen offers two seeded examples. Open either starter or create
-your own project; no circuit is loaded automatically.
+The Projects screen offers two seeded examples in external workspaces. Open
+either starter or create your own project; no circuit is loaded automatically.
 
-```bash
-make system-builder
-```
+To launch the GUI:
 
-On Windows, skip that command — `make` is not a standard Windows tool — and
-use `.\Start-SystemBuilder.cmd` instead; see the
-[Windows guide](docs/WINDOWS.md) below.
+- **macOS:** double-click `Start-SystemBuilder.command`, or run
+  `./Start-SystemBuilder.command` from the repository. It opens
+  `~/Documents/LTspice/projects` and adds both starters if missing.
+- **Windows packaged app:** launch the downloaded application as described in
+  the [Windows guide](docs/WINDOWS.md). Its default workspace is
+  `%USERPROFILE%\Documents\LTspice System Builder Workspace`, with both starters.
+- **Windows source checkout:** double-click `Start-SystemBuilder.cmd`, or run
+  `.\Start-SystemBuilder.cmd`. This defaults to the repository workspace, where
+  starters are not seeded. To get them, create an external project folder and
+  run `.\Start-SystemBuilder.cmd -Workspace "C:\path\to\your\projects"`.
+
+The developer command `make system-builder` also defaults to the repository
+workspace; use the Mac launcher above for the starter-project experience.
 
 The application opens on a random loopback-only `127.0.0.1` port. It supports
 durable statistical and optimization jobs, cancel/resume recovery, native
@@ -222,15 +230,17 @@ should be exposed only to trusted clients.
 ## Windows
 
 Windows is a first-class target. Install LTspice with `winget`, launch it once
-to answer its usage-data prompt, and use `make PYTHON=python test` to avoid the
-Microsoft Store `python3` alias. The wrapper discovers the standard winget and
+to answer its usage-data prompt, and use `python -m unittest discover -s tests -v`
+to run tests without requiring `make` or the Microsoft Store `python3` alias.
+The wrapper discovers the standard winget and
 Program Files locations.
 
 After cloning the repository, `Start-SystemBuilder.cmd` provides the no-admin
 first-start path: it creates the private Python environment, installs GUI
 dependencies, diagnoses LTspice discovery, and opens the local interface. Pass
-`-Workspace 'C:\path\to\your\projects'` to point it at your own circuit
-projects instead of the repository's dogfooding examples — `.cmd` forwards
+`-Workspace "C:\path\to\your\projects"` to point it at an existing external
+project folder and seed the two starters. Without this option it uses the
+repository workspace and skips seeding. The `.cmd` launcher forwards
 its arguments straight through to the underlying `.ps1`, so this works from
 `cmd.exe`, PowerShell, or a double-click-launched shortcut with arguments.
 
