@@ -141,6 +141,13 @@ separate explicit acknowledgement. Its project workbench can create, open,
 save, and delete circuit projects; import or edit netlists; and start from
 worked RC low-pass and instrumentation-amplifier examples.
 
+<p align="center">
+  <a href="docs/images/system-builder-welcome.png"><img src="docs/images/system-builder-welcome.png" width="1100" alt="LTspice System Builder Projects screen showing the RC low-pass and three-opamp instrumentation amplifier starter projects"></a>
+</p>
+
+The Projects screen offers two seeded examples. Open either starter or create
+your own project; no circuit is loaded automatically.
+
 ```bash
 make system-builder
 ```
