@@ -254,6 +254,10 @@ workflow invocation, and verified cross-platform qualification results.
 
 ## macOS
 
+For a native app icon in Finder and the Dock, build the
+[macOS app launcher](packaging/macos/README.md). It uses the existing checkout
+and Python environment and opens the GUI without a Terminal window.
+
 Double-click `Start-SystemBuilder.command` (or run it from a terminal) for the
 no-admin first-start path: it creates a private `.venv`, installs the GUI
 dependencies, finds LTspice at `/Applications/LTspice.app`, and opens System
