@@ -326,6 +326,12 @@ class SystemBuilderTests(unittest.TestCase):
             recipe = client.get(
                 "/api/examples/mixed-signal-daq-optimization"
             ).json()
+            # Serialized recipe paths use forward slashes on every platform.
+            self.assertEqual(
+                recipe["execution"]["study_recipe_path"],
+                "examples/mixed_signal_daq.ltstudy.json",
+            )
+            self.assertFalse((workspace / recipe["execution"]["study_recipe_path"]).exists())
             preview = client.post(
                 "/api/optimization/preview", json=recipe, headers=self._headers()
             ).json()
@@ -350,7 +356,7 @@ class SystemBuilderTests(unittest.TestCase):
             self.assertEqual(
                 stale.json()["error"]["code"], "optimization_freeze_failed"
             )
-            self.assertEqual(frozen.status_code, 200)
+            self.assertEqual(frozen.status_code, 200, frozen.text)
             self.assertEqual(frozen.json()["plan"]["point_count"], 32)
             self.assertTrue((workspace / frozen.json()["plan"]["artifact"]).is_file())
             self.assertEqual(list((workspace / "runs").glob("optimization-job-*")), [])

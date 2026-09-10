@@ -354,7 +354,7 @@ def create_app(
             candidate = (workspace / recipe_path).resolve()
             # Built-in example recipes are served from the application tree while
             # tests and users may execute them in a temporary workspace.
-            if not candidate.is_file() and recipe_path == str(EXAMPLE_RECIPE.relative_to(PROJECT_ROOT)):
+            if not candidate.is_file() and recipe_path == EXAMPLE_RECIPE.relative_to(PROJECT_ROOT).as_posix():
                 candidate = EXAMPLE_RECIPE
             if not candidate.is_relative_to(workspace) and candidate != EXAMPLE_RECIPE:
                 raise ValueError("study_recipe_path must remain inside the workspace")
