@@ -292,7 +292,7 @@ class SystemBuilderTests(unittest.TestCase):
         result = response.json()
         self.assertTrue(result["valid"])
         self.assertEqual(
-            result["plan"]["plan_id"], "optimization-plan-2b6f2d62d7ca7c14"
+            result["plan"]["plan_id"], "optimization-plan-4ae7eef49dc6494b"
         )
         self.assertEqual(result["plan"]["candidate_count"], 16)
         self.assertEqual(result["plan"]["point_count"], 32)
@@ -367,27 +367,24 @@ class SystemBuilderTests(unittest.TestCase):
             recipe = client.get(
                 "/api/examples/mixed-signal-daq-optimization"
             ).json()
+            recipe["execution"]["study_recipe_path"] = "missing-study.ltstudy.json"
             preview = client.post(
                 "/api/optimization/preview", json=recipe, headers=self._headers()
             ).json()
-            with patch(
-                "examples.optimize_mixed_signal_daq.AC_ANALYSES",
-                [{"name": "wrong_ac_analysis", "signal": "V(afe)"}],
-            ):
-                response = client.post(
-                    "/api/optimization/freeze",
-                    json={
-                        "recipe": recipe,
-                        "expected_recipe_sha256": preview["recipe"]["sha256"],
-                        "expected_plan_id": preview["plan"]["plan_id"],
-                        "expected_point_count": preview["plan"]["point_count"],
-                        "expected_total_run_count": preview["execution"]["total_run_count"],
-                    },
-                    headers=self._headers(),
-                )
+            response = client.post(
+                "/api/optimization/freeze",
+                json={
+                    "recipe": recipe,
+                    "expected_recipe_sha256": preview["recipe"]["sha256"],
+                    "expected_plan_id": preview["plan"]["plan_id"],
+                    "expected_point_count": preview["plan"]["point_count"],
+                    "expected_total_run_count": preview["execution"]["total_run_count"],
+                },
+                headers=self._headers(),
+            )
 
             self.assertEqual(response.status_code, 409)
-            self.assertIn("ac.analog_performance", response.json()["error"]["message"])
+            self.assertIn("study recipe must be a regular file", response.json()["error"]["message"])
             self.assertFalse((workspace / "runs/optimization-plans").exists())
 
     def test_optimization_start_requires_acknowledgement_and_is_idempotent(self) -> None:

@@ -2000,6 +2000,12 @@ async function openProject(project) {
     if (project.kind === "optimization") {
       setCurrentOptimizationProject(project.slug, project.path);
       optimizationRecipe = loaded;
+      invalidateOptimizationLaunch();
+      displayedOptimizationStudy = null;
+      selectedQualificationSource = null;
+      latestQualificationPreview = null;
+      frozenQualificationLaunch = null;
+      byId("optimization-results").hidden = true;
       optimizationDisplayUnits = new WeakMap();
       renderOptimizationEditors();
       await previewOptimization();
@@ -2121,22 +2127,16 @@ async function loadProjects() {
 }
 
 async function loadInitialState() {
-  const [sessionResponse, recipeResponse] = await Promise.all([
-    fetch("/api/session"),
-    fetch("/api/examples/mixed-signal-daq"),
-  ]);
-  if (!sessionResponse.ok || !recipeResponse.ok) throw new Error("Local session could not be established");
+  const sessionResponse = await fetch("/api/session");
+  if (!sessionResponse.ok) throw new Error("Local session could not be established");
   const session = await sessionResponse.json();
-  recipe = await recipeResponse.json();
   variableDisplayUnits = new WeakMap();
   cornerDisplayUnits = new WeakMap();
   invalidateFrozenPlan();
   byId("workspace").textContent = session.workspace;
   byId("workspace").title = session.workspace;
   byId("projects-workspace").textContent = session.workspace;
-  populateRecipeControls();
   await Promise.all([loadSchematicFiles(), loadNetlistFiles()]);
-  await preview();
   await Promise.all([loadHistory(), loadRemoteJobs(), loadProjects(), loadLtspiceStatus()]);
 }
 
@@ -2340,7 +2340,7 @@ byId("save-button").addEventListener("click", async () => {
     const blob = new Blob([`${JSON.stringify(recipe, null, 2)}\n`], {type: "application/json"});
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = "mixed-signal-daq.ltstudy.json";
+    link.download = `${(recipe.name || "study").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "study"}.ltstudy.json`;
     link.click();
     URL.revokeObjectURL(link.href);
     markClean("save-status", (v) => { studyDirty = v; });

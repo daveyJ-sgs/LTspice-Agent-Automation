@@ -192,44 +192,13 @@ def _template_recipe(display_name: str) -> str:
         "schema_version": study_recipe.STUDY_RECIPE_SCHEMA_VERSION,
         "kind": "statistical",
         "name": display_name,
-        "description": "New project: pick a netlist above, then replace this example variable and requirement with your own.",
+        "description": "New project shell: add a netlist, variables, analyses, and requirements to begin.",
         "plan": {
-            "variables": [
-                {
-                    "name": "R_VAL",
-                    "distribution": "gaussian",
-                    "nominal": 1000,
-                    "sigma": 10,
-                    "minimum": 950,
-                    "maximum": 1050,
-                    "unit": "ohm",
-                },
-            ],
+            "variables": [],
             "sample_count": 8,
             "seed": 1,
         },
-        "experiments": [
-            {
-                "name": "ac",
-                "netlist_path": "",
-                "filename": "",
-                "waveform_analyses": [
-                    {
-                        "name": "response",
-                        "variable": "V(out)",
-                        "secondary_variable": "V(in)",
-                        "requirements": [
-                            {
-                                "metric": "ac_gain_db",
-                                "operator": ">=",
-                                "target": -0.5,
-                                "frequency_value": 10,
-                            },
-                        ],
-                    }
-                ],
-            }
-        ],
+        "experiments": [],
         "execution": {"max_concurrency": 2, "reuse_cache": True},
         "report_context": {"title": display_name},
     }

@@ -26,6 +26,7 @@ import project_scaffold
 import qualification_study
 import robust_selection
 import schematic_capture
+import study_recipe
 from github_remote import GitHubRemote
 from study_recipe import (
     MAX_RECIPE_BYTES,
@@ -343,26 +344,53 @@ def create_app(
             "postprocess": postprocess,
         }
 
-    def optimization_experiments() -> tuple[dict[str, dict[str, object]], dict[str, object], str]:
-        from examples.mixed_signal_daq_study import TRANSIENT_ANALYSES
-        from examples.optimize_mixed_signal_daq import AC_ANALYSES
-
-        execution_recipe = load_study_recipe(EXAMPLE_RECIPE)
-        definitions = load_recipe_experiments(execution_recipe, workspace)
-        execution = execution_recipe.get("execution", {})
-        if not isinstance(execution, dict):
-            raise ValueError("optimization execution settings are invalid")
+    def optimization_experiments(recipe: object) -> tuple[dict[str, dict[str, object]], dict[str, object], str]:
+        if not isinstance(recipe, dict) or not isinstance(recipe.get("execution"), dict):
+            raise ValueError("optimization execution definition is missing")
+        execution = recipe["execution"]
+        assert isinstance(execution, dict)
+        recipe_path = execution.get("study_recipe_path")
+        if isinstance(recipe_path, str):
+            candidate = (workspace / recipe_path).resolve()
+            # Built-in example recipes are served from the application tree while
+            # tests and users may execute them in a temporary workspace.
+            if not candidate.is_file() and recipe_path == str(EXAMPLE_RECIPE.relative_to(PROJECT_ROOT)):
+                candidate = EXAMPLE_RECIPE
+            if not candidate.is_relative_to(workspace) and candidate != EXAMPLE_RECIPE:
+                raise ValueError("study_recipe_path must remain inside the workspace")
+            if candidate.is_symlink():
+                raise ValueError("study_recipe_path must remain inside the workspace")
+            execution_recipe = load_study_recipe(candidate)
+            definitions = load_recipe_experiments(
+                execution_recipe,
+                PROJECT_ROOT if candidate == EXAMPLE_RECIPE else workspace,
+            )
+            settings = execution_recipe.get("execution", {})
+            if not isinstance(settings, dict):
+                raise ValueError("study recipe execution settings are invalid")
+        else:
+            raw_definitions = execution.get("experiments")
+            if not isinstance(raw_definitions, list) or not raw_definitions:
+                raise ValueError("optimization execution experiments are missing")
+            definitions = []
+            for index, definition in enumerate(raw_definitions):
+                if not isinstance(definition, dict) or not isinstance(definition.get("netlist_path"), str):
+                    raise ValueError(f"execution.experiments[{index}] must define netlist_path")
+                path = (workspace / definition["netlist_path"]).resolve()
+                if not path.is_relative_to(workspace) or path.is_symlink() or not path.is_file():
+                    raise ValueError(f"execution.experiments[{index}] netlist is unavailable")
+                analyses = definition.get("waveform_analyses")
+                if not isinstance(analyses, list):
+                    raise ValueError(f"execution.experiments[{index}] waveform_analyses are missing")
+                definitions.append({"name": definition.get("name"), "filename": definition.get("filename", path.name), "netlist_template": study_recipe._resolved_netlist_text(path, workspace), "waveform_analyses": analyses})
+            settings = execution
         experiments = {
             str(definition["name"]): {
                 "netlist_template": definition["netlist_template"],
-                "waveform_analyses": (
-                    AC_ANALYSES
-                    if definition["name"] == "ac"
-                    else TRANSIENT_ANALYSES
-                ),
+                "waveform_analyses": definition["waveform_analyses"],
                 "filename": definition["filename"],
-                "max_concurrency": execution.get("max_concurrency", 2),
-                "reuse_cache": execution.get("reuse_cache", False),
+                "max_concurrency": settings.get("max_concurrency", 2),
+                "reuse_cache": settings.get("reuse_cache", False),
             }
             for definition in definitions
         }
@@ -373,7 +401,7 @@ def create_app(
             allow_nan=False,
             separators=(",", ":"),
         ).encode("utf-8")
-        return experiments, execution, hashlib.sha256(artifact).hexdigest()
+        return experiments, settings, hashlib.sha256(artifact).hexdigest()
 
     def validate_optimization_experiments(
         recipe: object, experiments: dict[str, dict[str, object]]

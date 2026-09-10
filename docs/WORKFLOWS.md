@@ -198,6 +198,15 @@ PYTHONPATH=. python3 examples/design_search_rc.py
 
 ## Optimization and finalist qualification
 
+Selected qualification accepts its tolerance model from the optimization
+recipe. `qualification.variables` is required and must contain one entry per
+optimized parameter, with `name`, `sigma_fraction`, `minimum_factor`,
+`maximum_factor`, and `unit`. `qualification.fixed_parameters` supplies other
+nominals; candidate values take precedence when names overlap. Correlations
+and `corner_axes` are optional lists and default to empty. No application
+module supplies manufacturing defaults, and preview and publication revalidate
+the complete model so changing a tolerance changes the frozen identity.
+
 Run the bounded mixed-signal DAQ optimization as one durable AC/transient study:
 
 ```bash

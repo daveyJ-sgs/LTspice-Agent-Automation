@@ -18,6 +18,8 @@ RECIPE_FIELDS = {
     "parameters",
     "fixed_parameters",
     "corner_axes",
+    "execution",
+    "qualification",
     "objectives",
     "constraints",
 }

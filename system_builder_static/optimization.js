@@ -739,6 +739,8 @@ function renderOptimizationResults(result) {
 function qualificationRequest() {
   return {
     ...selectedQualificationSource,
+    execution: optimizationRecipe?.execution,
+    qualification: optimizationRecipe?.qualification,
     sample_count: Number(optId("qualification-samples").value),
     seed: Number(optId("qualification-seed").value),
   };

@@ -195,7 +195,8 @@ class ProjectScaffoldTests(unittest.TestCase):
             self.assertEqual(list(project_dir.glob("*.net")), [])
             recipe = json.loads(recipe_path.read_text())
             self.assertEqual(recipe["name"], "My New Filter")
-            self.assertEqual(recipe["experiments"][0]["netlist_path"], "")
+            self.assertEqual(recipe["plan"]["variables"], [])
+            self.assertEqual(recipe["experiments"], [])
 
             with self.assertRaises(project_scaffold.ProjectExistsError):
                 project_scaffold.create_project(root, "my new filter")

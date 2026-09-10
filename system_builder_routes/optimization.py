@@ -86,7 +86,7 @@ def create_optimization_router(
         if not current.get("valid"):
             return JSONResponse(current, status_code=422)
         try:
-            experiments, execution, execution_sha256 = optimization_experiments()
+            experiments, execution, execution_sha256 = optimization_experiments(recipe)
             validate_optimization_experiments(recipe, experiments)
             preview_experiments = current["execution"]
             assert isinstance(preview_experiments, dict)
@@ -224,7 +224,7 @@ def create_optimization_router(
                 )
             frozen["state"] = "starting"
             try:
-                experiments, _execution, execution_sha256 = optimization_experiments()
+                experiments, _execution, execution_sha256 = optimization_experiments(recipe)
                 validate_optimization_experiments(recipe, experiments)
                 if execution_sha256 != frozen["execution_sha256"]:
                     raise ValueError(

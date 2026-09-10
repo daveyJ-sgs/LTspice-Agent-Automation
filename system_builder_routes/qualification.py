@@ -59,6 +59,7 @@ def create_qualification_router(
                         "sample_count", qualification_recipe.DEFAULT_SAMPLE_COUNT
                     ),
                     payload.get("seed", qualification_recipe.DEFAULT_SEED),
+                    payload.get("qualification"),
                 )
             )
         except (OSError, TypeError, ValueError) as exc:
@@ -92,6 +93,7 @@ def create_qualification_router(
                 "freeze requires the exact preview identities and workload",
             )
         try:
+            model = payload.get("qualification")
             preview, published = qualification_recipe.publish_qualification(
                 workspace / "runs",
                 str(payload["study_id"]),
@@ -101,8 +103,10 @@ def create_qualification_router(
                 str(payload["expected_qualification_id"]),
                 str(payload["expected_statistical_plan_id"]),
                 payload["expected_total_run_count"],
+                model,
             )
-            experiments, execution, execution_sha256 = optimization_experiments()
+            execution_definition = payload.get("execution")
+            experiments, execution, execution_sha256 = optimization_experiments({"execution": execution_definition})
         except (OSError, TypeError, ValueError) as exc:
             return json_error(409, "qualification_freeze_failed", str(exc))
         launch_token = mint_launch_token(
@@ -116,6 +120,7 @@ def create_qualification_router(
                 "qualification_id": preview["qualification_id"],
                 "plan_id": published["plan_id"],
                 "total_run_count": payload["expected_total_run_count"],
+                "execution": execution_definition,
                 "execution_sha256": execution_sha256,
             },
             execution_lock,
@@ -181,7 +186,8 @@ def create_qualification_router(
                 )
             frozen["state"] = "starting"
         try:
-            experiments, _execution, execution_sha256 = optimization_experiments()
+            # The execution definition is part of the immutable launch request.
+            experiments, _execution, execution_sha256 = optimization_experiments({"execution": frozen["execution"]})
             if execution_sha256 != frozen["execution_sha256"]:
                 raise ValueError("paired circuit definitions changed after publication")
             manager = get_qualification_manager()

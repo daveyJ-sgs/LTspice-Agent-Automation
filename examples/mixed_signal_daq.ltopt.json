@@ -1,6 +1,23 @@
 {
   "schema_version": 1,
   "kind": "optimization",
+  "execution": {"study_recipe_path": "examples/mixed_signal_daq.ltstudy.json"},
+  "qualification": {
+    "fixed_parameters": {"RAA2": 1000, "GAIN": 1.6, "CLOAD": 5e-11, "RSW": 25, "CHOLD": 4.7e-11},
+    "variables": [
+      {"name": "CAA1", "sigma_fraction": 0.05, "minimum_factor": 0.8, "maximum_factor": 1.2, "unit": "F"},
+      {"name": "CAA2", "sigma_fraction": 0.05, "minimum_factor": 0.8, "maximum_factor": 1.2, "unit": "F"},
+      {"name": "CHOLD", "sigma_fraction": 0.05, "minimum_factor": 0.8, "maximum_factor": 1.2, "unit": "F"},
+      {"name": "CLOAD", "sigma_fraction": 0.1, "minimum_factor": 0.5, "maximum_factor": 1.5, "unit": "F"},
+      {"name": "GAIN", "sigma_fraction": 0.005, "minimum_factor": 0.975, "maximum_factor": 1.025, "unit": "V/V"},
+      {"name": "RAA1", "sigma_fraction": 0.01, "minimum_factor": 0.95, "maximum_factor": 1.05, "unit": "ohm"},
+      {"name": "RAA2", "sigma_fraction": 0.01, "minimum_factor": 0.95, "maximum_factor": 1.05, "unit": "ohm"},
+      {"name": "ROUT", "sigma_fraction": 0.1, "minimum_factor": 0.5, "maximum_factor": 1.5, "unit": "ohm"},
+      {"name": "RSW", "sigma_fraction": 0.1, "minimum_factor": 0.5, "maximum_factor": 1.5, "unit": "ohm"}
+    ],
+    "correlations": [{"variables": ["RAA1", "RAA2"], "matrix": [[1, 0.5], [0.5, 1]]}, {"variables": ["CAA1", "CAA2"], "matrix": [[1, 0.4], [0.4, 1]]}],
+    "corner_axes": [{"name": "adc_load", "parameter": "CADC", "unit": "F", "values": [{"name": "light", "value": 2e-11}, {"name": "heavy", "value": 8e-11}]}]
+  },
   "title": "1 MHz acquisition-channel optimization",
   "description": "Trade anti-alias rejection against acquisition settling while enforcing bandwidth, peaking, tracking, droop, and ADC-load constraints.",
   "parameters": [
@@ -14,15 +31,15 @@
     {"name": "adc_load", "parameter": "CADC", "unit": "F", "values": [{"name": "light", "value": 2e-11}, {"name": "heavy", "value": 8e-11}]}
   ],
   "objectives": [
-    {"name": "alias_gain", "experiment": "ac", "analysis": "analog_performance", "metric": "ac_gain_db", "goal": "minimize", "weight": 1, "absolute_tolerance": 0.05, "relative_tolerance": 0, "metric_parameters": {"frequency_value": 10000000}},
+    {"name": "alias_gain", "experiment": "ac", "analysis": "analog_bandwidth", "metric": "ac_gain_db", "goal": "minimize", "weight": 1, "absolute_tolerance": 0.05, "relative_tolerance": 0, "metric_parameters": {"frequency_value": 10000000}},
     {"name": "settling_time", "experiment": "transient", "analysis": "frontend_settling", "metric": "settling_time", "goal": "minimize", "weight": 1, "absolute_tolerance": 5e-8, "relative_tolerance": 0}
   ],
   "constraints": [
-    {"name": "passband_gain", "experiment": "ac", "analysis": "analog_performance", "metric": "ac_gain_db", "operator": ">=", "target": 3.5, "metric_parameters": {"frequency_value": 100000}},
-    {"name": "minimum_bandwidth", "experiment": "ac", "analysis": "analog_performance", "metric": "cutoff_frequency", "operator": ">=", "target": 800000, "metric_parameters": {"reference_frequency": 1000}},
-    {"name": "maximum_bandwidth", "experiment": "ac", "analysis": "analog_performance", "metric": "cutoff_frequency", "operator": "<=", "target": 1300000, "metric_parameters": {"reference_frequency": 1000}},
-    {"name": "passband_peaking", "experiment": "ac", "analysis": "analog_performance", "metric": "peaking_db", "operator": "<=", "target": 0.1, "metric_parameters": {"reference_frequency": 1000}},
-    {"name": "alias_rejection", "experiment": "ac", "analysis": "analog_performance", "metric": "ac_gain_db", "operator": "<=", "target": -20, "metric_parameters": {"frequency_value": 10000000}},
+    {"name": "passband_gain", "experiment": "ac", "analysis": "analog_bandwidth", "metric": "ac_gain_db", "operator": ">=", "target": 3.5, "metric_parameters": {"frequency_value": 100000}},
+    {"name": "minimum_bandwidth", "experiment": "ac", "analysis": "analog_bandwidth", "metric": "cutoff_frequency", "operator": ">=", "target": 800000, "metric_parameters": {"reference_frequency": 1000}},
+    {"name": "maximum_bandwidth", "experiment": "ac", "analysis": "analog_bandwidth", "metric": "cutoff_frequency", "operator": "<=", "target": 1300000, "metric_parameters": {"reference_frequency": 1000}},
+    {"name": "passband_peaking", "experiment": "ac", "analysis": "analog_bandwidth", "metric": "peaking_db", "operator": "<=", "target": 0.1, "metric_parameters": {"reference_frequency": 1000}},
+    {"name": "alias_rejection", "experiment": "ac", "analysis": "analog_bandwidth", "metric": "ac_gain_db", "operator": "<=", "target": -20, "metric_parameters": {"frequency_value": 10000000}},
     {"name": "frontend_settling", "experiment": "transient", "analysis": "frontend_settling", "metric": "settling_time", "operator": "<=", "target": 1.5e-6},
     {"name": "tracking_upper", "experiment": "transient", "analysis": "track_error", "metric": "maximum", "operator": "<=", "target": 0.005},
     {"name": "tracking_lower", "experiment": "transient", "analysis": "track_error", "metric": "minimum", "operator": ">=", "target": -0.005},
