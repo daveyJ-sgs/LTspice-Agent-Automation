@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 import experiment_engine
+import experiment_index
 import frequency_domain_metrics
 import ltspice_wrapper
 import optimization_recipe
@@ -212,6 +213,75 @@ def create_core_router(
             return JSONResponse(workspace_history(workspace, limit=limit))
         except ValueError as exc:
             return json_error(400, "history_limit", str(exc))
+
+    @router.get("/api/experiments/query")
+    def experiment_query(
+        request: Request,
+        limit: int = 25,
+        offset: int = 0,
+        status: str | None = None,
+        execution_mode: str | None = None,
+        all_passed: bool | None = None,
+        statistical: bool | None = None,
+        requirement_metric: str | None = None,
+    ) -> Response:
+        """Filter the derived experiment index. Never rebuilds it."""
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        try:
+            return JSONResponse(
+                experiment_index.query_experiments(
+                    workspace / "runs",
+                    limit=limit,
+                    offset=offset,
+                    status=status or None,
+                    execution_mode=execution_mode or None,
+                    all_passed=all_passed,
+                    statistical=statistical,
+                    requirement_metric=requirement_metric or None,
+                )
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            return json_error(400, "query_failed", str(exc))
+
+    @router.post("/api/compare")
+    async def compare(request: Request) -> Response:
+        """Diff two finished experiments, writing a portable comparison artifact."""
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        payload, error = await read_json_body(request, maximum=4096)
+        if error is not None:
+            return error
+        if not isinstance(payload, dict):
+            return json_error(400, "invalid_comparison", "request must be an object")
+        baseline = payload.get("baseline_experiment_id")
+        candidate = payload.get("candidate_experiment_id")
+        if not isinstance(baseline, str) or not isinstance(candidate, str):
+            return json_error(
+                400,
+                "invalid_comparison",
+                "baseline_experiment_id and candidate_experiment_id are required",
+            )
+        if baseline == candidate:
+            return json_error(
+                400, "invalid_comparison", "choose two different experiments"
+            )
+        try:
+            result = experiment_engine.compare_experiments(
+                workspace / "runs", baseline, candidate
+            )
+        except (FileNotFoundError, ValueError, KeyError) as exc:
+            return json_error(409, "comparison_failed", str(exc))
+        runs_root = (workspace / "runs").resolve()
+        markdown = Path(str(result["comparison_markdown"])).resolve()
+        return JSONResponse(
+            {
+                **result,
+                "report_url": f"/evidence/{markdown.relative_to(runs_root).as_posix()}",
+            }
+        )
 
     @router.get("/api/runs/{experiment_id}/captures")
     def run_captures(request: Request, experiment_id: str) -> Response:

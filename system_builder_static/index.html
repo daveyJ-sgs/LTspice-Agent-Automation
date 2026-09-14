@@ -705,7 +705,10 @@
           <h2>Evidence that is already yours.</h2>
           <p>Live durable-job progress comes directly from manifests. Completed studies and reports come from the same portable evidence used by MCP and CLI workflows.</p>
         </div>
+        <div class="heading-actions">
+        <button id="open-compare" class="compact-button" type="button">Compare runs</button>
         <button id="refresh-history" class="secondary-button" type="button">Refresh status</button>
+      </div>
       </div>
 
       <div class="history-metrics">
@@ -714,6 +717,59 @@
         <div><span>Available reports</span><strong id="history-reports">—</strong></div>
         <div><span>Index</span><strong id="history-index">Checking</strong></div>
       </div>
+
+      <div class="history-tools">
+        <label class="field-caption">Filter runs
+          <input id="history-search" type="search" placeholder="experiment id or metric" spellcheck="false">
+        </label>
+        <label class="field-caption">Status
+          <select id="history-status">
+            <option value="">Any</option>
+            <option value="completed">Completed</option>
+            <option value="running">Running</option>
+            <option value="failed">Failed</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </label>
+        <label class="field-caption">Outcome
+          <select id="history-outcome">
+            <option value="">Any</option>
+            <option value="true">All requirements passed</option>
+            <option value="false">Had failures</option>
+          </select>
+        </label>
+        <label class="field-caption">Show
+          <select id="history-limit">
+            <option value="12" selected>12 most recent</option>
+            <option value="30">30 most recent</option>
+            <option value="60">60 most recent</option>
+          </select>
+        </label>
+      </div>
+
+      <section id="compare-panel" class="panel compare-panel" hidden>
+        <div class="panel-heading compact">
+          <div>
+            <p class="step">COMPARE</p>
+            <h3>Diff two finished runs</h3>
+          </div>
+          <button id="compare-close" class="compact-button" type="button">Close</button>
+        </div>
+        <div class="compare-controls">
+          <label class="field-caption">Baseline
+            <select id="compare-baseline"></select>
+          </label>
+          <label class="field-caption">Candidate
+            <select id="compare-candidate"></select>
+          </label>
+          <button id="compare-run" class="secondary-button" type="button">Compare</button>
+        </div>
+        <div id="compare-errors" class="inline-errors" aria-live="polite" hidden></div>
+        <div id="compare-result" hidden>
+          <div id="compare-metrics" class="metric-grid"></div>
+          <div id="compare-links" class="result-evidence"></div>
+        </div>
+      </section>
 
       <div id="history-errors" class="errors" role="alert" hidden></div>
 

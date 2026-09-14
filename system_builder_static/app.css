@@ -358,6 +358,14 @@ td:first-child { color: var(--text); font-weight: 600; }
 .waveform-svg .plot-grid { stroke: var(--border); stroke-width: 1; }
 .waveform-svg .plot-tick { fill: var(--subtle); font: 400 10px "IBM Plex Mono", monospace; }
 .waveform-meta { margin: 9px 0 0; font-size: 12px; font-family: "IBM Plex Mono", monospace; }
+.history-tools { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end; margin: 16px 0 6px; }
+.history-tools label { flex: 1 1 150px; min-width: 0; }
+.history-tools input, .history-tools select { padding: 8px 10px; font-size: 12.5px; }
+.compare-panel { margin: 14px 0 18px; }
+.compare-controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end; margin: 14px 0; }
+.compare-controls label { flex: 1 1 190px; min-width: 0; }
+.compare-panel .metric-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin: 4px 0 14px; }
+.compare-panel .accent-metric.regression strong { color: var(--danger); }
 .experiment-group { border-color: var(--accent); }
 .experiment-group > .compact-fields { grid-template-columns: 1fr 2fr; }
 .analysis-stack { margin-top: 13px; gap: 10px; }

@@ -1887,6 +1887,133 @@ function axisLabel(value, unit) {
   return `${Number((number / factor).toPrecision(3))}${prefix ? " " + prefix : ""}${unit}`;
 }
 
+// --- History filtering and run comparison ---------------------------------
+function matchesHistoryFilter(job) {
+  const search = byId("history-search").value.trim().toLowerCase();
+  const status = byId("history-status").value;
+  const outcome = byId("history-outcome").value;
+  if (status && job.status !== status) return false;
+  if (outcome === "true" && job.all_passed !== true) return false;
+  if (outcome === "false" && job.all_passed !== false) return false;
+  if (!search) return true;
+  const haystack = [
+    job.experiment_id,
+    job.status,
+    job.execution_mode,
+    job.statistical ? "statistical" : "experiment",
+  ].join(" ").toLowerCase();
+  return haystack.includes(search);
+}
+
+function refilterHistory() {
+  if (latestHistory) renderHistory(latestHistory);
+}
+
+function comparableJobs() {
+  return (latestHistory?.jobs || []).filter((job) => job.status === "completed");
+}
+
+function openComparePanel() {
+  const panel = byId("compare-panel");
+  const jobs = comparableJobs();
+  compareError("");
+  byId("compare-result").hidden = true;
+  if (jobs.length < 2) {
+    panel.hidden = false;
+    compareError("Two completed runs are needed before anything can be compared.");
+    byId("compare-baseline").replaceChildren();
+    byId("compare-candidate").replaceChildren();
+    return;
+  }
+  for (const [id, defaultIndex] of [["compare-baseline", 1], ["compare-candidate", 0]]) {
+    const select = byId(id);
+    select.replaceChildren(...jobs.map((job) => {
+      const option = document.createElement("option");
+      option.value = job.experiment_id;
+      option.textContent = `${job.experiment_id} · ${job.passed_points}/${job.point_count} pass`;
+      return option;
+    }));
+    select.value = jobs[Math.min(defaultIndex, jobs.length - 1)].experiment_id;
+  }
+  panel.hidden = false;
+  panel.scrollIntoView({behavior: "smooth", block: "nearest"});
+}
+
+function compareError(message) {
+  const box = byId("compare-errors");
+  box.textContent = message;
+  box.hidden = !message;
+}
+
+async function runComparison() {
+  const baseline = byId("compare-baseline").value;
+  const candidate = byId("compare-candidate").value;
+  if (!baseline || !candidate) return;
+  if (baseline === candidate) {
+    compareError("Choose two different runs.");
+    return;
+  }
+  const button = byId("compare-run");
+  button.disabled = true;
+  button.textContent = "Comparing…";
+  compareError("");
+  try {
+    const response = await fetch("/api/compare", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({
+        baseline_experiment_id: baseline,
+        candidate_experiment_id: candidate,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Comparison failed");
+    renderComparison(result);
+  } catch (error) {
+    byId("compare-result").hidden = true;
+    compareError(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Compare";
+  }
+}
+
+function renderComparison(result) {
+  const tiles = [
+    ["Regressions", result.requirement_regressions],
+    ["Improvements", result.requirement_improvements],
+    ["Unchanged", result.unchanged_requirements],
+    ["Matched points", result.matched_points],
+    ["Added / removed points", `${result.added_points} / ${result.removed_points}`],
+    ["Added / removed requirements", `${result.added_requirements} / ${result.removed_requirements}`],
+  ].map(([label, value]) => {
+    const tile = document.createElement("div");
+    if (label === "Regressions" && Number(value) > 0) tile.className = "accent-metric regression";
+    const caption = document.createElement("span");
+    caption.textContent = label;
+    const amount = document.createElement("strong");
+    amount.textContent = typeof value === "number" ? value.toLocaleString() : value;
+    tile.append(caption, amount);
+    return tile;
+  });
+  byId("compare-metrics").replaceChildren(...tiles);
+  byId("compare-links").replaceChildren(reportLink(result.report_url, "Open comparison ↗"));
+  byId("compare-result").hidden = false;
+}
+
+for (const id of ["history-search", "history-status", "history-outcome"]) {
+  byId(id).addEventListener("input", refilterHistory);
+}
+byId("history-limit").addEventListener("change", () => loadHistory(false));
+byId("open-compare").addEventListener("click", openComparePanel);
+byId("compare-run").addEventListener("click", runComparison);
+byId("compare-close").addEventListener("click", () => {
+  byId("compare-panel").hidden = true;
+});
+
 function waveformButton(experimentId) {
   const button = document.createElement("button");
   button.type = "button";
@@ -2175,7 +2302,10 @@ function scheduleJobPoll(delay = 1000) {
   jobPollTimer = window.setTimeout(pollTrackedJobs, delay);
 }
 
+let latestHistory = null;
+
 function renderHistory(result) {
+  latestHistory = result;
   byId("history-total").textContent = result.summary.total_jobs.toLocaleString();
   byId("history-active").textContent = result.summary.active_jobs.toLocaleString();
   byId("history-reports").textContent = result.summary.reports.toLocaleString();
@@ -2184,7 +2314,7 @@ function renderHistory(result) {
   index.className = result.index.current ? "index-ready" : "index-missing";
   index.title = result.index.message;
 
-  const jobs = result.jobs.map((job) => {
+  const jobs = result.jobs.filter(matchesHistoryFilter).map((job) => {
     const row = document.createElement("div");
     row.className = "history-item";
     const top = document.createElement("div");
@@ -2296,7 +2426,8 @@ async function loadHistory(showBusy = true) {
     button.textContent = "Refreshing…";
   }
   try {
-    const response = await fetch("/api/history?limit=12");
+    const limit = byId("history-limit").value || "12";
+    const response = await fetch(`/api/history?limit=${encodeURIComponent(limit)}`);
     const result = await response.json();
     if (!response.ok) throw new Error(result.error?.message || "History could not be read");
     renderHistory(result);
