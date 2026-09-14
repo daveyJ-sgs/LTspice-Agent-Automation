@@ -941,6 +941,17 @@ Nyquist limit implied by the largest recorded time gap. Resource limits cap a
 spectral search at 4,096 bins and 5,000,000 point-frequency operations, and THD
 at the 100th harmonic.
 
+Recipe validation rejects a requirement that omits a parameter its metric
+requires, or carries one the metric cannot use, so both are reported as
+field-scoped preview errors instead of failing part-way through a run.
+`experiment_engine.metric_schema()` is the single description of what each
+metric takes, built from the measurement registries and served to the System
+Builder editors by `GET /api/metrics`.
+
+`ac_analysis.gain_phase()` turns a parsed AC `.raw` file into per-step gain (dB)
+and phase (degrees) for a numerator/denominator vector pair, with optional
+unwrapping. It returns data only and has no plotting dependency.
+
 AC metrics use the complex primary vector, divided by `secondary_variable`
 when supplied. Magnitude and unwrapped phase are interpolated in log frequency.
 Stability metrics reject absent or multiple crossovers; narrow

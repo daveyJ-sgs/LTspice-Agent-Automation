@@ -8,8 +8,11 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+import experiment_engine
+import frequency_domain_metrics
 import ltspice_wrapper
 import system_builder
+import waveform_metrics
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -119,6 +122,49 @@ class SystemBuilderTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
 
+    def test_metric_schema_route_matches_the_measurement_registries(self) -> None:
+        self._open()
+        response = self.client.get("/api/metrics")
+
+        self.assertEqual(response.status_code, 200)
+        metrics = {entry["name"]: entry for entry in response.json()["metrics"]}
+        self.assertEqual(
+            set(metrics),
+            waveform_metrics.SUPPORTED_METRICS
+            | frequency_domain_metrics.SUPPORTED_METRICS,
+        )
+        for name, entry in metrics.items():
+            with self.subTest(metric=name):
+                self.assertEqual(
+                    [parameter["name"] for parameter in entry["parameters"]],
+                    [
+                        parameter.name
+                        for parameter in experiment_engine.metric_parameters(name)
+                    ],
+                )
+
+    def test_metric_schema_marks_the_fields_the_requirement_form_must_enforce(
+        self,
+    ) -> None:
+        self._open()
+        metrics = {
+            entry["name"]: entry
+            for entry in self.client.get("/api/metrics").json()["metrics"]
+        }
+
+        gain = {
+            parameter["name"]: parameter
+            for parameter in metrics["ac_gain_db"]["parameters"]
+        }
+        self.assertEqual(metrics["ac_gain_db"]["domain"], "frequency")
+        self.assertTrue(gain["frequency_value"]["required"])
+        self.assertTrue(gain["frequency_value"]["axis_interpolated"])
+        self.assertEqual(gain["frequency_value"]["unit"], "Hz")
+        self.assertFalse(
+            any(parameter["required"] for parameter in metrics["maximum"]["parameters"])
+        )
+        self.assertEqual(metrics["rise_time"]["domain"], "time")
+
     def test_unloaded_page_has_no_daq_schematic_or_circuit_details(self) -> None:
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
@@ -166,6 +212,7 @@ class SystemBuilderTests(unittest.TestCase):
             ("GET", "/api/examples/mixed-signal-daq-optimization"),
             ("GET", "/api/history"),
             ("GET", "/api/jobs/{experiment_id}"),
+            ("GET", "/api/metrics"),
             ("GET", "/api/optimization/jobs"),
             ("GET", "/api/optimization/jobs/{optimization_job_id}"),
             ("GET", "/api/optimization/jobs/{optimization_job_id}/results"),

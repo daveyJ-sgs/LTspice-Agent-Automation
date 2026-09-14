@@ -7,8 +7,11 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
+import experiment_engine
+import frequency_domain_metrics
 import ltspice_wrapper
 import optimization_recipe
+import waveform_metrics
 from study_recipe import load_study_recipe
 from system_builder_history import evidence_file, workspace_history
 
@@ -112,6 +115,57 @@ def create_core_router(
             optimization_recipe.load_optimization_recipe(
                 example_optimization_recipe
             )
+        )
+
+    @router.get("/api/metrics")
+    def metrics(request: Request) -> Response:
+        """Describe the parameters each metric accepts, for the editors.
+
+        Served from the measurement registries rather than restated in the
+        browser, so a metric gaining or losing a parameter cannot leave the
+        requirement form offering a field the metric will not read.
+        """
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        common_names = {
+            parameter.name
+            for parameters in (
+                waveform_metrics.COMMON_PARAMETERS,
+                frequency_domain_metrics.COMMON_PARAMETERS,
+            )
+            for parameter in parameters
+        }
+        return JSONResponse(
+            {
+                "metrics": [
+                    {
+                        "name": metric,
+                        "domain": (
+                            "frequency"
+                            if metric in frequency_domain_metrics.SUPPORTED_METRICS
+                            else "time"
+                        ),
+                        "parameters": [
+                            {
+                                "name": parameter.name,
+                                "kind": parameter.kind,
+                                "required": parameter.required,
+                                "choices": list(parameter.choices),
+                                "default": parameter.default,
+                                "unit": parameter.unit,
+                                "description": parameter.description,
+                                "axis_interpolated": parameter.axis_interpolated,
+                                # Shared by every metric, so editors can group
+                                # these apart from the metric-specific fields.
+                                "common": parameter.name in common_names,
+                            }
+                            for parameter in parameters
+                        ],
+                    }
+                    for metric, parameters in experiment_engine.metric_schema().items()
+                ]
+            }
         )
 
     @router.get("/api/settings/ltspice")

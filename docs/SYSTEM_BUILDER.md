@@ -104,6 +104,30 @@ analyses through the same durable experiment manager used by MCP. Editing the
 recipe invalidates the confirmation, and repeated Start requests cannot
 duplicate the launch.
 
+### Requirement metrics and their parameters
+
+Each requirement picks its metric from a list grouped into AC/frequency-domain
+and time-domain metrics, and the editor then shows exactly the parameters that
+metric accepts, read from `GET /api/metrics` rather than from a table kept in
+the browser. Parameters are written as flat sibling keys of
+`metric`/`operator`/`target` inside the requirement, which is the `.ltstudy`
+shape; the nested `metric_parameters` object is the separate `.ltopt`
+optimization-goal shape and is not interchangeable with it.
+
+Parameters a metric cannot use are dropped when the metric changes, and a
+required one -- `frequency_value` for `ac_gain_db`, `reference_frequency` for
+`cutoff_frequency` and `peaking_db`, `threshold_value` for `frequency`, and so
+on -- is marked and flagged while empty. The recipe validator rejects a missing
+or misspelled parameter during preview, so it surfaces before a run rather than
+part-way through one.
+
+Frequency-valued fields show the parent experiment's `.AC` sweep range, parsed
+from its netlist, and flag a value outside it. Those values are read by
+interpolation in log frequency between the two bracketing simulated points, not
+snapped to the nearest one, which the field's help text states. Entries may use
+SPICE magnitude suffixes (`50k`, `1Meg`); the recipe stores the resolved number
+and the field reports what it resolved to.
+
 Engineering-unit selectors are available for capacitance (`pF`, `nF`, `µF`)
 and resistance (`Ω`, `kΩ`, `MΩ`). These are display and entry choices only: the
 portable recipe and immutable plan retain canonical SI values, so changing a
@@ -208,7 +232,11 @@ window.
 The separate optimization workspace is backed directly by the Phase 4 engine.
 It edits continuous, integer, categorical, explicit preferred-value, and
 generated E6/E12/E24 domains; finite operating corners; Pareto objectives; hard
-constraints; weights; targets; and metric arguments.
+constraints; weights; targets; and metric arguments. Goal metrics come from
+the same list as study requirements, and metric arguments are checked against
+the selected metric's parameters -- an argument it does not take, or a missing
+one that would leave the goal matching more than one measured result, is
+reported in place.
 
 Preview reports domain expansion, candidate/corner/point counts, the AC and
 transient run workload, engine ceilings, selection policy, and the exact future

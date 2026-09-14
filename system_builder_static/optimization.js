@@ -268,6 +268,105 @@ function setMetricParameters(selector, text) {
   else delete selector.metric_parameters;
 }
 
+// The .ltopt goal schema nests its parameters under metric_parameters, where a
+// .ltstudy requirement carries them as flat sibling keys. The two shapes are
+// not interchangeable, so this editor keeps the nested form and only borrows
+// the metric list and the per-metric parameter names from the shared schema.
+function optMetricSelect(item, caption) {
+  const select = document.createElement("select");
+  select.setAttribute("aria-label", `${item.name} ${caption}`);
+  let matched = false;
+  for (const [label, names] of metricOptionGroups()) {
+    const group = document.createElement("optgroup");
+    group.label = label;
+    for (const name of names) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      if (name === item.metric) matched = true;
+      group.append(option);
+    }
+    select.append(group);
+  }
+  if (!matched) {
+    const option = document.createElement("option");
+    option.value = item.metric ?? "";
+    option.textContent = item.metric ? `${item.metric} (loaded)` : "\u2014 Select a metric \u2014";
+    select.prepend(option);
+  }
+  select.value = item.metric ?? "";
+  return select;
+}
+
+function metricArgumentProblem(item) {
+  // Say nothing about a metric the schema does not describe, rather than
+  // reporting every argument of it as unknown.
+  const definition = metricDefinition(item.metric);
+  if (!definition) return "";
+  const accepted = definition.parameters;
+  const names = new Set(accepted.map((parameter) => parameter.name));
+  const supplied = Object.keys(item.metric_parameters || {});
+  const unknown = supplied.filter((name) => !names.has(name));
+  if (unknown.length) {
+    return `${item.metric} has no ${unknown[0]}; it takes ${[...names].join(", ") || "no arguments"}.`;
+  }
+  const missing = accepted
+    .filter((parameter) => parameter.required && !supplied.includes(parameter.name))
+    .map((parameter) => parameter.name);
+  // A goal selects an already-measured result, so a required parameter that is
+  // left out matches every value of it -- ambiguous as soon as the study sweeps
+  // more than one.
+  return missing.length ? `Add ${missing[0]} to pick one ${item.metric} result.` : "";
+}
+
+function metricArgumentPlaceholder(item) {
+  const accepted = metricParameters(item.metric).filter((parameter) => !parameter.common);
+  return accepted.length ? accepted.map((parameter) => `${parameter.name}=`).join(", ") : "none";
+}
+
+function metricField(item, render) {
+  const select = optMetricSelect(item, "Metric");
+  select.addEventListener("change", () => {
+    const definition = metricDefinition(select.value);
+    if (definition) {
+      const names = new Set(definition.parameters.map((parameter) => parameter.name));
+      for (const key of Object.keys(item.metric_parameters || {})) {
+        if (!names.has(key)) delete item.metric_parameters[key];
+      }
+      if (item.metric_parameters && Object.keys(item.metric_parameters).length === 0) {
+        delete item.metric_parameters;
+      }
+    }
+    item.metric = select.value;
+    render();
+    scheduleOptimizationPreview();
+  });
+  return optField("Metric", select);
+}
+
+function metricArgumentsField(item, render) {
+  const problem = document.createElement("span");
+  problem.className = "field-problem";
+  const input = optInput(metricParametersText(item), `${item.name} metric arguments`, (value) => {
+    setMetricParameters(item, value);
+    refresh();
+    scheduleOptimizationPreview();
+  });
+  input.placeholder = metricArgumentPlaceholder(item);
+
+  function refresh() {
+    const message = metricArgumentProblem(item);
+    problem.textContent = message;
+    problem.hidden = !message;
+    input.setAttribute("aria-invalid", message ? "true" : "false");
+  }
+  refresh();
+
+  const field = optField("Metric arguments", input);
+  field.append(problem);
+  return field;
+}
+
 function selectorField(item, key, caption, choices = null, numeric = false) {
   const update = (value) => {
     item[key] = numeric ? optNumber(value) : value;
@@ -289,10 +388,10 @@ function renderOptimizationSelectors() {
       selectorField(item, "name", "Name"),
       selectorField(item, "experiment", "Study", [["ac", "AC"], ["transient", "Transient"]]),
       selectorField(item, "analysis", "Analysis"),
-      selectorField(item, "metric", "Metric"),
+      metricField(item, renderOptimizationSelectors),
       selectorField(item, "goal", "Goal", [["minimize", "Minimize"], ["maximize", "Maximize"]]),
       selectorField(item, "weight", "Weight", null, true),
-      optField("Metric arguments", optInput(metricParametersText(item), `${item.name} metric arguments`, (value) => { setMetricParameters(item, value); scheduleOptimizationPreview(); })),
+      metricArgumentsField(item, renderOptimizationSelectors),
     );
     return row;
   }));
@@ -306,10 +405,10 @@ function renderOptimizationSelectors() {
       selectorField(item, "name", "Name"),
       selectorField(item, "experiment", "Study", [["ac", "AC"], ["transient", "Transient"]]),
       selectorField(item, "analysis", "Analysis"),
-      selectorField(item, "metric", "Metric"),
+      metricField(item, renderOptimizationSelectors),
       selectorField(item, "operator", "Limit", [["<", "<"], ["<=", "≤"], [">", ">"], [">=", "≥"]]),
       selectorField(item, "target", "Target", null, true),
-      optField("Metric arguments", optInput(metricParametersText(item), `${item.name} metric arguments`, (value) => { setMetricParameters(item, value); scheduleOptimizationPreview(); })),
+      metricArgumentsField(item, renderOptimizationSelectors),
     );
     return row;
   }));

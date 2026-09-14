@@ -284,6 +284,101 @@ class StudyRecipeTests(unittest.TestCase):
         self.assertTrue(preview["valid"], preview.get("errors"))
         self.assertEqual(experiments[0]["netlist_template"], netlist_text)
 
+    def _preview_with_requirement(
+        self, requirement: dict[str, object]
+    ) -> dict[str, object]:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "plain.cir").write_text(
+                "V1 in 0 AC 1\nR1 in out {R_VAL}\nC1 out 0 1u\n"
+                ".ac dec 10 10 10k\n.end\n"
+            )
+            recipe = self._minimal_recipe("plain.cir")
+            analyses = recipe["experiments"][0]["waveform_analyses"]
+            analyses[0]["requirements"] = [requirement]
+            return study_recipe.preview_study_recipe(recipe, root)
+
+    def test_requirement_missing_a_required_metric_parameter_fails_the_preview(
+        self,
+    ) -> None:
+        """ac_gain_db without frequency_value used to validate cleanly and then
+        fail part-way through the run, once LTspice had already been invoked.
+        """
+        preview = self._preview_with_requirement(
+            {"metric": "ac_gain_db", "operator": ">=", "target": -1.0}
+        )
+
+        self.assertFalse(preview["valid"])
+        [error] = [
+            error for error in preview["errors"] if error["code"] == "invalid_experiment"
+        ]
+        self.assertEqual(error["path"], "experiments[0].waveform_analyses")
+        self.assertIn("frequency_value", error["message"])
+
+    def test_reference_frequency_is_required_by_the_metrics_that_interpolate(
+        self,
+    ) -> None:
+        for metric in ("cutoff_frequency", "peaking_db"):
+            with self.subTest(metric=metric):
+                preview = self._preview_with_requirement(
+                    {"metric": metric, "operator": ">=", "target": 1.0}
+                )
+
+                self.assertFalse(preview["valid"])
+                self.assertIn(
+                    "reference_frequency",
+                    " ".join(error["message"] for error in preview["errors"]),
+                )
+
+    def test_a_misspelled_metric_parameter_is_reported_instead_of_ignored(self) -> None:
+        """A flat sibling key the metric cannot use was silently dropped, so the
+        requirement measured something other than what the author wrote.
+        """
+        preview = self._preview_with_requirement(
+            {
+                "metric": "ac_gain_db",
+                "operator": ">=",
+                "target": -1.0,
+                "frequency_value": 100,
+                "frequency": 100,
+            }
+        )
+
+        self.assertFalse(preview["valid"])
+        message = " ".join(error["message"] for error in preview["errors"])
+        self.assertIn("does not accept frequency", message)
+
+    def test_nested_metric_parameters_are_not_the_requirement_schema(self) -> None:
+        """metric_parameters is the optimization-goal shape; a requirement takes
+        flat sibling keys, so the nested form must not look valid here.
+        """
+        preview = self._preview_with_requirement(
+            {
+                "metric": "ac_gain_db",
+                "operator": ">=",
+                "target": -1.0,
+                "metric_parameters": {"frequency_value": 100},
+            }
+        )
+
+        self.assertFalse(preview["valid"])
+        message = " ".join(error["message"] for error in preview["errors"])
+        self.assertIn("frequency_value", message)
+
+    def test_a_complete_requirement_still_previews_cleanly(self) -> None:
+        preview = self._preview_with_requirement(
+            {
+                "metric": "cutoff_frequency",
+                "operator": ">=",
+                "target": 100.0,
+                "reference_frequency": 10,
+                "cutoff_drop_db": 3.0,
+                "direction": "falling",
+            }
+        )
+
+        self.assertTrue(preview["valid"], preview.get("errors"))
+
     def test_invalid_sample_count_has_a_field_path(self) -> None:
         recipe = copy.deepcopy(self.recipe)
         recipe["plan"]["sample_count"] = 0

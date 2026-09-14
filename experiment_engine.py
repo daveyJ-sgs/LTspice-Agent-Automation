@@ -14,6 +14,7 @@ import re
 import threading
 import time
 import uuid
+from collections.abc import Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime
 from pathlib import Path
@@ -225,6 +226,57 @@ def _write_json(path: Path, value: object) -> None:
     os.replace(temporary_path, path)
 
 
+def metric_parameters(metric: str) -> tuple[waveform_metrics.MetricParameter, ...]:
+    """Return the requirement parameters one metric accepts, in either domain."""
+    if metric in frequency_domain_metrics.SUPPORTED_METRICS:
+        return frequency_domain_metrics.metric_parameters(metric)
+    return waveform_metrics.metric_parameters(metric)
+
+
+def metric_schema() -> dict[str, tuple[waveform_metrics.MetricParameter, ...]]:
+    """Requirement parameters for every supported metric, keyed by metric name.
+
+    This is the one description the measurement registries, the recipe
+    validator, and the requirement editors all read, so a parameter cannot be
+    offered in a form that the metric does not actually accept.
+    """
+    metrics = (
+        waveform_metrics.SUPPORTED_METRICS | frequency_domain_metrics.SUPPORTED_METRICS
+    )
+    return {metric: metric_parameters(metric) for metric in sorted(metrics)}
+
+
+def _validate_requirement_parameters(
+    analysis_name: str, requirement: Mapping[str, object]
+) -> None:
+    """Reject a requirement whose parameters the metric cannot use.
+
+    Requirement parameters are flat sibling keys of metric/operator/target, so
+    a missing or misspelled one is indistinguishable from an absent optional
+    field at measurement time. Catching it here surfaces the problem while the
+    study is still being edited instead of part-way through a run.
+    """
+    metric = str(requirement["metric"])
+    accepted = {parameter.name: parameter for parameter in metric_parameters(metric)}
+    missing = [
+        name
+        for name, parameter in sorted(accepted.items())
+        if parameter.required and name not in requirement
+    ]
+    if missing:
+        raise ValueError(
+            f"waveform analysis {analysis_name} {metric} requirement is missing "
+            f"{missing[0]}"
+        )
+    unknown = sorted(set(requirement) - set(accepted) - {"metric", "operator", "target"})
+    if unknown:
+        offered = ", ".join(sorted(accepted)) or "no parameters"
+        raise ValueError(
+            f"waveform analysis {analysis_name} {metric} requirement does not accept "
+            f"{unknown[0]}; it accepts {offered}"
+        )
+
+
 def _prepare_experiment(
     netlist_template: str,
     parameters: list[ExperimentParameter],
@@ -427,6 +479,7 @@ def _prepare_experiment(
                 raise ValueError(
                     f"waveform analysis {name} requirement target must be numeric"
                 ) from exc
+            _validate_requirement_parameters(name, requirement)
         analysis_names.add(name)
 
     points: list[dict[str, str]] = []

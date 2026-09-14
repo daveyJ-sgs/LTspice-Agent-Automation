@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 import frequency_domain_metrics
+import waveform_metrics
 from frequency_domain_metrics import measure_metric
 
 
@@ -30,6 +31,63 @@ class FrequencyDomainMetricTests(unittest.TestCase):
         )
         self.assertAlmostEqual(measured.value, 1000 / math.sqrt(2), places=4)
 
+
+    def test_every_registry_parameter_is_described_for_the_editors(self) -> None:
+        for metric, specification in frequency_domain_metrics._METRIC_REGISTRY.items():
+            described = {
+                parameter.name
+                for parameter in frequency_domain_metrics.metric_parameters(metric)
+            }
+            expected = specification.parameters - waveform_metrics.ANALYSIS_LEVEL_PARAMETERS
+            with self.subTest(metric=metric):
+                self.assertEqual(expected - described, set())
+                self.assertEqual(
+                    described - expected,
+                    {"window_start", "window_end"},
+                )
+
+    def test_declared_required_parameters_are_the_ones_measurement_demands(self) -> None:
+        """Every parameter flagged required must actually be refused when absent."""
+        axis = [10.0, 100.0, 1000.0]
+        values = [response(0.0), response(-3.0, -45.0), response(-20.0, -90.0)]
+        complete: dict[str, dict[str, float]] = {
+            "ac_gain_db": {"frequency_value": 100.0},
+            "cutoff_frequency": {"reference_frequency": 10.0},
+            "peaking_db": {"reference_frequency": 10.0},
+        }
+        for metric, parameters in complete.items():
+            required = {
+                parameter.name
+                for parameter in frequency_domain_metrics.metric_parameters(metric)
+                if parameter.required
+            }
+            with self.subTest(metric=metric):
+                self.assertEqual(required, set(parameters))
+                for name in required:
+                    withheld = {k: v for k, v in parameters.items() if k != name}
+                    with self.assertRaisesRegex(ValueError, f"{name} is required"):
+                        measure_metric(axis, values, metric, **withheld)
+
+    def test_gain_metrics_have_no_required_numeric_parameter(self) -> None:
+        for metric in ("gain_crossover_frequency", "phase_margin", "gain_margin"):
+            with self.subTest(metric=metric):
+                self.assertEqual(
+                    [
+                        parameter.name
+                        for parameter in frequency_domain_metrics.metric_parameters(metric)
+                        if parameter.required
+                    ],
+                    [],
+                )
+
+    def test_interpolated_parameters_are_flagged_for_range_validation(self) -> None:
+        flagged = {
+            parameter.name
+            for metric in frequency_domain_metrics.SUPPORTED_METRICS
+            for parameter in frequency_domain_metrics.metric_parameters(metric)
+            if parameter.axis_interpolated
+        }
+        self.assertEqual(flagged, {"frequency_value", "reference_frequency"})
 
     def test_registry_is_complete_and_routes_metric_parameters(self) -> None:
         self.assertEqual(

@@ -420,6 +420,106 @@ async function loadSchematicFiles() {
 // user hasn't saved yet. Cleared on an explicit "Refresh netlists" click.
 const netlistEditorBuffers = new Map();
 
+// Served from the measurement registries by /api/metrics, so the requirement
+// form offers exactly the parameters each metric actually reads instead of a
+// table kept in step by hand.
+let metricSchema = new Map();
+
+async function loadMetricSchema() {
+  const response = await fetch("/api/metrics");
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error?.message || "Metric schema could not be read");
+  metricSchema = new Map((result.metrics || []).map((metric) => [metric.name, metric]));
+}
+
+function metricDefinition(name) {
+  return metricSchema.get(name) || null;
+}
+
+function metricParameters(name) {
+  return metricDefinition(name)?.parameters || [];
+}
+
+// SPICE magnitude suffixes. "meg" and "mil" are listed before "m" because a
+// prefix match would otherwise read 1Meg as 1 milli.
+const SPICE_SCALES = [
+  ["meg", 1e6], ["mil", 25.4e-6], ["t", 1e12], ["g", 1e9], ["k", 1e3],
+  ["m", 1e-3], ["u", 1e-6], ["n", 1e-9], ["p", 1e-12], ["f", 1e-15],
+];
+
+function spiceNumber(token) {
+  const match = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z]*)$/i.exec(String(token ?? "").trim());
+  if (!match) return NaN;
+  const mantissa = Number(match[1]);
+  const suffix = match[2].toLowerCase();
+  if (!suffix) return mantissa;
+  const scale = SPICE_SCALES.find(([name]) => suffix.startsWith(name));
+  return scale ? mantissa * scale[1] : mantissa;
+}
+
+// The swept range a frequency-valued requirement parameter has to land inside.
+// Returns null when the directive is missing or parameterised ({FMAX}), in
+// which case the field simply goes unhinted and the server still validates.
+function acSweepRange(netlistText) {
+  const directive = /^[ \t]*\.ac[ \t]+(\S+)[ \t]+(.+)$/im.exec(netlistText || "");
+  if (!directive) return null;
+  const spacing = directive[1].toLowerCase();
+  const fields = directive[2].trim().split(/\s+/);
+  if (spacing === "list") {
+    const points = fields.map(spiceNumber).filter((value) => Number.isFinite(value) && value > 0);
+    if (points.length === 0) return null;
+    return {spacing, start: Math.min(...points), stop: Math.max(...points)};
+  }
+  if (!["dec", "oct", "lin"].includes(spacing) || fields.length < 3) return null;
+  const start = spiceNumber(fields[1]);
+  const stop = spiceNumber(fields[2]);
+  if (!Number.isFinite(start) || !Number.isFinite(stop) || start <= 0 || stop < start) return null;
+  return {spacing, points: spiceNumber(fields[0]), start, stop};
+}
+
+function formatHertz(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value ?? "—");
+  const magnitude = Math.abs(number);
+  const [factor, label] = [[1e9, "GHz"], [1e6, "MHz"], [1e3, "kHz"], [1, "Hz"]]
+    .find(([candidate]) => magnitude >= candidate) || [1, "Hz"];
+  return `${Number((number / factor).toPrecision(4))} ${label}`;
+}
+
+function formatDefault(value) {
+  if (value === null || value === undefined) return "";
+  return typeof value === "number" ? String(Number(value.toPrecision(6))) : String(value);
+}
+
+// Netlist text is fetched for the sweep-range hint even when this experiment
+// has no open netlist editor. Re-renders once on arrival; a failed read just
+// leaves the hint out rather than retrying in a loop.
+const netlistTextRequests = new Set();
+
+function experimentNetlistText(experiment) {
+  const path = experiment?.netlist_path;
+  if (!path) return null;
+  if (netlistEditorBuffers.has(path)) return netlistEditorBuffers.get(path);
+  requestNetlistText(path);
+  return null;
+}
+
+async function requestNetlistText(path) {
+  if (netlistTextRequests.has(path)) return;
+  netlistTextRequests.add(path);
+  try {
+    const response = await fetch(`/api/recipe/netlist?path=${encodeURIComponent(path)}`);
+    const result = await response.json();
+    if (!response.ok) return;
+    netlistEditorBuffers.set(path, result.content);
+    if (recipe) populateExperiments();
+  } catch (_) {
+    // The hint is an aid; the backend still range-checks every frequency.
+  } finally {
+    netlistTextRequests.delete(path);
+  }
+}
+
 async function loadNetlistFiles() {
   const response = await fetch("/api/recipe/netlists");
   const result = await response.json();
@@ -1112,25 +1212,13 @@ function populateExperiments() {
       rows.className = "requirement-rows";
       for (const [requirementIndex, requirement] of (analysis.requirements || []).entries()) {
         requirementCount += 1;
-        const requirementBase = `${analysisBase}.requirements[${requirementIndex}]`;
-        const row = document.createElement("div");
-        row.className = "requirement-row";
-        row.dataset.path = requirementBase;
-        const metric = fieldInput(requirement.metric, `${requirementBase}.metric`);
-        metric.placeholder = "Metric";
-        setRecipeField(metric, requirement, "metric");
-        const operator = selectInput(requirement.operator, [["<", "<"], ["<=", "≤"], [">", ">"], [">=", "≥"]], `${requirementBase}.operator`);
-        setRecipeField(operator, requirement, "operator");
-        operator.addEventListener("change", schedulePreview);
-        const target = fieldInput(requirement.target, `${requirementBase}.target`);
-        target.placeholder = "Target";
-        setRecipeField(target, requirement, "target", true);
-        row.append(metric, operator, target, removeButton(`Remove ${requirement.metric} requirement`, () => {
-          analysis.requirements.splice(requirementIndex, 1);
-          populateExperiments();
-          schedulePreview();
-        }));
-        rows.append(row);
+        rows.append(buildRequirement(
+          analysis,
+          requirement,
+          requirementIndex,
+          `${analysisBase}.requirements[${requirementIndex}]`,
+          experiment,
+        ));
       }
       const addRequirement = document.createElement("button");
       addRequirement.type = "button";
@@ -1192,6 +1280,247 @@ function populatePrimaryNetlist(experiments) {
     editorSlot.replaceChildren();
     note.hidden = experiments.length === 0;
   }
+}
+
+const REQUIREMENT_CORE_FIELDS = ["metric", "operator", "target"];
+
+// Grouped so the AC metrics a filter study needs are not mixed in with the
+// transient ones. Shared with the optimization goal editor.
+function metricOptionGroups() {
+  return [["frequency", "AC / frequency domain"], ["time", "Time domain"]]
+    .map(([domain, label]) => [
+      label,
+      [...metricSchema.values()].filter((metric) => metric.domain === domain).map((metric) => metric.name),
+    ])
+    .filter(([, names]) => names.length > 0);
+}
+
+function metricSelect(value, path) {
+  const select = document.createElement("select");
+  select.dataset.path = path;
+  select.setAttribute("aria-label", path);
+  let matched = false;
+  for (const [label, names] of metricOptionGroups()) {
+    const group = document.createElement("optgroup");
+    group.label = label;
+    for (const name of names) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      if (name === value) matched = true;
+      group.append(option);
+    }
+    select.append(group);
+  }
+  if (!matched) {
+    const option = document.createElement("option");
+    option.value = value ?? "";
+    option.textContent = value ? `${value} (loaded)` : "\u2014 Select a metric \u2014";
+    select.prepend(option);
+  }
+  select.value = value ?? "";
+  return select;
+}
+
+// Parameters are flat sibling keys of metric/operator/target, so the ones the
+// previous metric used have to go when the metric changes -- otherwise they
+// linger as fields the new metric cannot accept.
+function setRequirementMetric(requirement, metric) {
+  // Only prune against a metric the schema actually describes: a recipe written
+  // against a newer build can name one this page has never heard of, and
+  // dropping its parameters would quietly rewrite the recipe.
+  const definition = metricDefinition(metric);
+  if (definition) {
+    const accepted = new Set(definition.parameters.map((parameter) => parameter.name));
+    for (const key of Object.keys(requirement)) {
+      if (REQUIREMENT_CORE_FIELDS.includes(key)) continue;
+      if (!accepted.has(key)) delete requirement[key];
+    }
+  }
+  requirement.metric = metric;
+}
+
+function buildRequirement(analysis, requirement, index, base, experiment) {
+  const container = document.createElement("div");
+  container.className = "requirement";
+  container.dataset.path = base;
+
+  const row = document.createElement("div");
+  row.className = "requirement-row";
+
+  const metric = metricSelect(requirement.metric, `${base}.metric`);
+  metric.addEventListener("change", () => {
+    setRequirementMetric(requirement, metric.value);
+    populateExperiments();
+    schedulePreview();
+  });
+  const operator = selectInput(requirement.operator, [["<", "<"], ["<=", "\u2264"], [">", ">"], [">=", "\u2265"]], `${base}.operator`);
+  setRecipeField(operator, requirement, "operator");
+  operator.addEventListener("change", schedulePreview);
+  const target = fieldInput(requirement.target, `${base}.target`);
+  target.placeholder = "Target";
+  setRecipeField(target, requirement, "target", true);
+
+  row.append(metric, operator, target, removeButton(`Remove ${requirement.metric} requirement`, () => {
+    analysis.requirements.splice(index, 1);
+    populateExperiments();
+    schedulePreview();
+  }));
+  container.append(row);
+
+  const parameters = metricParameters(requirement.metric);
+  const sweep = acSweepRange(experimentNetlistText(experiment));
+  const specific = parameters.filter((parameter) => !parameter.common);
+  const shared = parameters.filter((parameter) => parameter.common);
+  if (specific.length) {
+    const grid = document.createElement("div");
+    grid.className = "requirement-parameters";
+    for (const parameter of specific) {
+      grid.append(buildRequirementParameter(requirement, parameter, base, sweep));
+    }
+    container.append(grid);
+  }
+  // The analysis window applies to every metric and is usually left alone, so
+  // it folds away rather than burying the fields that are specific to this one.
+  if (shared.length) {
+    const details = document.createElement("details");
+    details.className = "requirement-window";
+    details.open = shared.some((parameter) => requirement[parameter.name] !== undefined);
+    const summary = document.createElement("summary");
+    summary.textContent = "Analysis window";
+    const grid = document.createElement("div");
+    grid.className = "requirement-parameters";
+    for (const parameter of shared) {
+      grid.append(buildRequirementParameter(requirement, parameter, base, sweep));
+    }
+    details.append(summary, grid);
+    container.append(details);
+  }
+  return container;
+}
+
+function requirementParameterHint(parameter, sweep) {
+  const notes = [parameter.description];
+  if (parameter.axis_interpolated) {
+    notes.push(
+      sweep
+        ? `Swept ${formatHertz(sweep.start)} to ${formatHertz(sweep.stop)}.`
+        : "Must fall inside the .AC sweep.",
+    );
+    notes.push("Read by interpolation in log frequency, not snapped to the nearest simulated point.");
+  }
+  const fallback = formatDefault(parameter.default);
+  if (!parameter.required && fallback) notes.push(`Defaults to ${fallback}.`);
+  return notes.filter(Boolean).join(" ");
+}
+
+function requirementParameterProblem(parameter, value, sweep) {
+  if (value === undefined || value === "") {
+    return parameter.required ? "Required for this metric." : "";
+  }
+  const number = Number(value);
+  if (parameter.kind === "choice") return "";
+  if (!Number.isFinite(number)) return "Must be a number.";
+  if (parameter.kind === "integer" && !Number.isInteger(number)) return "Must be a whole number.";
+  if (parameter.axis_interpolated && sweep && (number < sweep.start || number > sweep.stop)) {
+    return `Outside the .AC sweep (${formatHertz(sweep.start)} to ${formatHertz(sweep.stop)}).`;
+  }
+  return "";
+}
+
+function buildRequirementParameter(requirement, parameter, base, sweep) {
+  const wrapper = document.createElement("label");
+  wrapper.className = parameter.required
+    ? "requirement-parameter required-parameter"
+    : "requirement-parameter";
+  const path = `${base}.${parameter.name}`;
+
+  const caption = document.createElement("span");
+  caption.textContent = parameter.unit
+    ? `${parameter.name} (${parameter.unit})`
+    : parameter.name;
+  if (parameter.required) {
+    const mark = document.createElement("abbr");
+    mark.className = "required-mark";
+    mark.textContent = "*";
+    mark.title = "Required for this metric";
+    caption.append(" ", mark);
+  }
+
+  const problem = document.createElement("span");
+  problem.className = "field-problem";
+
+  let control;
+  if (parameter.kind === "choice") {
+    control = document.createElement("select");
+    control.dataset.path = path;
+    control.setAttribute("aria-label", path);
+    const fallback = formatDefault(parameter.default);
+    const blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = fallback ? `\u2014 default (${fallback}) \u2014` : "\u2014 automatic \u2014";
+    control.append(blank);
+    for (const choice of parameter.choices) {
+      const option = document.createElement("option");
+      option.value = choice;
+      option.textContent = choice;
+      control.append(option);
+    }
+    control.value = requirement[parameter.name] === undefined ? "" : String(requirement[parameter.name]);
+    control.addEventListener("change", () => {
+      if (control.value === "") delete requirement[parameter.name];
+      else requirement[parameter.name] = control.value;
+      refresh();
+      schedulePreview();
+    });
+  } else {
+    control = fieldInput(requirement[parameter.name], path);
+    control.placeholder = formatDefault(parameter.default) || (parameter.required ? "required" : "optional");
+    control.addEventListener("input", () => {
+      const entered = control.value.trim();
+      // An absent key is how an optional parameter says "use the default", so
+      // a cleared field deletes rather than writing an empty string.
+      if (entered === "") {
+        delete requirement[parameter.name];
+      } else {
+        // Recipes carry plain numbers, but "50k" is how this value is written
+        // in the netlist next to it, so accept that spelling and resolve it.
+        const scaled = spiceNumber(entered);
+        requirement[parameter.name] = Number.isFinite(scaled) ? scaled : numericValue(entered);
+      }
+      refresh();
+      schedulePreview();
+    });
+  }
+  if (parameter.required) control.setAttribute("aria-required", "true");
+
+  const hint = document.createElement("span");
+  hint.className = "field-hint";
+  hint.textContent = requirementParameterHint(parameter, sweep);
+
+  const note = document.createElement("span");
+  note.className = "field-note";
+
+  function refresh() {
+    const stored = requirement[parameter.name];
+    const message = requirementParameterProblem(parameter, stored, sweep);
+    problem.textContent = message;
+    problem.hidden = !message;
+    wrapper.classList.toggle("has-problem", Boolean(message));
+    // Show what a suffixed entry resolved to, since the recipe stores the
+    // resolved number rather than the text that was typed.
+    const resolved =
+      parameter.kind !== "choice" && Number.isFinite(Number(stored))
+        && control.value.trim() !== "" && Number(control.value.trim()) !== Number(stored);
+    note.textContent = resolved
+      ? `Reads as ${parameter.unit === "Hz" ? formatHertz(stored) : stored}.`
+      : "";
+    note.hidden = !resolved;
+  }
+  refresh();
+
+  wrapper.append(caption, control, note, hint, problem);
+  return wrapper;
 }
 
 function emptyEditor(message) {
@@ -2136,7 +2465,7 @@ async function loadInitialState() {
   byId("workspace").textContent = session.workspace;
   byId("workspace").title = session.workspace;
   byId("projects-workspace").textContent = session.workspace;
-  await Promise.all([loadSchematicFiles(), loadNetlistFiles()]);
+  await Promise.all([loadMetricSchema(), loadSchematicFiles(), loadNetlistFiles()]);
   await Promise.all([loadHistory(), loadRemoteJobs(), loadProjects(), loadLtspiceStatus()]);
 }
 

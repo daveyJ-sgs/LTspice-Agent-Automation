@@ -99,6 +99,29 @@ Either:
 No strong preference — Option B is cleaner if more AC-specific post-processing
 (margins, crossover frequency, etc.) is anticipated later.
 
+## Implemented
+
+Option B: `ac_analysis.py`, with `gain_phase(data, numerator, denominator,
+unwrap_phase=False)` and the `unwrap_degrees` helper it uses. Notes on the
+choices the spec left open:
+
+- **No numpy.** The spec suggested `numpy.unwrap`, but nothing in this
+  repository imports numpy and the core stays dependency-free, so
+  `unwrap_degrees` does it in plain Python.
+- **Not reusing `frequency_domain_metrics._unwrap_phase`.** That one raises on
+  an exact 180-degree step, deliberately, because an ambiguous branch there
+  would silently move a stability margin. This helper feeds plots and exports,
+  where refusing a sweep over one ambiguous point is the wrong trade, so it
+  takes the branch and carries the last finite sample across non-finite ones.
+- **Degenerate points.** A zero denominator yields `nan` for gain and phase at
+  that point, per the spec's guard. A zero *numerator* needed a decision the
+  spec did not cover: `20*log10(0)` raises rather than returning a value, so it
+  yields `-inf` dB, which is the correct dB for zero magnitude, with the phase
+  `cmath.phase` reports.
+
+Covered by `tests/test_ac_analysis.py`: every case the spec lists, plus the
+missing-variable message and the unwrap helper's own edges.
+
 ## Suggested test coverage
 
 - Single-step AC sweep: known synthetic `RawData` with hand-computed
