@@ -134,6 +134,11 @@ function updateRecipeFromControls() {
   recipe.plan.sample_count = numericValue(byId("sample-count").value);
   recipe.plan.seed = numericValue(byId("seed").value);
   recipe.plan.sampling_method = byId("sampling-method").value;
+  // The GUI never authored this block before, so a recipe loaded from an
+  // older file may not carry one.
+  const execution = recipe.execution || (recipe.execution = {});
+  execution.max_concurrency = numericValue(byId("max-concurrency").value);
+  execution.reuse_cache = byId("reuse-cache").checked;
 }
 
 function numericValue(value) {
@@ -1116,7 +1121,33 @@ function populateCorners() {
     card.append(heading, fields, values);
     return card;
   });
-  byId("corners").replaceChildren(...(cards.length ? cards : [emptyEditor("No operating-corner axes defined.")]));
+  // The engine rejects corner_aggregate without corner_axes, so the control
+  // only exists while there is something to aggregate over.
+  if (!axes.length) delete recipe.plan.corner_aggregate;
+  const children = cards.length ? [cornerAggregateControl(), ...cards] : [emptyEditor("No operating-corner axes defined.")];
+  byId("corners").replaceChildren(...children);
+}
+
+function cornerAggregateControl() {
+  const wrapper = document.createElement("label");
+  wrapper.className = "checkbox-field aggregate-field";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.id = "corner-aggregate";
+  box.dataset.path = "plan.corner_aggregate";
+  box.checked = recipe.plan.corner_aggregate === true;
+  box.addEventListener("change", () => {
+    if (box.checked) recipe.plan.corner_aggregate = true;
+    else delete recipe.plan.corner_aggregate;
+    schedulePreview();
+  });
+  const caption = document.createElement("span");
+  caption.textContent = "Aggregate across corners";
+  const hint = document.createElement("span");
+  hint.className = "field-hint";
+  hint.textContent = "Judge each sampled point against every corner combination together, instead of scoring the corners separately.";
+  wrapper.append(box, caption, hint);
+  return wrapper;
 }
 
 function populateExperiments() {
@@ -1183,11 +1214,7 @@ function populateExperiments() {
 
       const analysisFields = document.createElement("div");
       analysisFields.className = "compact-fields";
-      for (const [key, label, placeholder] of [
-        ["name", "Analysis name", "response"],
-        ["variable", "Signal, e.g. V(out)", "V(out)"],
-        ["secondary_variable", "Reference signal (optional)", "V(in)"],
-      ]) {
+      const analysisField = ([key, label, placeholder, hint]) => {
         const wrapper = document.createElement("label");
         const caption = document.createElement("span");
         caption.textContent = label;
@@ -1205,8 +1232,64 @@ function populateExperiments() {
           schedulePreview();
         });
         wrapper.append(caption, input);
-        analysisFields.append(wrapper);
+        if (hint) {
+          const note = document.createElement("span");
+          note.className = "field-hint";
+          note.textContent = hint;
+          wrapper.append(note);
+        }
+        return wrapper;
+      };
+
+      for (const field of [
+        ["name", "Analysis name", "response"],
+        ["variable", "Signal, e.g. V(out)", "V(out)"],
+        ["secondary_variable", "Reference signal (optional)", "V(in)"],
+        [
+          "signal_unit",
+          "Signal unit",
+          "V",
+          "Carried onto every measured value and margin in the report. Blank reports bare numbers.",
+        ],
+      ]) {
+        analysisFields.append(analysisField(field));
       }
+
+      // Overrides for decks that don't follow the usual shape: a non-default
+      // independent vector, a unit the axis name doesn't imply, or one of
+      // several .raw files in the run directory.
+      const overrides = document.createElement("details");
+      overrides.className = "analysis-overrides";
+      const overridesSummary = document.createElement("summary");
+      overridesSummary.textContent = "Vector and axis overrides";
+      const overrideFields = document.createElement("div");
+      overrideFields.className = "compact-fields";
+      for (const field of [
+        [
+          "axis_variable",
+          "Axis vector",
+          "time",
+          "Defaults to the RAW file's first vector.",
+        ],
+        [
+          "axis_unit",
+          "Axis unit",
+          "s",
+          "Defaults to Hz for a frequency axis, s otherwise.",
+        ],
+        [
+          "raw_filename",
+          "RAW file",
+          "circuit.raw",
+          "Plain file name. Defaults to the one RAW file found in the run.",
+        ],
+      ]) {
+        overrideFields.append(analysisField(field));
+      }
+      overrides.open = ["axis_variable", "axis_unit", "raw_filename"].some(
+        (key) => analysis[key] !== undefined,
+      );
+      overrides.append(overridesSummary, overrideFields);
 
       const rows = document.createElement("div");
       rows.className = "requirement-rows";
@@ -1230,7 +1313,7 @@ function populateExperiments() {
         schedulePreview();
       });
       rows.append(addRequirement);
-      card.append(analysisHeading, analysisFields, rows);
+      card.append(analysisHeading, analysisFields, overrides, rows);
       analysisStack.append(card);
     }
 
@@ -1534,15 +1617,69 @@ function populateRecipeControls() {
   markClean("save-status", (v) => { studyDirty = v; });
   byId("study-name").textContent = recipe.name || "Untitled study";
   byId("study-description").textContent = recipe.description || "Portable LTspice study recipe";
+  populateStudyIdentity();
   byId("sample-count").value = recipe.plan.sample_count;
   byId("seed").value = recipe.plan.seed;
   byId("sampling-method").value = recipe.plan.sampling_method || "independent";
+  const execution = recipe.execution || (recipe.execution = {});
+  byId("max-concurrency").value = execution.max_concurrency ?? 2;
+  byId("reuse-cache").checked = execution.reuse_cache !== false;
   populateVariables();
   populateCorrelations();
   populateCorners();
   populateExperiments();
   populateSchematicControls();
 }
+
+// Recipe metadata and the report narrative. These were readable in the header
+// but had no inputs, so a study could not be renamed or described in the tool
+// that builds it, and five of the seven report_context fields were unreachable.
+const IDENTITY_FIELDS = [
+  ["identity-name", "recipe", "name"],
+  ["identity-description", "recipe", "description"],
+  ["identity-title", "report_context", "title"],
+  ["identity-circuit-summary", "report_context", "circuit_summary"],
+  ["identity-simulation-summary", "report_context", "simulation_summary"],
+  ["identity-schematic-caption", "report_context", "schematic_caption"],
+  ["identity-mcp-context", "report_context", "mcp_context"],
+];
+
+function populateStudyIdentity() {
+  const block = byId("study-identity");
+  block.hidden = false;
+  const context = recipe.report_context || {};
+  for (const [id, scope, key] of IDENTITY_FIELDS) {
+    byId(id).value = (scope === "recipe" ? recipe[key] : context[key]) ?? "";
+  }
+}
+
+function bindStudyIdentity() {
+  for (const [id, scope, key] of IDENTITY_FIELDS) {
+    byId(id).addEventListener("input", (event) => {
+      if (!recipe) return;
+      const value = event.target.value.trim();
+      if (scope === "recipe") {
+        // name and description are required top-level strings, so they are
+        // written through even when blank and the validator reports them.
+        recipe[key] = event.target.value;
+        if (key === "name") byId("study-name").textContent = value || "Untitled study";
+        if (key === "description") {
+          byId("study-description").textContent = value || "Portable LTspice study recipe";
+        }
+      } else {
+        // report_context values must be 1-1,200 non-blank characters when
+        // present, so an emptied field drops the key instead of sending "".
+        const context = recipe.report_context || (recipe.report_context = {});
+        if (value) context[key] = event.target.value;
+        else delete context[key];
+        if (Object.keys(context).length === 0) delete recipe.report_context;
+      }
+      schedulePreview();
+    });
+  }
+}
+
+bindStudyIdentity();
 
 function renderErrors(errors) {
   const container = byId("errors");
@@ -2561,9 +2698,10 @@ byId("schematic-image-path").addEventListener("input", () => {
   else delete context.schematic_path;
   schedulePreview();
 });
-for (const id of ["sample-count", "seed", "sampling-method"]) {
+for (const id of ["sample-count", "seed", "sampling-method", "max-concurrency"]) {
   byId(id).addEventListener("input", schedulePreview);
 }
+byId("reuse-cache").addEventListener("change", schedulePreview);
 byId("add-variable").addEventListener("click", () => {
   if (!recipe) return;
   const variables = recipe.plan.variables || (recipe.plan.variables = []);

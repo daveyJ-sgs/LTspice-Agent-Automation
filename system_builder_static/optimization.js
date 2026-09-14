@@ -206,8 +206,74 @@ function renderOptimizationDomains() {
     return row;
   });
   optId("optimization-domains").replaceChildren(...rows);
-  optId("optimization-fixed").textContent = Object.entries(optimizationRecipe.fixed_parameters || {})
-    .map(([name, value]) => `${name}=${value}`).join(", ");
+  optId("optimization-fixed").replaceChildren(
+    fixedParameterEditor(optimizationRecipe, renderOptimizationDomains, "No fixed conditions."),
+  );
+}
+
+// Held-constant circuit conditions, as name/value pairs. Shared by the
+// optimization recipe and the qualification model, which carry the same shape.
+function fixedParameterEditor(owner, render, emptyText) {
+  const wrap = document.createElement("div");
+  wrap.className = "fixed-parameters";
+  const entries = Object.entries(owner.fixed_parameters || {});
+  if (!entries.length) {
+    const empty = document.createElement("p");
+    empty.className = "editor-empty";
+    empty.textContent = emptyText;
+    wrap.append(empty);
+  }
+  for (const [name, value] of entries) {
+    const row = document.createElement("div");
+    row.className = "fixed-parameter-row";
+    const key = optInput(name, `fixed parameter name ${name}`, () => {});
+    key.addEventListener("change", () => {
+      const renamed = key.value.trim();
+      const current = owner.fixed_parameters;
+      if (!renamed || renamed === name) { key.value = name; return; }
+      if (renamed in current) { key.value = name; return; }
+      // Rebuild in place so the pair keeps its position in the list.
+      const rebuilt = {};
+      for (const [existing, held] of Object.entries(current)) {
+        rebuilt[existing === name ? renamed : existing] = held;
+      }
+      owner.fixed_parameters = rebuilt;
+      render();
+      scheduleOptimizationPreview();
+    });
+    const held = optInput(value, `fixed parameter value ${name}`, (entered) => {
+      owner.fixed_parameters[name] = optNumber(String(entered).trim());
+      scheduleOptimizationPreview();
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove-button";
+    remove.textContent = "\u00d7";
+    remove.title = `Remove ${name}`;
+    remove.setAttribute("aria-label", `Remove fixed parameter ${name}`);
+    remove.addEventListener("click", () => {
+      delete owner.fixed_parameters[name];
+      if (Object.keys(owner.fixed_parameters).length === 0) delete owner.fixed_parameters;
+      render();
+      scheduleOptimizationPreview();
+    });
+    row.append(key, held, remove);
+    wrap.append(row);
+  }
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "compact-button";
+  add.textContent = "+ Fixed condition";
+  add.addEventListener("click", () => {
+    const held = owner.fixed_parameters || (owner.fixed_parameters = {});
+    let suffix = Object.keys(held).length + 1;
+    while (`PARAM${suffix}` in held) suffix += 1;
+    held[`PARAM${suffix}`] = 0;
+    render();
+    scheduleOptimizationPreview();
+  });
+  wrap.append(add);
+  return wrap;
 }
 
 function renderOptimizationCorners() {
@@ -378,6 +444,50 @@ function selectorField(item, key, caption, choices = null, numeric = false) {
   return optField(caption, control);
 }
 
+// The engine reads absolute_tolerance and relative_tolerance as a pair: if
+// either key is present both are read, neither may be negative, and they may
+// not both be zero. So the editor writes both or neither.
+function toleranceField(item, key, caption, render) {
+  const problem = document.createElement("span");
+  problem.className = "field-problem";
+  const input = optInput(item[key] ?? "", `${item.name} ${caption}`, (value) => {
+    const entered = String(value).trim();
+    if (entered === "") delete item[key];
+    else item[key] = optNumber(entered);
+    const other = key === "absolute_tolerance" ? "relative_tolerance" : "absolute_tolerance";
+    // Supplying one alone means the other defaults to zero, which is valid
+    // only while this one is above zero; pin it so the pair is always whole.
+    if (item[key] !== undefined && item[other] === undefined) item[other] = 0;
+    if (item[key] === undefined && item[other] === 0) delete item[other];
+    refresh();
+    render();
+    scheduleOptimizationPreview();
+  });
+  input.placeholder = "0";
+
+  function refresh() {
+    problem.textContent = toleranceProblem(item);
+    problem.hidden = !problem.textContent;
+    input.setAttribute("aria-invalid", problem.textContent ? "true" : "false");
+  }
+  refresh();
+
+  const field = optField(caption, input);
+  field.append(problem);
+  return field;
+}
+
+function toleranceProblem(item) {
+  const absolute = item.absolute_tolerance;
+  const relative = item.relative_tolerance;
+  if (absolute === undefined && relative === undefined) return "";
+  const values = [absolute ?? 0, relative ?? 0].map(Number);
+  if (values.some((value) => !Number.isFinite(value))) return "Tolerances must be numbers.";
+  if (values.some((value) => value < 0)) return "Tolerances cannot be negative.";
+  if (values.every((value) => value === 0)) return "One tolerance must be above zero.";
+  return "";
+}
+
 function renderOptimizationSelectors() {
   const objectives = optimizationRecipe.objectives || [];
   optId("optimization-objective-count").textContent = `${objectives.length} objectives`;
@@ -392,6 +502,8 @@ function renderOptimizationSelectors() {
       selectorField(item, "goal", "Goal", [["minimize", "Minimize"], ["maximize", "Maximize"]]),
       selectorField(item, "weight", "Weight", null, true),
       metricArgumentsField(item, renderOptimizationSelectors),
+      toleranceField(item, "absolute_tolerance", "Abs. tolerance", renderOptimizationSelectors),
+      toleranceField(item, "relative_tolerance", "Rel. tolerance", renderOptimizationSelectors),
     );
     return row;
   }));
@@ -791,6 +903,7 @@ function renderOptimizationCandidates(result) {
 // attention note.
 function setQualificationAvailability(available) {
   optId("qualification-panel").hidden = !available;
+  if (available) renderQualificationModelEditor();
   optId("qualification-empty").hidden = available;
   optId("goto-qualification-link").hidden = !available;
   optId("qualification-nav-badge").hidden = !available;
@@ -833,6 +946,74 @@ function renderOptimizationResults(result) {
   optId("optimization-evidence-links").replaceChildren(...links);
   optId("optimization-results").hidden = false;
   recoverQualificationJob().catch(() => {});
+}
+
+// The manufacturing tolerance model the qualification samples over. It lives
+// in the .ltopt's qualification block and was previously visible only as the
+// resolved read-only summary a preview returned.
+const QUALIFICATION_VARIABLE_KEYS = ["sigma_fraction", "minimum_factor", "maximum_factor"];
+
+function renderQualificationModelEditor() {
+  const model = optimizationRecipe?.qualification;
+  const editor = optId("qualification-model-editor");
+  if (!model) { editor.hidden = true; return; }
+  editor.hidden = false;
+  const variables = model.variables || (model.variables = []);
+  const rows = variables.map((variable, index) => {
+    const row = document.createElement("div");
+    row.className = "qualification-variable-row";
+    const name = optInput(variable.name, `qualification variable ${index + 1} name`, (value) => {
+      variable.name = String(value).trim();
+      scheduleOptimizationPreview();
+    });
+    row.append(optField("Parameter", name));
+    for (const key of QUALIFICATION_VARIABLE_KEYS) {
+      const input = optInput(variable[key], `qualification ${variable.name} ${key}`, (value) => {
+        variable[key] = optNumber(String(value).trim());
+        scheduleOptimizationPreview();
+      });
+      row.append(optField(key.replace(/_/g, " "), input));
+    }
+    const unit = optInput(variable.unit ?? "", `qualification ${variable.name} unit`, (value) => {
+      // The engine requires exactly these five keys, so unit is always
+      // written even when it is blank.
+      variable.unit = String(value);
+      scheduleOptimizationPreview();
+    });
+    row.append(optField("Unit", unit));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove-button";
+    remove.textContent = "\u00d7";
+    remove.title = `Remove ${variable.name}`;
+    remove.setAttribute("aria-label", `Remove qualification variable ${variable.name}`);
+    remove.addEventListener("click", () => {
+      variables.splice(index, 1);
+      renderQualificationModelEditor();
+      scheduleOptimizationPreview();
+    });
+    row.append(remove);
+    return row;
+  });
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "compact-button";
+  add.textContent = "+ Toleranced parameter";
+  add.addEventListener("click", () => {
+    variables.push({
+      name: "",
+      sigma_fraction: 0.05,
+      minimum_factor: 0.8,
+      maximum_factor: 1.2,
+      unit: "",
+    });
+    renderQualificationModelEditor();
+    scheduleOptimizationPreview();
+  });
+  optId("qualification-variables").replaceChildren(...rows, add);
+  optId("qualification-fixed").replaceChildren(
+    fixedParameterEditor(model, renderQualificationModelEditor, "No fixed conditions."),
+  );
 }
 
 function qualificationRequest() {

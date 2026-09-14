@@ -196,6 +196,41 @@
         </div>
         <p id="study-description" class="muted-copy">Open a project from Projects or load a study recipe to begin.</p>
 
+        <details id="study-identity" class="identity-block" hidden>
+          <summary>Study identity and report narrative</summary>
+          <div class="field-grid identity-fields">
+            <label>
+              <span>Study name</span>
+              <input id="identity-name" type="text" placeholder="Untitled study">
+            </label>
+            <label>
+              <span>Description</span>
+              <input id="identity-description" type="text" placeholder="Portable LTspice study recipe">
+            </label>
+            <label class="wide-field">
+              <span>Report title</span>
+              <input id="identity-title" type="text" placeholder="Defaults to the study name">
+            </label>
+            <label class="wide-field">
+              <span>Circuit summary</span>
+              <textarea id="identity-circuit-summary" rows="2" placeholder="What the circuit is and what it has to do."></textarea>
+            </label>
+            <label class="wide-field">
+              <span>Simulation summary</span>
+              <textarea id="identity-simulation-summary" rows="2" placeholder="What the analyses sweep and why those requirements."></textarea>
+            </label>
+            <label class="wide-field">
+              <span>Schematic caption</span>
+              <input id="identity-schematic-caption" type="text" placeholder="Caption printed under the schematic image">
+            </label>
+            <label class="wide-field">
+              <span>Agent context</span>
+              <textarea id="identity-mcp-context" rows="2" placeholder="Notes carried into the report for whoever picks this up later."></textarea>
+            </label>
+          </div>
+          <p class="muted-copy identity-note">These fields become the generated HTML report's narrative. Each holds up to 1,200 characters.</p>
+        </details>
+
         <div class="field-grid" id="primary-netlist-row" hidden>
           <label class="wide-field">
             <span>Netlist (.cir/.net)</span>
@@ -221,6 +256,16 @@
               <option value="latin_hypercube">Latin hypercube</option>
               <option value="independent">Independent random</option>
             </select>
+          </label>
+          <label>
+            <span>Parallel LTspice runs</span>
+            <input id="max-concurrency" type="number" min="1" max="4" step="1" value="2">
+            <span class="field-hint">Up to 4. Higher finishes sooner and loads the machine harder.</span>
+          </label>
+          <label class="checkbox-field">
+            <input id="reuse-cache" type="checkbox">
+            <span>Reuse cached simulations</span>
+            <span class="field-hint">Skips points already simulated for an identical netlist. Clear it to force every point to re-run.</span>
           </label>
         </div>
 
@@ -473,7 +518,7 @@
               <tbody id="optimization-domains"></tbody>
             </table>
           </div>
-          <p class="editor-note">Fixed circuit conditions: <code id="optimization-fixed">—</code></p>
+          <div class="editor-note"><p class="step">FIXED CIRCUIT CONDITIONS</p><div id="optimization-fixed"></div></div>
 
           <div class="subsection-heading"><div><p class="step">02 / OPERATING CORNERS</p><h3>Finite corner axes</h3></div></div>
           <div id="optimization-corners" class="editor-stack"></div>
@@ -609,6 +654,15 @@
           <label class="field-caption">Deterministic seed<input id="qualification-seed" type="number" min="0" value="20260827"></label>
           <button id="qualification-preview" class="secondary-button" type="button">Preview qualification</button>
         </div>
+        <details id="qualification-model-editor" class="identity-block">
+          <summary>Manufacturing tolerance model</summary>
+          <p class="muted-copy identity-note">Each variable's spread is a fraction of the winning candidate's own value: σ and the min/max bounds are multipliers on its nominal. Names must match a parameter the candidate carries.</p>
+          <div id="qualification-variables" class="qualification-variable-rows"></div>
+          <div class="qualification-fixed-block">
+            <p class="step">FIXED CIRCUIT CONDITIONS</p>
+            <div id="qualification-fixed"></div>
+          </div>
+        </details>
         <div id="qualification-errors" class="errors" role="alert" hidden></div>
         <section id="qualification-preview-card" hidden>
           <dl class="confirmation-grid">
