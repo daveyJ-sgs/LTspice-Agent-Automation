@@ -952,6 +952,15 @@ Builder editors by `GET /api/metrics`.
 and phase (degrees) for a numerator/denominator vector pair, with optional
 unwrapping. It returns data only and has no plotting dependency.
 
+Derived experiment parameters (`derived_parameters`, whose values are composed
+by textual substitution from other parameters) are accepted by
+`define_experiment` and the sweep path only. The `.ltstudy` recipe format has
+no way to carry them: `statistical_engine`'s variable schema permits only name,
+distribution, bounds, nominal, sigma, and unit, so a statistical study cannot
+declare one. Deciding where they belong -- on the experiment, where they would
+not affect plan identity, or in the plan, where they would -- is a format
+decision that has to be made before a recipe or an editor can offer them.
+
 AC metrics use the complex primary vector, divided by `secondary_variable`
 when supplied. Magnitude and unwrapped phase are interpolated in log frequency.
 Stability metrics reject absent or multiple crossovers; narrow

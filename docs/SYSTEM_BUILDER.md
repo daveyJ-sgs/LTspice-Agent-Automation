@@ -146,6 +146,49 @@ agent-authored definition produce byte-identical statistical plans. Its default
 preview resolves 12 manufacturing samples across two ADC-load corners into 24
 points and two paired experiments: 48 prospective LTspice runs.
 
+### Execution, corners, and study identity
+
+Parallelism (up to four concurrent LTspice runs) and simulation cache reuse are
+editable beside the sampling controls rather than fixed when the project was
+scaffolded. `corner_aggregate` is a checkbox over the corner axes, and
+disappears with the last axis because the engine rejects it without them. The
+study's name, description, and the report's narrative fields live in a "Study
+identity and report narrative" block.
+
+## Waveforms, comparison, and history
+
+Every finished job offers **Waveforms**, which plots the `.raw` captures the run
+already wrote: a capture picker, per-trace toggles, selectable resolution, and
+a CSV export at full resolution. A transient axis is drawn linearly and a
+frequency axis in decades; AC captures are complex, so the viewer plots
+magnitude and says so -- exact gain and phase remain the requirement engine's
+job. Nothing in the viewer launches LTspice or writes an artifact.
+
+**Simulate once** on the netlist editor runs one deck through LTspice without
+the define/preview/freeze/acknowledge sequence, for checking that a deck runs
+at all, and opens the viewer on whatever it captured.
+
+The history view filters by text, status, and outcome, and **Compare runs**
+diffs two completed experiments, reporting requirement regressions and
+improvements alongside the portable comparison artifact it writes.
+
+## Studies beyond yield
+
+Three engines that were previously MCP-only are now driven from the browser:
+
+- **Sensitivity** perturbs each manufacturing variable above and below one
+  finished sample and draws a tornado of how far every requirement margin
+  moves, widest swing first. It answers which component actually matters.
+- **Boundary** bisects one variable between a sampled point that passes a check
+  and one that fails it, advancing a batch at a time, to find the value a
+  requirement turns over at rather than a yield percentage.
+- **Robust selection** compares several feasible Pareto finalists under the
+  same manufacturing model, instead of qualifying only the winner.
+
+A finished optimization also offers **Refine this study**, which freezes new
+candidates in the neighbourhoods it already proved feasible and runs them
+through the same paired analyses.
+
 ## Remote Windows execution
 
 After freezing a statistical study, **Preview GitHub workload** binds that exact
