@@ -366,6 +366,10 @@ td:first-child { color: var(--text); font-weight: 600; }
 .compare-controls label { flex: 1 1 190px; min-width: 0; }
 .compare-panel .metric-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin: 4px 0 14px; }
 .compare-panel .accent-metric.regression strong { color: var(--danger); }
+.refine-controls { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 10px 0 0; }
+.refine-controls label { flex: 0 1 130px; }
+.refine-controls input { padding: 7px 9px; font-size: 12px; }
+.refine-status { margin: 9px 0 0; font-size: 12px; font-family: "IBM Plex Mono", monospace; }
 .experiment-group { border-color: var(--accent); }
 .experiment-group > .compact-fields { grid-template-columns: 1fr 2fr; }
 .analysis-stack { margin-top: 13px; gap: 10px; }

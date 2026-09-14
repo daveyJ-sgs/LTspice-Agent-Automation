@@ -1924,6 +1924,142 @@ function axisLabel(value, unit) {
   return `${Number((number / factor).toPrecision(3))}${prefix ? " " + prefix : ""}${unit}`;
 }
 
+// --- Adaptive boundary ----------------------------------------------------
+// Bisects one variable between a passing and a failing sampled point. Each
+// advance takes in the finished batch and launches the next, so the loop is
+// driven from here rather than run to completion in one call.
+let boundarySource = null;
+let boundaryStudy = null;
+
+function openBoundary(experimentId) {
+  boundarySource = experimentId;
+  boundaryStudy = null;
+  byId("boundary-title").textContent = `Where the requirement turns over · ${experimentId}`;
+  byId("boundary-state").hidden = true;
+  boundaryError("");
+  const panel = byId("boundary-panel");
+  panel.hidden = false;
+  panel.scrollIntoView({behavior: "smooth", block: "nearest"});
+}
+
+function boundaryError(message) {
+  const box = byId("boundary-errors");
+  box.textContent = message;
+  box.hidden = !message;
+}
+
+async function defineBoundary() {
+  if (!boundarySource) return;
+  const button = byId("boundary-define");
+  button.disabled = true;
+  boundaryError("");
+  try {
+    const response = await fetch("/api/boundary/define", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({
+        source_experiment_id: boundarySource,
+        first_point_index: Number(byId("boundary-first").value),
+        second_point_index: Number(byId("boundary-second").value),
+        check_id: byId("boundary-check").value.trim(),
+        variable: byId("boundary-variable").value.trim(),
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Boundary study failed");
+    renderBoundary(result);
+  } catch (error) {
+    boundaryError(error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function advanceBoundary() {
+  if (!boundaryStudy) return;
+  const button = byId("boundary-advance");
+  button.disabled = true;
+  byId("boundary-status").textContent = "Advancing…";
+  try {
+    const response = await fetch(
+      `/api/boundary/${encodeURIComponent(boundaryStudy.adaptive_id)}/advance`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-LTspice-System-Builder": "1",
+        },
+        body: "{}",
+      },
+    );
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Boundary advance failed");
+    renderBoundary(result);
+    if (result.active_experiment_id) {
+      trackedJobs.set(result.active_experiment_id, {
+        name: "boundary batch",
+        experiment_id: result.active_experiment_id,
+        status: "running",
+      });
+      renderTrackedJobs();
+      scheduleJobPoll(250);
+    }
+  } catch (error) {
+    byId("boundary-status").textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderBoundary(study) {
+  boundaryStudy = study;
+  boundaryError("");
+  const tiles = [
+    ["Status", study.status],
+    ["Samples", `${study.sample_count} / ${study.max_samples}`],
+    ["Batches", study.batch_count],
+    ["Bracket width", `${Number(study.current_width).toPrecision(4)} ${study.unit || ""}`.trim()],
+    ["Tolerance", Number(study.input_tolerance).toPrecision(3)],
+    ["Variable", study.variable],
+  ].map(([label, value]) => {
+    const tile = document.createElement("div");
+    const caption = document.createElement("span");
+    caption.textContent = label;
+    const amount = document.createElement("strong");
+    amount.textContent = String(value);
+    tile.append(caption, amount);
+    return tile;
+  });
+  byId("boundary-metrics").replaceChildren(...tiles);
+  byId("boundary-state").hidden = false;
+  const finished = Boolean(study.stop_reason);
+  byId("boundary-advance").disabled = finished;
+  byId("boundary-status").textContent = study.error
+    || (finished ? `Converged · ${study.stop_reason}` : `Study ${study.adaptive_id}`);
+}
+
+function boundaryButton(experimentId) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "compact-button";
+  button.textContent = "Boundary";
+  button.title = `Bracket where a requirement turns over in ${experimentId}`;
+  button.addEventListener("click", () => {
+    showView("history");
+    openBoundary(experimentId);
+  });
+  return button;
+}
+
+byId("boundary-define").addEventListener("click", defineBoundary);
+byId("boundary-advance").addEventListener("click", advanceBoundary);
+byId("boundary-close").addEventListener("click", () => {
+  byId("boundary-panel").hidden = true;
+});
+
 // --- Local sensitivity ----------------------------------------------------
 // Answers "which component actually moves this margin?" for a design point
 // that already has electrical evidence, by perturbing each variable above and
@@ -2562,7 +2698,7 @@ function renderHistory(result) {
     if (job.report_url) bottom.append(reportLink(job.report_url));
     bottom.append(waveformButton(job.experiment_id));
     if (job.status === "completed" && job.statistical) {
-      bottom.append(sensitivityButton(job.experiment_id));
+      bottom.append(sensitivityButton(job.experiment_id), boundaryButton(job.experiment_id));
     }
     if (["queued", "running", "cancelling"].includes(job.status)) {
       bottom.append(jobActionButton("Cancel", async () => {

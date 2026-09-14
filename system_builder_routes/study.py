@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
+import adaptive_boundary
 import local_sensitivity
 import statistical_engine
 from remote_execution import build_remote_preview
@@ -154,6 +155,88 @@ def create_study_router(
                 ),
             }
         )
+
+    @router.post("/api/boundary/define")
+    async def define_boundary(request: Request) -> Response:
+        """Bracket a pass/fail boundary between two opposite sampled points.
+
+        The study bisects one variable between a point that passes a check and
+        one that fails it, so the answer is the value where the requirement
+        actually turns over rather than a yield percentage.
+        """
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        payload, error = await read_json_body(request, maximum=4096)
+        if error is not None:
+            return error
+        if not isinstance(payload, dict):
+            return json_error(400, "invalid_boundary", "request must be an object")
+        required = {
+            "source_experiment_id": str,
+            "check_id": str,
+            "variable": str,
+        }
+        values: dict[str, object] = {}
+        for field, kind in required.items():
+            value = payload.get(field)
+            if not isinstance(value, kind) or not value:
+                return json_error(400, "invalid_boundary", f"{field} is required")
+            values[field] = value
+        for field in ("first_point_index", "second_point_index"):
+            value = payload.get(field)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                return json_error(
+                    400, "invalid_boundary", f"{field} must be a non-negative integer"
+                )
+            values[field] = value
+        try:
+            snapshot = adaptive_boundary.define_adaptive_boundary_study(
+                workspace / "runs",
+                str(values["source_experiment_id"]),
+                int(values["first_point_index"]),  # type: ignore[arg-type]
+                int(values["second_point_index"]),  # type: ignore[arg-type]
+                str(values["check_id"]),
+                str(values["variable"]),
+                int(payload.get("batch_size", 3) or 3),
+                int(payload.get("max_samples", 12) or 12),
+                float(payload.get("input_tolerance", 1e-6) or 1e-6),
+            )
+        except (FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+            return json_error(409, "boundary_failed", str(exc))
+        return JSONResponse(snapshot, status_code=202)
+
+    @router.post("/api/boundary/{adaptive_id}/advance")
+    def advance_boundary(request: Request, adaptive_id: str) -> Response:
+        """Take in a finished batch, or launch the next one."""
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        with execution_lock:
+            try:
+                snapshot = adaptive_boundary.advance_adaptive_boundary_study(
+                    workspace / "runs", adaptive_id, get_execution_manager()
+                )
+            except JOB_ACTION_EXCEPTIONS as exc:
+                return json_error(409, "boundary_failed", str(exc))
+            active = snapshot.get("active_experiment_id")
+            if isinstance(active, str) and active:
+                managed_jobs.add(active)
+        return JSONResponse(snapshot)
+
+    @router.get("/api/boundary/{adaptive_id}")
+    def get_boundary(request: Request, adaptive_id: str) -> Response:
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        try:
+            return JSONResponse(
+                adaptive_boundary.get_adaptive_boundary_study(
+                    workspace / "runs", adaptive_id
+                )
+            )
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            return json_error(404, "boundary_not_found", str(exc))
 
     @router.post("/api/jobs/{experiment_id}/finalize")
     def finalize_job(request: Request, experiment_id: str) -> Response:

@@ -902,6 +902,7 @@ function renderOptimizationCandidates(result) {
 // cross-link button on the optimization results, and the dashboard's
 // attention note.
 function setQualificationAvailability(available) {
+  optId("refine-optimization-link").hidden = !available;
   optId("qualification-panel").hidden = !available;
   if (available) renderQualificationModelEditor();
   optId("qualification-empty").hidden = available;
@@ -1062,6 +1063,42 @@ function tolerancePercent(variable) {
 function round12(value) {
   return Number(Number(value).toPrecision(12));
 }
+
+async function refineOptimization() {
+  if (!displayedOptimizationStudy) return;
+  const button = optId("refine-optimization");
+  const status = optId("refine-status");
+  button.disabled = true;
+  status.textContent = "Freezing refined candidates\u2026";
+  try {
+    const response = await fetch("/api/optimization/refine", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({
+        parent_study_id: displayedOptimizationStudy,
+        max_candidates: Number(optId("refine-candidates").value),
+        max_points: Number(optId("refine-points").value),
+        recipe: optimizationRecipe,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Refinement failed");
+    const refinement = result.refinement || {};
+    status.textContent =
+      `Refined plan ${refinement.plan_id} is running \u00b7 `
+      + `${refinement.candidate_count} candidates \u00b7 ${refinement.point_count} points`;
+    renderOptimizationJob(result);
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+optId("refine-optimization").addEventListener("click", refineOptimization);
 
 function qualificationRequest() {
   return {

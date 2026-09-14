@@ -631,6 +631,19 @@
           <div id="optimization-evidence-links"></div>
         </div>
 
+        <div class="cross-link" id="refine-optimization-link" hidden>
+          <div>
+            <strong>Search again around the winning region</strong>
+            <p>Refinement freezes new candidates in the neighbourhoods this study already proved feasible, so the next pass spends its budget where the answer is.</p>
+            <div class="refine-controls">
+              <label class="field-caption">Candidates<input id="refine-candidates" type="number" min="1" max="64" step="1" value="24"></label>
+              <label class="field-caption">Points<input id="refine-points" type="number" min="1" max="256" step="1" value="96"></label>
+            </div>
+            <p id="refine-status" class="muted-copy refine-status" aria-live="polite"></p>
+          </div>
+          <button id="refine-optimization" class="secondary-button" type="button">Refine this study</button>
+        </div>
+
         <div class="cross-link" id="goto-qualification-link" hidden>
           <div>
             <strong>Prove this candidate survives real tolerances</strong>
@@ -746,6 +759,40 @@
           </select>
         </label>
       </div>
+
+      <section id="boundary-panel" class="panel compare-panel" hidden>
+        <div class="panel-heading compact">
+          <div>
+            <p class="step">BOUNDARY</p>
+            <h3 id="boundary-title">Where the requirement turns over</h3>
+          </div>
+          <button id="boundary-close" class="compact-button" type="button">Close</button>
+        </div>
+        <p class="editor-note">Bisects one variable between a sampled point that passes a check and one that fails it, so you get the value the requirement actually turns over at rather than a yield percentage.</p>
+        <div class="compare-controls">
+          <label class="field-caption">Passing point
+            <input id="boundary-first" type="number" min="0" step="1" value="0">
+          </label>
+          <label class="field-caption">Failing point
+            <input id="boundary-second" type="number" min="0" step="1" value="1">
+          </label>
+          <label class="field-caption">Check id
+            <input id="boundary-check" type="text" spellcheck="false" placeholder="analog_bandwidth:0">
+          </label>
+          <label class="field-caption">Variable
+            <input id="boundary-variable" type="text" spellcheck="false" placeholder="CAA1">
+          </label>
+          <button id="boundary-define" class="secondary-button" type="button">Bracket boundary</button>
+        </div>
+        <div id="boundary-errors" class="inline-errors" aria-live="polite" hidden></div>
+        <div id="boundary-state" hidden>
+          <div id="boundary-metrics" class="metric-grid"></div>
+          <div class="button-row">
+            <button id="boundary-advance" class="secondary-button" type="button">Advance one batch</button>
+            <span id="boundary-status" class="muted-copy refine-status"></span>
+          </div>
+        </div>
+      </section>
 
       <section id="sensitivity-panel" class="panel compare-panel" hidden>
         <div class="panel-heading compact">
