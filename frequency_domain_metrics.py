@@ -831,6 +831,119 @@ _METRIC_REGISTRY = {
 }
 
 
+# The AC window is bounded by the swept frequency axis, so these carry Hz
+# rather than the seconds their time-domain counterparts carry.
+COMMON_PARAMETERS: tuple[waveform_metrics.MetricParameter, ...] = (
+    waveform_metrics.MetricParameter(
+        "window_start",
+        "number",
+        unit="Hz",
+        description="Ignore points below this frequency; must be inside the sweep.",
+    ),
+    waveform_metrics.MetricParameter(
+        "window_end",
+        "number",
+        unit="Hz",
+        description="Ignore points above this frequency; must be inside the sweep.",
+    ),
+)
+
+# Keyed by the names carried in _METRIC_REGISTRY, so a parameter added to a
+# registry entry without a description here fails the registry test rather
+# than silently going missing from the editors that read this schema.
+_PARAMETER_DEFINITIONS: dict[str, waveform_metrics.MetricParameter] = {
+    parameter.name: parameter
+    for parameter in (
+        waveform_metrics.MetricParameter(
+            "threshold_value",
+            "number",
+            required=True,
+            description="Signal level whose crossings set the measured period.",
+        ),
+        waveform_metrics.MetricParameter(
+            "edge",
+            "choice",
+            choices=("rising", "falling"),
+            default="rising",
+            description="Crossing direction counted as one cycle.",
+        ),
+        waveform_metrics.MetricParameter(
+            "frequency_min",
+            "number",
+            required=True,
+            unit="Hz",
+            description="Lower bound of the searched spectrum.",
+        ),
+        waveform_metrics.MetricParameter(
+            "frequency_max",
+            "number",
+            required=True,
+            unit="Hz",
+            description="Upper bound of the searched spectrum.",
+        ),
+        waveform_metrics.MetricParameter(
+            "frequency_resolution",
+            "number",
+            unit="Hz",
+            description="Spectral bin width; derived from the capture when omitted.",
+        ),
+        waveform_metrics.MetricParameter(
+            "fundamental_frequency",
+            "number",
+            required=True,
+            unit="Hz",
+            description="Fundamental the harmonics are summed against.",
+        ),
+        waveform_metrics.MetricParameter(
+            "maximum_harmonic",
+            "integer",
+            default=5,
+            description="Highest harmonic included in the distortion sum.",
+        ),
+        waveform_metrics.MetricParameter(
+            "frequency_value",
+            "number",
+            required=True,
+            unit="Hz",
+            axis_interpolated=True,
+            description="Frequency the gain is read at; must be inside the .AC sweep.",
+        ),
+        waveform_metrics.MetricParameter(
+            "reference_frequency",
+            "number",
+            required=True,
+            unit="Hz",
+            axis_interpolated=True,
+            description="Passband reference frequency; must be inside the .AC sweep.",
+        ),
+        waveform_metrics.MetricParameter(
+            "cutoff_drop_db",
+            "number",
+            default=3.01029995664,
+            unit="dB",
+            description="Drop below the reference gain that marks the cutoff.",
+        ),
+        waveform_metrics.MetricParameter(
+            "direction",
+            "choice",
+            choices=("rising", "falling"),
+            default="falling",
+            description="Search below the reference for rising, above it for falling.",
+        ),
+    )
+}
+
+
+def metric_parameters(metric: str) -> tuple[waveform_metrics.MetricParameter, ...]:
+    """Return the requirement parameters a frequency-domain metric accepts."""
+    spec = _METRIC_REGISTRY.get(metric)
+    if spec is None:
+        raise ValueError(f"Unknown frequency-domain metric: {metric}")
+    return waveform_metrics.describe_parameters(
+        spec.parameters, _PARAMETER_DEFINITIONS, COMMON_PARAMETERS
+    )
+
+
 def measure_metric(
     axis: Sequence[Number],
     values: Sequence[Number],

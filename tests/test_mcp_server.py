@@ -12,6 +12,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import experiment_engine
+import frequency_domain_metrics
+import waveform_metrics
 from support import TemporaryRunsTestCase
 
 try:
@@ -4424,6 +4427,78 @@ class MCPServerTests(TemporaryRunsTestCase):
         examples = mcp_server.list_examples()
         self.assertEqual([item["name"] for item in examples], ["a.cir", "b.net"])
         self.assertEqual(examples[0]["description"], "AC example")
+
+
+@unittest.skipIf(mcp_server is None, "optional mcp package is not installed")
+class RequirementMetricParameterTests(unittest.TestCase):
+    """The accepted parameter names come from the measurement registries.
+
+    This path used to keep its own copy of every parameter name and filter by
+    domain rather than per metric, so a name could be added to a metric without
+    this path learning about it, and a misspelled one was dropped in silence.
+    """
+
+    SUPPLIED = {
+        "initial_value": 0.0, "final_value": 5.0, "low_fraction": 0.1,
+        "high_fraction": 0.9, "settling_tolerance": 0.05, "window_start": 1.0,
+        "window_end": 4.0, "threshold_value": 2.5, "primary_threshold": 2.5,
+        "secondary_threshold": 2.5, "forbidden_min": 6.0, "forbidden_max": 7.0,
+        "secondary_forbidden_min": 6.0, "secondary_forbidden_max": 7.0,
+        "frequency_min": 10.0, "frequency_max": 1000.0, "frequency_resolution": 5.0,
+        "fundamental_frequency": 50.0, "frequency_value": 100.0,
+        "reference_frequency": 10.0, "cutoff_drop_db": 3.0, "maximum_harmonic": 3,
+        "polarity": "high", "primary_edge": "rising", "secondary_edge": "rising",
+        "direction": "rising", "edge": "rising",
+    }
+
+    def test_every_metric_takes_exactly_its_schema_parameters(self) -> None:
+        metrics = (
+            waveform_metrics.SUPPORTED_METRICS
+            | frequency_domain_metrics.SUPPORTED_METRICS
+        )
+        for metric in sorted(metrics):
+            with self.subTest(metric=metric):
+                selected = mcp_server._requirement_metric_parameters(
+                    metric, self.SUPPLIED
+                )
+                self.assertEqual(
+                    sorted(selected),
+                    sorted(
+                        parameter.name
+                        for parameter in experiment_engine.metric_parameters(metric)
+                    ),
+                )
+
+    def test_parameters_are_coerced_to_the_kind_the_schema_declares(self) -> None:
+        selected = mcp_server._requirement_metric_parameters(
+            "thd", {"fundamental_frequency": "50", "maximum_harmonic": 3}
+        )
+
+        self.assertEqual(
+            selected, {"fundamental_frequency": 50.0, "maximum_harmonic": 3}
+        )
+        self.assertIsInstance(selected["fundamental_frequency"], float)
+        self.assertIsInstance(selected["maximum_harmonic"], int)
+
+    def test_a_non_integer_harmonic_count_is_still_rejected(self) -> None:
+        for harmonic in (3.5, True, "3"):
+            with self.subTest(harmonic=harmonic):
+                with self.assertRaisesRegex(ValueError, "maximum_harmonic"):
+                    mcp_server._requirement_metric_parameters(
+                        "thd",
+                        {"fundamental_frequency": 50, "maximum_harmonic": harmonic},
+                    )
+
+    def test_an_unknown_metric_is_reported_the_same_way_as_before(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unknown waveform metric"):
+            mcp_server._requirement_metric_parameters("not_a_metric", {})
+
+    def test_a_parameter_the_metric_cannot_read_is_left_out(self) -> None:
+        selected = mcp_server._requirement_metric_parameters(
+            "maximum", {"threshold_value": 1.0, "window_start": 2.0}
+        )
+
+        self.assertEqual(selected, {"window_start": 2.0})
 
 
 if __name__ == "__main__":

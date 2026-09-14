@@ -134,6 +134,11 @@ function updateRecipeFromControls() {
   recipe.plan.sample_count = numericValue(byId("sample-count").value);
   recipe.plan.seed = numericValue(byId("seed").value);
   recipe.plan.sampling_method = byId("sampling-method").value;
+  // The GUI never authored this block before, so a recipe loaded from an
+  // older file may not carry one.
+  const execution = recipe.execution || (recipe.execution = {});
+  execution.max_concurrency = numericValue(byId("max-concurrency").value);
+  execution.reuse_cache = byId("reuse-cache").checked;
 }
 
 function numericValue(value) {
@@ -420,6 +425,106 @@ async function loadSchematicFiles() {
 // user hasn't saved yet. Cleared on an explicit "Refresh netlists" click.
 const netlistEditorBuffers = new Map();
 
+// Served from the measurement registries by /api/metrics, so the requirement
+// form offers exactly the parameters each metric actually reads instead of a
+// table kept in step by hand.
+let metricSchema = new Map();
+
+async function loadMetricSchema() {
+  const response = await fetch("/api/metrics");
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error?.message || "Metric schema could not be read");
+  metricSchema = new Map((result.metrics || []).map((metric) => [metric.name, metric]));
+}
+
+function metricDefinition(name) {
+  return metricSchema.get(name) || null;
+}
+
+function metricParameters(name) {
+  return metricDefinition(name)?.parameters || [];
+}
+
+// SPICE magnitude suffixes. "meg" and "mil" are listed before "m" because a
+// prefix match would otherwise read 1Meg as 1 milli.
+const SPICE_SCALES = [
+  ["meg", 1e6], ["mil", 25.4e-6], ["t", 1e12], ["g", 1e9], ["k", 1e3],
+  ["m", 1e-3], ["u", 1e-6], ["n", 1e-9], ["p", 1e-12], ["f", 1e-15],
+];
+
+function spiceNumber(token) {
+  const match = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z]*)$/i.exec(String(token ?? "").trim());
+  if (!match) return NaN;
+  const mantissa = Number(match[1]);
+  const suffix = match[2].toLowerCase();
+  if (!suffix) return mantissa;
+  const scale = SPICE_SCALES.find(([name]) => suffix.startsWith(name));
+  return scale ? mantissa * scale[1] : mantissa;
+}
+
+// The swept range a frequency-valued requirement parameter has to land inside.
+// Returns null when the directive is missing or parameterised ({FMAX}), in
+// which case the field simply goes unhinted and the server still validates.
+function acSweepRange(netlistText) {
+  const directive = /^[ \t]*\.ac[ \t]+(\S+)[ \t]+(.+)$/im.exec(netlistText || "");
+  if (!directive) return null;
+  const spacing = directive[1].toLowerCase();
+  const fields = directive[2].trim().split(/\s+/);
+  if (spacing === "list") {
+    const points = fields.map(spiceNumber).filter((value) => Number.isFinite(value) && value > 0);
+    if (points.length === 0) return null;
+    return {spacing, start: Math.min(...points), stop: Math.max(...points)};
+  }
+  if (!["dec", "oct", "lin"].includes(spacing) || fields.length < 3) return null;
+  const start = spiceNumber(fields[1]);
+  const stop = spiceNumber(fields[2]);
+  if (!Number.isFinite(start) || !Number.isFinite(stop) || start <= 0 || stop < start) return null;
+  return {spacing, points: spiceNumber(fields[0]), start, stop};
+}
+
+function formatHertz(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value ?? "—");
+  const magnitude = Math.abs(number);
+  const [factor, label] = [[1e9, "GHz"], [1e6, "MHz"], [1e3, "kHz"], [1, "Hz"]]
+    .find(([candidate]) => magnitude >= candidate) || [1, "Hz"];
+  return `${Number((number / factor).toPrecision(4))} ${label}`;
+}
+
+function formatDefault(value) {
+  if (value === null || value === undefined) return "";
+  return typeof value === "number" ? String(Number(value.toPrecision(6))) : String(value);
+}
+
+// Netlist text is fetched for the sweep-range hint even when this experiment
+// has no open netlist editor. Re-renders once on arrival; a failed read just
+// leaves the hint out rather than retrying in a loop.
+const netlistTextRequests = new Set();
+
+function experimentNetlistText(experiment) {
+  const path = experiment?.netlist_path;
+  if (!path) return null;
+  if (netlistEditorBuffers.has(path)) return netlistEditorBuffers.get(path);
+  requestNetlistText(path);
+  return null;
+}
+
+async function requestNetlistText(path) {
+  if (netlistTextRequests.has(path)) return;
+  netlistTextRequests.add(path);
+  try {
+    const response = await fetch(`/api/recipe/netlist?path=${encodeURIComponent(path)}`);
+    const result = await response.json();
+    if (!response.ok) return;
+    netlistEditorBuffers.set(path, result.content);
+    if (recipe) populateExperiments();
+  } catch (_) {
+    // The hint is an aid; the backend still range-checks every frequency.
+  } finally {
+    netlistTextRequests.delete(path);
+  }
+}
+
 async function loadNetlistFiles() {
   const response = await fetch("/api/recipe/netlists");
   const result = await response.json();
@@ -474,6 +579,41 @@ function buildNetlistEditor(experiment) {
   const status = document.createElement("span");
   status.className = "muted-copy netlist-editor-status";
 
+  const runButton = document.createElement("button");
+  runButton.type = "button";
+  runButton.className = "compact-button";
+  runButton.textContent = "Simulate once";
+  runButton.title = "Run this deck through LTspice now, without defining a study";
+  runButton.disabled = true;
+  runButton.addEventListener("click", async () => {
+    const path = experiment.netlist_path;
+    if (!path) return;
+    runButton.disabled = true;
+    status.textContent = "Simulating\u2026";
+    try {
+      const response = await fetch("/api/netlist/run", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-LTspice-System-Builder": "1",
+        },
+        body: JSON.stringify({netlist_path: path}),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error?.message || "Simulation failed");
+      const captures = result.captures || [];
+      status.textContent = `${result.status} \u00b7 ${captures.length} capture${captures.length === 1 ? "" : "s"}`;
+      if (captures.length) {
+        showView("history");
+        openWaveforms(result.run_id);
+      }
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      runButton.disabled = false;
+    }
+  });
+
   const saveButton = document.createElement("button");
   saveButton.type = "button";
   saveButton.className = "primary-button";
@@ -507,7 +647,7 @@ function buildNetlistEditor(experiment) {
 
   const buttonRow = document.createElement("div");
   buttonRow.className = "button-row";
-  buttonRow.append(saveButton, status);
+  buttonRow.append(saveButton, runButton, status);
 
   container.append(toolbar, textarea, buttonRow);
 
@@ -518,6 +658,7 @@ function buildNetlistEditor(experiment) {
       textarea.value = netlistEditorBuffers.get(path);
       textarea.disabled = false;
       saveButton.disabled = false;
+      runButton.disabled = false;
       return;
     }
     status.textContent = "Loading…";
@@ -529,6 +670,7 @@ function buildNetlistEditor(experiment) {
       netlistEditorBuffers.set(path, result.content);
       textarea.disabled = false;
       saveButton.disabled = false;
+      runButton.disabled = false;
       status.textContent = "";
     } catch (error) {
       status.textContent = error.message;
@@ -1016,7 +1158,33 @@ function populateCorners() {
     card.append(heading, fields, values);
     return card;
   });
-  byId("corners").replaceChildren(...(cards.length ? cards : [emptyEditor("No operating-corner axes defined.")]));
+  // The engine rejects corner_aggregate without corner_axes, so the control
+  // only exists while there is something to aggregate over.
+  if (!axes.length) delete recipe.plan.corner_aggregate;
+  const children = cards.length ? [cornerAggregateControl(), ...cards] : [emptyEditor("No operating-corner axes defined.")];
+  byId("corners").replaceChildren(...children);
+}
+
+function cornerAggregateControl() {
+  const wrapper = document.createElement("label");
+  wrapper.className = "checkbox-field aggregate-field";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.id = "corner-aggregate";
+  box.dataset.path = "plan.corner_aggregate";
+  box.checked = recipe.plan.corner_aggregate === true;
+  box.addEventListener("change", () => {
+    if (box.checked) recipe.plan.corner_aggregate = true;
+    else delete recipe.plan.corner_aggregate;
+    schedulePreview();
+  });
+  const caption = document.createElement("span");
+  caption.textContent = "Aggregate across corners";
+  const hint = document.createElement("span");
+  hint.className = "field-hint";
+  hint.textContent = "Judge each sampled point against every corner combination together, instead of scoring the corners separately.";
+  wrapper.append(box, caption, hint);
+  return wrapper;
 }
 
 function populateExperiments() {
@@ -1083,11 +1251,7 @@ function populateExperiments() {
 
       const analysisFields = document.createElement("div");
       analysisFields.className = "compact-fields";
-      for (const [key, label, placeholder] of [
-        ["name", "Analysis name", "response"],
-        ["variable", "Signal, e.g. V(out)", "V(out)"],
-        ["secondary_variable", "Reference signal (optional)", "V(in)"],
-      ]) {
+      const analysisField = ([key, label, placeholder, hint]) => {
         const wrapper = document.createElement("label");
         const caption = document.createElement("span");
         caption.textContent = label;
@@ -1105,32 +1269,76 @@ function populateExperiments() {
           schedulePreview();
         });
         wrapper.append(caption, input);
-        analysisFields.append(wrapper);
+        if (hint) {
+          const note = document.createElement("span");
+          note.className = "field-hint";
+          note.textContent = hint;
+          wrapper.append(note);
+        }
+        return wrapper;
+      };
+
+      for (const field of [
+        ["name", "Analysis name", "response"],
+        ["variable", "Signal, e.g. V(out)", "V(out)"],
+        ["secondary_variable", "Reference signal (optional)", "V(in)"],
+        [
+          "signal_unit",
+          "Signal unit",
+          "V",
+          "Carried onto every measured value and margin in the report. Blank reports bare numbers.",
+        ],
+      ]) {
+        analysisFields.append(analysisField(field));
       }
+
+      // Overrides for decks that don't follow the usual shape: a non-default
+      // independent vector, a unit the axis name doesn't imply, or one of
+      // several .raw files in the run directory.
+      const overrides = document.createElement("details");
+      overrides.className = "analysis-overrides";
+      const overridesSummary = document.createElement("summary");
+      overridesSummary.textContent = "Vector and axis overrides";
+      const overrideFields = document.createElement("div");
+      overrideFields.className = "compact-fields";
+      for (const field of [
+        [
+          "axis_variable",
+          "Axis vector",
+          "time",
+          "Defaults to the RAW file's first vector.",
+        ],
+        [
+          "axis_unit",
+          "Axis unit",
+          "s",
+          "Defaults to Hz for a frequency axis, s otherwise.",
+        ],
+        [
+          "raw_filename",
+          "RAW file",
+          "circuit.raw",
+          "Plain file name. Defaults to the one RAW file found in the run.",
+        ],
+      ]) {
+        overrideFields.append(analysisField(field));
+      }
+      overrides.open = ["axis_variable", "axis_unit", "raw_filename"].some(
+        (key) => analysis[key] !== undefined,
+      );
+      overrides.append(overridesSummary, overrideFields);
 
       const rows = document.createElement("div");
       rows.className = "requirement-rows";
       for (const [requirementIndex, requirement] of (analysis.requirements || []).entries()) {
         requirementCount += 1;
-        const requirementBase = `${analysisBase}.requirements[${requirementIndex}]`;
-        const row = document.createElement("div");
-        row.className = "requirement-row";
-        row.dataset.path = requirementBase;
-        const metric = fieldInput(requirement.metric, `${requirementBase}.metric`);
-        metric.placeholder = "Metric";
-        setRecipeField(metric, requirement, "metric");
-        const operator = selectInput(requirement.operator, [["<", "<"], ["<=", "≤"], [">", ">"], [">=", "≥"]], `${requirementBase}.operator`);
-        setRecipeField(operator, requirement, "operator");
-        operator.addEventListener("change", schedulePreview);
-        const target = fieldInput(requirement.target, `${requirementBase}.target`);
-        target.placeholder = "Target";
-        setRecipeField(target, requirement, "target", true);
-        row.append(metric, operator, target, removeButton(`Remove ${requirement.metric} requirement`, () => {
-          analysis.requirements.splice(requirementIndex, 1);
-          populateExperiments();
-          schedulePreview();
-        }));
-        rows.append(row);
+        rows.append(buildRequirement(
+          analysis,
+          requirement,
+          requirementIndex,
+          `${analysisBase}.requirements[${requirementIndex}]`,
+          experiment,
+        ));
       }
       const addRequirement = document.createElement("button");
       addRequirement.type = "button";
@@ -1142,7 +1350,7 @@ function populateExperiments() {
         schedulePreview();
       });
       rows.append(addRequirement);
-      card.append(analysisHeading, analysisFields, rows);
+      card.append(analysisHeading, analysisFields, overrides, rows);
       analysisStack.append(card);
     }
 
@@ -1194,6 +1402,247 @@ function populatePrimaryNetlist(experiments) {
   }
 }
 
+const REQUIREMENT_CORE_FIELDS = ["metric", "operator", "target"];
+
+// Grouped so the AC metrics a filter study needs are not mixed in with the
+// transient ones. Shared with the optimization goal editor.
+function metricOptionGroups() {
+  return [["frequency", "AC / frequency domain"], ["time", "Time domain"]]
+    .map(([domain, label]) => [
+      label,
+      [...metricSchema.values()].filter((metric) => metric.domain === domain).map((metric) => metric.name),
+    ])
+    .filter(([, names]) => names.length > 0);
+}
+
+function metricSelect(value, path) {
+  const select = document.createElement("select");
+  select.dataset.path = path;
+  select.setAttribute("aria-label", path);
+  let matched = false;
+  for (const [label, names] of metricOptionGroups()) {
+    const group = document.createElement("optgroup");
+    group.label = label;
+    for (const name of names) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      if (name === value) matched = true;
+      group.append(option);
+    }
+    select.append(group);
+  }
+  if (!matched) {
+    const option = document.createElement("option");
+    option.value = value ?? "";
+    option.textContent = value ? `${value} (loaded)` : "\u2014 Select a metric \u2014";
+    select.prepend(option);
+  }
+  select.value = value ?? "";
+  return select;
+}
+
+// Parameters are flat sibling keys of metric/operator/target, so the ones the
+// previous metric used have to go when the metric changes -- otherwise they
+// linger as fields the new metric cannot accept.
+function setRequirementMetric(requirement, metric) {
+  // Only prune against a metric the schema actually describes: a recipe written
+  // against a newer build can name one this page has never heard of, and
+  // dropping its parameters would quietly rewrite the recipe.
+  const definition = metricDefinition(metric);
+  if (definition) {
+    const accepted = new Set(definition.parameters.map((parameter) => parameter.name));
+    for (const key of Object.keys(requirement)) {
+      if (REQUIREMENT_CORE_FIELDS.includes(key)) continue;
+      if (!accepted.has(key)) delete requirement[key];
+    }
+  }
+  requirement.metric = metric;
+}
+
+function buildRequirement(analysis, requirement, index, base, experiment) {
+  const container = document.createElement("div");
+  container.className = "requirement";
+  container.dataset.path = base;
+
+  const row = document.createElement("div");
+  row.className = "requirement-row";
+
+  const metric = metricSelect(requirement.metric, `${base}.metric`);
+  metric.addEventListener("change", () => {
+    setRequirementMetric(requirement, metric.value);
+    populateExperiments();
+    schedulePreview();
+  });
+  const operator = selectInput(requirement.operator, [["<", "<"], ["<=", "\u2264"], [">", ">"], [">=", "\u2265"]], `${base}.operator`);
+  setRecipeField(operator, requirement, "operator");
+  operator.addEventListener("change", schedulePreview);
+  const target = fieldInput(requirement.target, `${base}.target`);
+  target.placeholder = "Target";
+  setRecipeField(target, requirement, "target", true);
+
+  row.append(metric, operator, target, removeButton(`Remove ${requirement.metric} requirement`, () => {
+    analysis.requirements.splice(index, 1);
+    populateExperiments();
+    schedulePreview();
+  }));
+  container.append(row);
+
+  const parameters = metricParameters(requirement.metric);
+  const sweep = acSweepRange(experimentNetlistText(experiment));
+  const specific = parameters.filter((parameter) => !parameter.common);
+  const shared = parameters.filter((parameter) => parameter.common);
+  if (specific.length) {
+    const grid = document.createElement("div");
+    grid.className = "requirement-parameters";
+    for (const parameter of specific) {
+      grid.append(buildRequirementParameter(requirement, parameter, base, sweep));
+    }
+    container.append(grid);
+  }
+  // The analysis window applies to every metric and is usually left alone, so
+  // it folds away rather than burying the fields that are specific to this one.
+  if (shared.length) {
+    const details = document.createElement("details");
+    details.className = "requirement-window";
+    details.open = shared.some((parameter) => requirement[parameter.name] !== undefined);
+    const summary = document.createElement("summary");
+    summary.textContent = "Analysis window";
+    const grid = document.createElement("div");
+    grid.className = "requirement-parameters";
+    for (const parameter of shared) {
+      grid.append(buildRequirementParameter(requirement, parameter, base, sweep));
+    }
+    details.append(summary, grid);
+    container.append(details);
+  }
+  return container;
+}
+
+function requirementParameterHint(parameter, sweep) {
+  const notes = [parameter.description];
+  if (parameter.axis_interpolated) {
+    notes.push(
+      sweep
+        ? `Swept ${formatHertz(sweep.start)} to ${formatHertz(sweep.stop)}.`
+        : "Must fall inside the .AC sweep.",
+    );
+    notes.push("Read by interpolation in log frequency, not snapped to the nearest simulated point.");
+  }
+  const fallback = formatDefault(parameter.default);
+  if (!parameter.required && fallback) notes.push(`Defaults to ${fallback}.`);
+  return notes.filter(Boolean).join(" ");
+}
+
+function requirementParameterProblem(parameter, value, sweep) {
+  if (value === undefined || value === "") {
+    return parameter.required ? "Required for this metric." : "";
+  }
+  const number = Number(value);
+  if (parameter.kind === "choice") return "";
+  if (!Number.isFinite(number)) return "Must be a number.";
+  if (parameter.kind === "integer" && !Number.isInteger(number)) return "Must be a whole number.";
+  if (parameter.axis_interpolated && sweep && (number < sweep.start || number > sweep.stop)) {
+    return `Outside the .AC sweep (${formatHertz(sweep.start)} to ${formatHertz(sweep.stop)}).`;
+  }
+  return "";
+}
+
+function buildRequirementParameter(requirement, parameter, base, sweep) {
+  const wrapper = document.createElement("label");
+  wrapper.className = parameter.required
+    ? "requirement-parameter required-parameter"
+    : "requirement-parameter";
+  const path = `${base}.${parameter.name}`;
+
+  const caption = document.createElement("span");
+  caption.textContent = parameter.unit
+    ? `${parameter.name} (${parameter.unit})`
+    : parameter.name;
+  if (parameter.required) {
+    const mark = document.createElement("abbr");
+    mark.className = "required-mark";
+    mark.textContent = "*";
+    mark.title = "Required for this metric";
+    caption.append(" ", mark);
+  }
+
+  const problem = document.createElement("span");
+  problem.className = "field-problem";
+
+  let control;
+  if (parameter.kind === "choice") {
+    control = document.createElement("select");
+    control.dataset.path = path;
+    control.setAttribute("aria-label", path);
+    const fallback = formatDefault(parameter.default);
+    const blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = fallback ? `\u2014 default (${fallback}) \u2014` : "\u2014 automatic \u2014";
+    control.append(blank);
+    for (const choice of parameter.choices) {
+      const option = document.createElement("option");
+      option.value = choice;
+      option.textContent = choice;
+      control.append(option);
+    }
+    control.value = requirement[parameter.name] === undefined ? "" : String(requirement[parameter.name]);
+    control.addEventListener("change", () => {
+      if (control.value === "") delete requirement[parameter.name];
+      else requirement[parameter.name] = control.value;
+      refresh();
+      schedulePreview();
+    });
+  } else {
+    control = fieldInput(requirement[parameter.name], path);
+    control.placeholder = formatDefault(parameter.default) || (parameter.required ? "required" : "optional");
+    control.addEventListener("input", () => {
+      const entered = control.value.trim();
+      // An absent key is how an optional parameter says "use the default", so
+      // a cleared field deletes rather than writing an empty string.
+      if (entered === "") {
+        delete requirement[parameter.name];
+      } else {
+        // Recipes carry plain numbers, but "50k" is how this value is written
+        // in the netlist next to it, so accept that spelling and resolve it.
+        const scaled = spiceNumber(entered);
+        requirement[parameter.name] = Number.isFinite(scaled) ? scaled : numericValue(entered);
+      }
+      refresh();
+      schedulePreview();
+    });
+  }
+  if (parameter.required) control.setAttribute("aria-required", "true");
+
+  const hint = document.createElement("span");
+  hint.className = "field-hint";
+  hint.textContent = requirementParameterHint(parameter, sweep);
+
+  const note = document.createElement("span");
+  note.className = "field-note";
+
+  function refresh() {
+    const stored = requirement[parameter.name];
+    const message = requirementParameterProblem(parameter, stored, sweep);
+    problem.textContent = message;
+    problem.hidden = !message;
+    wrapper.classList.toggle("has-problem", Boolean(message));
+    // Show what a suffixed entry resolved to, since the recipe stores the
+    // resolved number rather than the text that was typed.
+    const resolved =
+      parameter.kind !== "choice" && Number.isFinite(Number(stored))
+        && control.value.trim() !== "" && Number(control.value.trim()) !== Number(stored);
+    note.textContent = resolved
+      ? `Reads as ${parameter.unit === "Hz" ? formatHertz(stored) : stored}.`
+      : "";
+    note.hidden = !resolved;
+  }
+  refresh();
+
+  wrapper.append(caption, control, note, hint, problem);
+  return wrapper;
+}
+
 function emptyEditor(message) {
   const empty = document.createElement("p");
   empty.className = "editor-empty";
@@ -1205,15 +1654,737 @@ function populateRecipeControls() {
   markClean("save-status", (v) => { studyDirty = v; });
   byId("study-name").textContent = recipe.name || "Untitled study";
   byId("study-description").textContent = recipe.description || "Portable LTspice study recipe";
+  populateStudyIdentity();
   byId("sample-count").value = recipe.plan.sample_count;
   byId("seed").value = recipe.plan.seed;
   byId("sampling-method").value = recipe.plan.sampling_method || "independent";
+  const execution = recipe.execution || (recipe.execution = {});
+  byId("max-concurrency").value = execution.max_concurrency ?? 2;
+  byId("reuse-cache").checked = execution.reuse_cache !== false;
   populateVariables();
   populateCorrelations();
   populateCorners();
   populateExperiments();
   populateSchematicControls();
 }
+
+// Recipe metadata and the report narrative. These were readable in the header
+// but had no inputs, so a study could not be renamed or described in the tool
+// that builds it, and five of the seven report_context fields were unreachable.
+const IDENTITY_FIELDS = [
+  ["identity-name", "recipe", "name"],
+  ["identity-description", "recipe", "description"],
+  ["identity-title", "report_context", "title"],
+  ["identity-circuit-summary", "report_context", "circuit_summary"],
+  ["identity-simulation-summary", "report_context", "simulation_summary"],
+  ["identity-schematic-caption", "report_context", "schematic_caption"],
+  ["identity-mcp-context", "report_context", "mcp_context"],
+];
+
+function populateStudyIdentity() {
+  const block = byId("study-identity");
+  block.hidden = false;
+  const context = recipe.report_context || {};
+  for (const [id, scope, key] of IDENTITY_FIELDS) {
+    byId(id).value = (scope === "recipe" ? recipe[key] : context[key]) ?? "";
+  }
+}
+
+function bindStudyIdentity() {
+  for (const [id, scope, key] of IDENTITY_FIELDS) {
+    byId(id).addEventListener("input", (event) => {
+      if (!recipe) return;
+      const value = event.target.value.trim();
+      if (scope === "recipe") {
+        // name and description are required top-level strings, so they are
+        // written through even when blank and the validator reports them.
+        recipe[key] = event.target.value;
+        if (key === "name") byId("study-name").textContent = value || "Untitled study";
+        if (key === "description") {
+          byId("study-description").textContent = value || "Portable LTspice study recipe";
+        }
+      } else {
+        // report_context values must be 1-1,200 non-blank characters when
+        // present, so an emptied field drops the key instead of sending "".
+        const context = recipe.report_context || (recipe.report_context = {});
+        if (value) context[key] = event.target.value;
+        else delete context[key];
+        if (Object.keys(context).length === 0) delete recipe.report_context;
+      }
+      schedulePreview();
+    });
+  }
+}
+
+bindStudyIdentity();
+
+// --- Waveform viewer ------------------------------------------------------
+// Reads the .raw files a finished run already wrote. Nothing here launches
+// LTspice or writes an artifact; the generated HTML report stays the record.
+let waveformCaptures = [];
+let waveformData = null;
+const waveformHidden = new Set();
+
+const TRACE_COLORS = ["#e08a4b", "#5fa8c9", "#4fae78", "#d97575", "#b48ead", "#d9a64e"];
+
+async function openWaveforms(experimentId) {
+  const panel = byId("waveform-panel");
+  panel.hidden = false;
+  byId("waveform-title").textContent = `Captured traces · ${experimentId}`;
+  waveformError("");
+  waveformHidden.clear();
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(experimentId)}/captures`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Captures could not be listed");
+    waveformCaptures = result.captures || [];
+  } catch (error) {
+    waveformCaptures = [];
+    waveformError(error.message);
+  }
+  const select = byId("waveform-capture");
+  if (waveformCaptures.length === 0) {
+    select.replaceChildren();
+    byId("waveform-plot").replaceChildren();
+    byId("waveform-traces").replaceChildren();
+    byId("waveform-meta").textContent = "";
+    waveformError("This run wrote no .raw captures. Compressed or cleaned runs keep only their report.");
+    return;
+  }
+  select.replaceChildren(...waveformCaptures.map((capture) => {
+    const option = document.createElement("option");
+    option.value = capture.path;
+    option.textContent = `point ${capture.point_index} · ${capture.filename}`;
+    return option;
+  }));
+  select.value = waveformCaptures[0].path;
+  panel.scrollIntoView({behavior: "smooth", block: "nearest"});
+  await loadWaveform();
+}
+
+function waveformError(message) {
+  const box = byId("waveform-errors");
+  box.textContent = message;
+  box.hidden = !message;
+}
+
+async function loadWaveform() {
+  const path = byId("waveform-capture").value;
+  if (!path) return;
+  const maxPoints = byId("waveform-resolution").value;
+  byId("waveform-csv").href = `/api/waveform.csv?path=${encodeURIComponent(path)}`;
+  try {
+    const response = await fetch(
+      `/api/waveform?path=${encodeURIComponent(path)}&max_points=${maxPoints}`,
+    );
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Waveform could not be read");
+    waveformData = result;
+    waveformError("");
+  } catch (error) {
+    waveformData = null;
+    waveformError(error.message);
+    byId("waveform-plot").replaceChildren();
+    return;
+  }
+  renderTraceToggles();
+  renderWaveformPlot();
+  const data = waveformData;
+  const steps = data.step_count > 1 ? ` · ${data.step_count} stepped blocks` : "";
+  byId("waveform-meta").textContent =
+    `${data.returned_points.toLocaleString()} of ${data.total_points.toLocaleString()} points`
+    + ` · axis ${data.axis_variable} (${data.axis_unit})`
+    + (data.complex ? " · AC capture, plotted as magnitude" : "")
+    + steps;
+}
+
+function renderTraceToggles() {
+  const names = Object.keys(waveformData.series);
+  const toggles = names.map((name, index) => {
+    const label = document.createElement("label");
+    label.className = "trace-toggle";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.id = `trace-${index}`;
+    box.checked = !waveformHidden.has(name);
+    box.addEventListener("change", () => {
+      if (box.checked) waveformHidden.delete(name);
+      else waveformHidden.add(name);
+      renderWaveformPlot();
+    });
+    const swatch = document.createElement("span");
+    swatch.className = "trace-swatch";
+    swatch.style.background = TRACE_COLORS[index % TRACE_COLORS.length];
+    const text = document.createElement("span");
+    text.textContent = name;
+    label.append(box, swatch, text);
+    return label;
+  });
+  byId("waveform-traces").replaceChildren(...toggles);
+}
+
+function svgElement(name, attributes) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+  return node;
+}
+
+function renderWaveformPlot() {
+  const data = waveformData;
+  const host = byId("waveform-plot");
+  if (!data) { host.replaceChildren(); return; }
+  const shown = Object.entries(data.series).filter(([name]) => !waveformHidden.has(name));
+  if (!shown.length || data.axis.length < 2) {
+    host.replaceChildren(emptyEditor("Select at least one trace."));
+    return;
+  }
+
+  const width = 860;
+  const height = 360;
+  const pad = {left: 78, right: 20, top: 18, bottom: 46};
+  const axis = data.axis;
+  // AC captures span decades, so the frequency axis is drawn logarithmically;
+  // a transient axis stays linear.
+  const logAxis = data.axis_unit === "Hz" && axis[0] > 0;
+  const project = (value) => (logAxis ? Math.log10(value) : value);
+  const xMin = project(axis[0]);
+  const xMax = project(axis[axis.length - 1]);
+  let yMin = Infinity;
+  let yMax = -Infinity;
+  for (const [, values] of shown) {
+    for (const value of values) {
+      if (!Number.isFinite(value)) continue;
+      if (value < yMin) yMin = value;
+      if (value > yMax) yMax = value;
+    }
+  }
+  if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) {
+    host.replaceChildren(emptyEditor("This capture holds no finite samples."));
+    return;
+  }
+  if (yMin === yMax) { yMin -= 1; yMax += 1; }
+  const yPad = (yMax - yMin) * 0.08;
+  yMin -= yPad; yMax += yPad;
+
+  const xAt = (value) => pad.left + ((project(value) - xMin) / (xMax - xMin || 1)) * (width - pad.left - pad.right);
+  const yAt = (value) => height - pad.bottom - ((value - yMin) / (yMax - yMin)) * (height - pad.top - pad.bottom);
+
+  const svg = svgElement("svg", {
+    viewBox: `0 0 ${width} ${height}`,
+    role: "img",
+    "aria-label": `${data.filename} waveform`,
+  });
+  svg.classList.add("waveform-svg");
+
+  for (let index = 0; index <= 4; index += 1) {
+    const gx = pad.left + index * (width - pad.left - pad.right) / 4;
+    const gy = pad.top + index * (height - pad.top - pad.bottom) / 4;
+    svg.append(
+      svgElement("line", {x1: gx, y1: pad.top, x2: gx, y2: height - pad.bottom, class: "plot-grid"}),
+      svgElement("line", {x1: pad.left, y1: gy, x2: width - pad.right, y2: gy, class: "plot-grid"}),
+    );
+    const xValue = logAxis
+      ? 10 ** (xMin + index * (xMax - xMin) / 4)
+      : xMin + index * (xMax - xMin) / 4;
+    const xTick = svgElement("text", {x: gx, y: height - pad.bottom + 20, class: "plot-tick", "text-anchor": "middle"});
+    xTick.textContent = axisLabel(xValue, data.axis_unit);
+    const yTick = svgElement("text", {x: pad.left - 9, y: gy + 4, class: "plot-tick", "text-anchor": "end"});
+    yTick.textContent = axisLabel(yMax - index * (yMax - yMin) / 4, "");
+    svg.append(xTick, yTick);
+  }
+
+  const names = Object.keys(data.series);
+  for (const [name, values] of shown) {
+    const color = TRACE_COLORS[names.indexOf(name) % TRACE_COLORS.length];
+    let path = "";
+    let pen = false;
+    for (let index = 0; index < values.length; index += 1) {
+      const value = values[index];
+      if (!Number.isFinite(value)) { pen = false; continue; }
+      const command = pen ? "L" : "M";
+      path += `${command}${xAt(axis[index]).toFixed(2)} ${yAt(value).toFixed(2)}`;
+      pen = true;
+    }
+    svg.append(svgElement("path", {d: path, fill: "none", stroke: color, "stroke-width": "1.6", "stroke-linejoin": "round"}));
+  }
+
+  host.replaceChildren(svg);
+}
+
+function axisLabel(value, unit) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  const magnitude = Math.abs(number);
+  const scales = unit === "Hz"
+    ? [[1e9, "G"], [1e6, "M"], [1e3, "k"], [1, ""]]
+    : unit === "s"
+      ? [[1, ""], [1e-3, "m"], [1e-6, "µ"], [1e-9, "n"]]
+      : [[1e9, "G"], [1e6, "M"], [1e3, "k"], [1, ""], [1e-3, "m"], [1e-6, "µ"], [1e-9, "n"]];
+  const [factor, prefix] = scales.find(([candidate]) => magnitude >= candidate) || scales[scales.length - 1];
+  return `${Number((number / factor).toPrecision(3))}${prefix ? " " + prefix : ""}${unit}`;
+}
+
+// --- Adaptive boundary ----------------------------------------------------
+// Bisects one variable between a passing and a failing sampled point. Each
+// advance takes in the finished batch and launches the next, so the loop is
+// driven from here rather than run to completion in one call.
+let boundarySource = null;
+let boundaryStudy = null;
+
+function openBoundary(experimentId) {
+  boundarySource = experimentId;
+  boundaryStudy = null;
+  byId("boundary-title").textContent = `Where the requirement turns over · ${experimentId}`;
+  byId("boundary-state").hidden = true;
+  boundaryError("");
+  const panel = byId("boundary-panel");
+  panel.hidden = false;
+  panel.scrollIntoView({behavior: "smooth", block: "nearest"});
+}
+
+function boundaryError(message) {
+  const box = byId("boundary-errors");
+  box.textContent = message;
+  box.hidden = !message;
+}
+
+async function defineBoundary() {
+  if (!boundarySource) return;
+  const button = byId("boundary-define");
+  button.disabled = true;
+  boundaryError("");
+  try {
+    const response = await fetch("/api/boundary/define", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({
+        source_experiment_id: boundarySource,
+        first_point_index: Number(byId("boundary-first").value),
+        second_point_index: Number(byId("boundary-second").value),
+        check_id: byId("boundary-check").value.trim(),
+        variable: byId("boundary-variable").value.trim(),
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Boundary study failed");
+    renderBoundary(result);
+  } catch (error) {
+    boundaryError(error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function advanceBoundary() {
+  if (!boundaryStudy) return;
+  const button = byId("boundary-advance");
+  button.disabled = true;
+  byId("boundary-status").textContent = "Advancing…";
+  try {
+    const response = await fetch(
+      `/api/boundary/${encodeURIComponent(boundaryStudy.adaptive_id)}/advance`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-LTspice-System-Builder": "1",
+        },
+        body: "{}",
+      },
+    );
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Boundary advance failed");
+    renderBoundary(result);
+    if (result.active_experiment_id) {
+      trackedJobs.set(result.active_experiment_id, {
+        name: "boundary batch",
+        experiment_id: result.active_experiment_id,
+        status: "running",
+      });
+      renderTrackedJobs();
+      scheduleJobPoll(250);
+    }
+  } catch (error) {
+    byId("boundary-status").textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderBoundary(study) {
+  boundaryStudy = study;
+  boundaryError("");
+  const tiles = [
+    ["Status", study.status],
+    ["Samples", `${study.sample_count} / ${study.max_samples}`],
+    ["Batches", study.batch_count],
+    ["Bracket width", `${Number(study.current_width).toPrecision(4)} ${study.unit || ""}`.trim()],
+    ["Tolerance", Number(study.input_tolerance).toPrecision(3)],
+    ["Variable", study.variable],
+  ].map(([label, value]) => {
+    const tile = document.createElement("div");
+    const caption = document.createElement("span");
+    caption.textContent = label;
+    const amount = document.createElement("strong");
+    amount.textContent = String(value);
+    tile.append(caption, amount);
+    return tile;
+  });
+  byId("boundary-metrics").replaceChildren(...tiles);
+  byId("boundary-state").hidden = false;
+  const finished = Boolean(study.stop_reason);
+  byId("boundary-advance").disabled = finished;
+  byId("boundary-status").textContent = study.error
+    || (finished ? `Converged · ${study.stop_reason}` : `Study ${study.adaptive_id}`);
+}
+
+function boundaryButton(experimentId) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "compact-button";
+  button.textContent = "Boundary";
+  button.title = `Bracket where a requirement turns over in ${experimentId}`;
+  button.addEventListener("click", () => {
+    showView("history");
+    openBoundary(experimentId);
+  });
+  return button;
+}
+
+byId("boundary-define").addEventListener("click", defineBoundary);
+byId("boundary-advance").addEventListener("click", advanceBoundary);
+byId("boundary-close").addEventListener("click", () => {
+  byId("boundary-panel").hidden = true;
+});
+
+// --- Local sensitivity ----------------------------------------------------
+// Answers "which component actually moves this margin?" for a design point
+// that already has electrical evidence, by perturbing each variable above and
+// below it one at a time.
+let sensitivitySource = null;
+let sensitivityAnalysis = null;
+
+function openSensitivity(experimentId) {
+  sensitivitySource = experimentId;
+  sensitivityAnalysis = null;
+  byId("sensitivity-title").textContent = `Which component moves the margin · ${experimentId}`;
+  byId("sensitivity-result").hidden = true;
+  sensitivityError("");
+  const panel = byId("sensitivity-panel");
+  panel.hidden = false;
+  panel.scrollIntoView({behavior: "smooth", block: "nearest"});
+  // A finished study can be read back without re-running it.
+  loadSensitivityAnalysis(experimentId, {quiet: true});
+}
+
+function sensitivityError(message) {
+  const box = byId("sensitivity-errors");
+  box.textContent = message;
+  box.hidden = !message;
+}
+
+async function runSensitivity() {
+  if (!sensitivitySource) return;
+  const button = byId("sensitivity-run");
+  button.disabled = true;
+  button.textContent = "Starting…";
+  sensitivityError("");
+  try {
+    const response = await fetch("/api/sensitivity/start", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({
+        source_experiment_id: sensitivitySource,
+        source_point_index: Number(byId("sensitivity-point").value),
+        relative_step: Number(byId("sensitivity-step").value),
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Sensitivity study failed");
+    trackedJobs.set(result.experiment_id, {name: "sensitivity", ...result});
+    renderTrackedJobs();
+    scheduleJobPoll(250);
+    sensitivityError("");
+    byId("sensitivity-meta").textContent =
+      `Study ${result.experiment_id} is running. Its tornado appears here once every point finishes.`;
+    byId("sensitivity-result").hidden = false;
+    sensitivitySource = result.experiment_id;
+  } catch (error) {
+    sensitivityError(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Run sensitivity study";
+  }
+}
+
+async function loadSensitivityAnalysis(experimentId, {quiet = false} = {}) {
+  try {
+    const response = await fetch(`/api/sensitivity/${encodeURIComponent(experimentId)}`);
+    const result = await response.json();
+    if (!response.ok) {
+      if (!quiet) sensitivityError(result.error?.message || "No tornado is available yet");
+      return;
+    }
+    sensitivityAnalysis = result;
+    byId("sensitivity-csv").href = result.csv_url;
+    const requirements = result.analysis.requirements || [];
+    byId("sensitivity-requirement").replaceChildren(...requirements.map((requirement, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = `${requirement.analysis} · ${requirement.metric} ${requirement.operator} ${requirement.target}`;
+      return option;
+    }));
+    byId("sensitivity-result").hidden = false;
+    renderTornado();
+  } catch (error) {
+    if (!quiet) sensitivityError(error.message);
+  }
+}
+
+function renderTornado() {
+  const host = byId("sensitivity-plot");
+  const analysis = sensitivityAnalysis?.analysis;
+  const index = Number(byId("sensitivity-requirement").value || 0);
+  const requirement = analysis?.requirements?.[index];
+  if (!requirement) { host.replaceChildren(emptyEditor("No completed effects yet.")); return; }
+
+  // One bar per variable, widest total swing first: this is the ordering that
+  // makes a tornado readable.
+  const bars = (requirement.effects || [])
+    .filter((effect) => effect.status === "complete")
+    .map((effect) => ({
+      name: effect.name,
+      low: Number(effect.low_effect) || 0,
+      high: Number(effect.high_effect) || 0,
+    }))
+    .sort((a, b) => (Math.abs(b.low) + Math.abs(b.high)) - (Math.abs(a.low) + Math.abs(a.high)));
+  if (!bars.length) {
+    host.replaceChildren(emptyEditor("This requirement has no complete effects — some perturbed points did not finish."));
+    return;
+  }
+
+  const rowHeight = 26;
+  const width = 860;
+  const pad = {left: 132, right: 30, top: 26, bottom: 38};
+  const height = pad.top + pad.bottom + bars.length * rowHeight;
+  const extent = Math.max(...bars.flatMap((bar) => [Math.abs(bar.low), Math.abs(bar.high)]), 1e-12);
+  const xAt = (value) => pad.left + ((value + extent) / (2 * extent)) * (width - pad.left - pad.right);
+
+  const svg = svgElement("svg", {
+    viewBox: `0 0 ${width} ${height}`,
+    role: "img",
+    "aria-label": `Tornado of margin effects for ${requirement.metric}`,
+  });
+  svg.classList.add("waveform-svg");
+
+  for (let step = 0; step <= 4; step += 1) {
+    const value = -extent + step * (2 * extent) / 4;
+    const x = xAt(value);
+    svg.append(svgElement("line", {x1: x, y1: pad.top, x2: x, y2: height - pad.bottom, class: "plot-grid"}));
+    const tick = svgElement("text", {x, y: height - pad.bottom + 20, class: "plot-tick", "text-anchor": "middle"});
+    tick.textContent = Number(value.toPrecision(3)).toString();
+    svg.append(tick);
+  }
+
+  bars.forEach((bar, row) => {
+    const y = pad.top + row * rowHeight;
+    const label = svgElement("text", {x: pad.left - 10, y: y + rowHeight / 2 + 4, class: "plot-tick", "text-anchor": "end"});
+    label.textContent = bar.name;
+    svg.append(label);
+    for (const [value, color] of [[bar.low, "#5fa8c9"], [bar.high, "#e08a4b"]]) {
+      if (value === 0) continue;
+      const from = Math.min(xAt(0), xAt(value));
+      svg.append(svgElement("rect", {
+        x: from,
+        y: y + 5,
+        width: Math.max(Math.abs(xAt(value) - xAt(0)), 1),
+        height: rowHeight - 12,
+        fill: color,
+        opacity: "0.85",
+        rx: "2",
+      }));
+    }
+  });
+  const zero = xAt(0);
+  svg.append(svgElement("line", {x1: zero, y1: pad.top, x2: zero, y2: height - pad.bottom, stroke: "currentColor", "stroke-width": "1", opacity: "0.5"}));
+
+  host.replaceChildren(svg);
+  byId("sensitivity-meta").textContent =
+    `${bars.length} variables · baseline margin ${Number(requirement.baseline_margin).toPrecision(4)}`
+    + ` · ±${(analysis.relative_step * 100).toFixed(2)}% step`
+    + ` · blue is the low perturbation, copper the high`;
+}
+
+function sensitivityButton(experimentId) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "compact-button";
+  button.textContent = "Sensitivity";
+  button.title = `Find which variable moves ${experimentId}'s margins`;
+  button.addEventListener("click", () => {
+    showView("history");
+    openSensitivity(experimentId);
+  });
+  return button;
+}
+
+byId("sensitivity-run").addEventListener("click", runSensitivity);
+byId("sensitivity-requirement").addEventListener("change", renderTornado);
+byId("sensitivity-close").addEventListener("click", () => {
+  byId("sensitivity-panel").hidden = true;
+});
+
+// --- History filtering and run comparison ---------------------------------
+function matchesHistoryFilter(job) {
+  const search = byId("history-search").value.trim().toLowerCase();
+  const status = byId("history-status").value;
+  const outcome = byId("history-outcome").value;
+  if (status && job.status !== status) return false;
+  if (outcome === "true" && job.all_passed !== true) return false;
+  if (outcome === "false" && job.all_passed !== false) return false;
+  if (!search) return true;
+  const haystack = [
+    job.experiment_id,
+    job.status,
+    job.execution_mode,
+    job.statistical ? "statistical" : "experiment",
+  ].join(" ").toLowerCase();
+  return haystack.includes(search);
+}
+
+function refilterHistory() {
+  if (latestHistory) renderHistory(latestHistory);
+}
+
+function comparableJobs() {
+  return (latestHistory?.jobs || []).filter((job) => job.status === "completed");
+}
+
+function openComparePanel() {
+  const panel = byId("compare-panel");
+  const jobs = comparableJobs();
+  compareError("");
+  byId("compare-result").hidden = true;
+  if (jobs.length < 2) {
+    panel.hidden = false;
+    compareError("Two completed runs are needed before anything can be compared.");
+    byId("compare-baseline").replaceChildren();
+    byId("compare-candidate").replaceChildren();
+    return;
+  }
+  for (const [id, defaultIndex] of [["compare-baseline", 1], ["compare-candidate", 0]]) {
+    const select = byId(id);
+    select.replaceChildren(...jobs.map((job) => {
+      const option = document.createElement("option");
+      option.value = job.experiment_id;
+      option.textContent = `${job.experiment_id} · ${job.passed_points}/${job.point_count} pass`;
+      return option;
+    }));
+    select.value = jobs[Math.min(defaultIndex, jobs.length - 1)].experiment_id;
+  }
+  panel.hidden = false;
+  panel.scrollIntoView({behavior: "smooth", block: "nearest"});
+}
+
+function compareError(message) {
+  const box = byId("compare-errors");
+  box.textContent = message;
+  box.hidden = !message;
+}
+
+async function runComparison() {
+  const baseline = byId("compare-baseline").value;
+  const candidate = byId("compare-candidate").value;
+  if (!baseline || !candidate) return;
+  if (baseline === candidate) {
+    compareError("Choose two different runs.");
+    return;
+  }
+  const button = byId("compare-run");
+  button.disabled = true;
+  button.textContent = "Comparing…";
+  compareError("");
+  try {
+    const response = await fetch("/api/compare", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({
+        baseline_experiment_id: baseline,
+        candidate_experiment_id: candidate,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Comparison failed");
+    renderComparison(result);
+  } catch (error) {
+    byId("compare-result").hidden = true;
+    compareError(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Compare";
+  }
+}
+
+function renderComparison(result) {
+  const tiles = [
+    ["Regressions", result.requirement_regressions],
+    ["Improvements", result.requirement_improvements],
+    ["Unchanged", result.unchanged_requirements],
+    ["Matched points", result.matched_points],
+    ["Added / removed points", `${result.added_points} / ${result.removed_points}`],
+    ["Added / removed requirements", `${result.added_requirements} / ${result.removed_requirements}`],
+  ].map(([label, value]) => {
+    const tile = document.createElement("div");
+    if (label === "Regressions" && Number(value) > 0) tile.className = "accent-metric regression";
+    const caption = document.createElement("span");
+    caption.textContent = label;
+    const amount = document.createElement("strong");
+    amount.textContent = typeof value === "number" ? value.toLocaleString() : value;
+    tile.append(caption, amount);
+    return tile;
+  });
+  byId("compare-metrics").replaceChildren(...tiles);
+  byId("compare-links").replaceChildren(reportLink(result.report_url, "Open comparison ↗"));
+  byId("compare-result").hidden = false;
+}
+
+for (const id of ["history-search", "history-status", "history-outcome"]) {
+  byId(id).addEventListener("input", refilterHistory);
+}
+byId("history-limit").addEventListener("change", () => loadHistory(false));
+byId("open-compare").addEventListener("click", openComparePanel);
+byId("compare-run").addEventListener("click", runComparison);
+byId("compare-close").addEventListener("click", () => {
+  byId("compare-panel").hidden = true;
+});
+
+function waveformButton(experimentId) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "compact-button";
+  button.textContent = "Waveforms";
+  button.title = `Plot the .raw captures ${experimentId} wrote`;
+  button.addEventListener("click", () => {
+    showView("history");
+    openWaveforms(experimentId);
+  });
+  return button;
+}
+
+byId("waveform-capture").addEventListener("change", loadWaveform);
+byId("waveform-resolution").addEventListener("change", loadWaveform);
+byId("waveform-close").addEventListener("click", () => {
+  byId("waveform-panel").hidden = true;
+});
 
 function renderErrors(errors) {
   const container = byId("errors");
@@ -1434,6 +2605,9 @@ function renderTrackedJobs() {
       }));
     }
     if (job.report_url) actions.append(reportLink(job.report_url));
+    if (["completed", "failed", "cancelled"].includes(job.status)) {
+      actions.append(waveformButton(job.experiment_id));
+    }
     if (job.postprocess_error) {
       const error = document.createElement("span");
       error.className = "job-error";
@@ -1481,7 +2655,10 @@ function scheduleJobPoll(delay = 1000) {
   jobPollTimer = window.setTimeout(pollTrackedJobs, delay);
 }
 
+let latestHistory = null;
+
 function renderHistory(result) {
+  latestHistory = result;
   byId("history-total").textContent = result.summary.total_jobs.toLocaleString();
   byId("history-active").textContent = result.summary.active_jobs.toLocaleString();
   byId("history-reports").textContent = result.summary.reports.toLocaleString();
@@ -1490,7 +2667,7 @@ function renderHistory(result) {
   index.className = result.index.current ? "index-ready" : "index-missing";
   index.title = result.index.message;
 
-  const jobs = result.jobs.map((job) => {
+  const jobs = result.jobs.filter(matchesHistoryFilter).map((job) => {
     const row = document.createElement("div");
     row.className = "history-item";
     const top = document.createElement("div");
@@ -1519,6 +2696,10 @@ function renderHistory(result) {
     details.textContent = `${job.finished_points}/${job.point_count} points · ${job.passed_points} pass · ${job.failed_points} fail`;
     bottom.append(details);
     if (job.report_url) bottom.append(reportLink(job.report_url));
+    bottom.append(waveformButton(job.experiment_id));
+    if (job.status === "completed" && job.statistical) {
+      bottom.append(sensitivityButton(job.experiment_id), boundaryButton(job.experiment_id));
+    }
     if (["queued", "running", "cancelling"].includes(job.status)) {
       bottom.append(jobActionButton("Cancel", async () => {
         trackedJobs.set(job.experiment_id, {name: "recovered", ...job, ...await mutateJob(job.experiment_id, "cancel")});
@@ -1601,7 +2782,8 @@ async function loadHistory(showBusy = true) {
     button.textContent = "Refreshing…";
   }
   try {
-    const response = await fetch("/api/history?limit=12");
+    const limit = byId("history-limit").value || "12";
+    const response = await fetch(`/api/history?limit=${encodeURIComponent(limit)}`);
     const result = await response.json();
     if (!response.ok) throw new Error(result.error?.message || "History could not be read");
     renderHistory(result);
@@ -2136,7 +3318,7 @@ async function loadInitialState() {
   byId("workspace").textContent = session.workspace;
   byId("workspace").title = session.workspace;
   byId("projects-workspace").textContent = session.workspace;
-  await Promise.all([loadSchematicFiles(), loadNetlistFiles()]);
+  await Promise.all([loadMetricSchema(), loadSchematicFiles(), loadNetlistFiles()]);
   await Promise.all([loadHistory(), loadRemoteJobs(), loadProjects(), loadLtspiceStatus()]);
 }
 
@@ -2232,9 +3414,10 @@ byId("schematic-image-path").addEventListener("input", () => {
   else delete context.schematic_path;
   schedulePreview();
 });
-for (const id of ["sample-count", "seed", "sampling-method"]) {
+for (const id of ["sample-count", "seed", "sampling-method", "max-concurrency"]) {
   byId(id).addEventListener("input", schedulePreview);
 }
+byId("reuse-cache").addEventListener("change", schedulePreview);
 byId("add-variable").addEventListener("click", () => {
   if (!recipe) return;
   const variables = recipe.plan.variables || (recipe.plan.variables = []);

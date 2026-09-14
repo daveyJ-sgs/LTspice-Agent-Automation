@@ -206,8 +206,74 @@ function renderOptimizationDomains() {
     return row;
   });
   optId("optimization-domains").replaceChildren(...rows);
-  optId("optimization-fixed").textContent = Object.entries(optimizationRecipe.fixed_parameters || {})
-    .map(([name, value]) => `${name}=${value}`).join(", ");
+  optId("optimization-fixed").replaceChildren(
+    fixedParameterEditor(optimizationRecipe, renderOptimizationDomains, "No fixed conditions."),
+  );
+}
+
+// Held-constant circuit conditions, as name/value pairs. Shared by the
+// optimization recipe and the qualification model, which carry the same shape.
+function fixedParameterEditor(owner, render, emptyText) {
+  const wrap = document.createElement("div");
+  wrap.className = "fixed-parameters";
+  const entries = Object.entries(owner.fixed_parameters || {});
+  if (!entries.length) {
+    const empty = document.createElement("p");
+    empty.className = "editor-empty";
+    empty.textContent = emptyText;
+    wrap.append(empty);
+  }
+  for (const [name, value] of entries) {
+    const row = document.createElement("div");
+    row.className = "fixed-parameter-row";
+    const key = optInput(name, `fixed parameter name ${name}`, () => {});
+    key.addEventListener("change", () => {
+      const renamed = key.value.trim();
+      const current = owner.fixed_parameters;
+      if (!renamed || renamed === name) { key.value = name; return; }
+      if (renamed in current) { key.value = name; return; }
+      // Rebuild in place so the pair keeps its position in the list.
+      const rebuilt = {};
+      for (const [existing, held] of Object.entries(current)) {
+        rebuilt[existing === name ? renamed : existing] = held;
+      }
+      owner.fixed_parameters = rebuilt;
+      render();
+      scheduleOptimizationPreview();
+    });
+    const held = optInput(value, `fixed parameter value ${name}`, (entered) => {
+      owner.fixed_parameters[name] = optNumber(String(entered).trim());
+      scheduleOptimizationPreview();
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove-button";
+    remove.textContent = "\u00d7";
+    remove.title = `Remove ${name}`;
+    remove.setAttribute("aria-label", `Remove fixed parameter ${name}`);
+    remove.addEventListener("click", () => {
+      delete owner.fixed_parameters[name];
+      if (Object.keys(owner.fixed_parameters).length === 0) delete owner.fixed_parameters;
+      render();
+      scheduleOptimizationPreview();
+    });
+    row.append(key, held, remove);
+    wrap.append(row);
+  }
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "compact-button";
+  add.textContent = "+ Fixed condition";
+  add.addEventListener("click", () => {
+    const held = owner.fixed_parameters || (owner.fixed_parameters = {});
+    let suffix = Object.keys(held).length + 1;
+    while (`PARAM${suffix}` in held) suffix += 1;
+    held[`PARAM${suffix}`] = 0;
+    render();
+    scheduleOptimizationPreview();
+  });
+  wrap.append(add);
+  return wrap;
 }
 
 function renderOptimizationCorners() {
@@ -268,6 +334,105 @@ function setMetricParameters(selector, text) {
   else delete selector.metric_parameters;
 }
 
+// The .ltopt goal schema nests its parameters under metric_parameters, where a
+// .ltstudy requirement carries them as flat sibling keys. The two shapes are
+// not interchangeable, so this editor keeps the nested form and only borrows
+// the metric list and the per-metric parameter names from the shared schema.
+function optMetricSelect(item, caption) {
+  const select = document.createElement("select");
+  select.setAttribute("aria-label", `${item.name} ${caption}`);
+  let matched = false;
+  for (const [label, names] of metricOptionGroups()) {
+    const group = document.createElement("optgroup");
+    group.label = label;
+    for (const name of names) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      if (name === item.metric) matched = true;
+      group.append(option);
+    }
+    select.append(group);
+  }
+  if (!matched) {
+    const option = document.createElement("option");
+    option.value = item.metric ?? "";
+    option.textContent = item.metric ? `${item.metric} (loaded)` : "\u2014 Select a metric \u2014";
+    select.prepend(option);
+  }
+  select.value = item.metric ?? "";
+  return select;
+}
+
+function metricArgumentProblem(item) {
+  // Say nothing about a metric the schema does not describe, rather than
+  // reporting every argument of it as unknown.
+  const definition = metricDefinition(item.metric);
+  if (!definition) return "";
+  const accepted = definition.parameters;
+  const names = new Set(accepted.map((parameter) => parameter.name));
+  const supplied = Object.keys(item.metric_parameters || {});
+  const unknown = supplied.filter((name) => !names.has(name));
+  if (unknown.length) {
+    return `${item.metric} has no ${unknown[0]}; it takes ${[...names].join(", ") || "no arguments"}.`;
+  }
+  const missing = accepted
+    .filter((parameter) => parameter.required && !supplied.includes(parameter.name))
+    .map((parameter) => parameter.name);
+  // A goal selects an already-measured result, so a required parameter that is
+  // left out matches every value of it -- ambiguous as soon as the study sweeps
+  // more than one.
+  return missing.length ? `Add ${missing[0]} to pick one ${item.metric} result.` : "";
+}
+
+function metricArgumentPlaceholder(item) {
+  const accepted = metricParameters(item.metric).filter((parameter) => !parameter.common);
+  return accepted.length ? accepted.map((parameter) => `${parameter.name}=`).join(", ") : "none";
+}
+
+function metricField(item, render) {
+  const select = optMetricSelect(item, "Metric");
+  select.addEventListener("change", () => {
+    const definition = metricDefinition(select.value);
+    if (definition) {
+      const names = new Set(definition.parameters.map((parameter) => parameter.name));
+      for (const key of Object.keys(item.metric_parameters || {})) {
+        if (!names.has(key)) delete item.metric_parameters[key];
+      }
+      if (item.metric_parameters && Object.keys(item.metric_parameters).length === 0) {
+        delete item.metric_parameters;
+      }
+    }
+    item.metric = select.value;
+    render();
+    scheduleOptimizationPreview();
+  });
+  return optField("Metric", select);
+}
+
+function metricArgumentsField(item, render) {
+  const problem = document.createElement("span");
+  problem.className = "field-problem";
+  const input = optInput(metricParametersText(item), `${item.name} metric arguments`, (value) => {
+    setMetricParameters(item, value);
+    refresh();
+    scheduleOptimizationPreview();
+  });
+  input.placeholder = metricArgumentPlaceholder(item);
+
+  function refresh() {
+    const message = metricArgumentProblem(item);
+    problem.textContent = message;
+    problem.hidden = !message;
+    input.setAttribute("aria-invalid", message ? "true" : "false");
+  }
+  refresh();
+
+  const field = optField("Metric arguments", input);
+  field.append(problem);
+  return field;
+}
+
 function selectorField(item, key, caption, choices = null, numeric = false) {
   const update = (value) => {
     item[key] = numeric ? optNumber(value) : value;
@@ -277,6 +442,50 @@ function selectorField(item, key, caption, choices = null, numeric = false) {
     ? optSelect(item[key], choices, `${item.name} ${caption}`, update)
     : optInput(item[key], `${item.name} ${caption}`, update);
   return optField(caption, control);
+}
+
+// The engine reads absolute_tolerance and relative_tolerance as a pair: if
+// either key is present both are read, neither may be negative, and they may
+// not both be zero. So the editor writes both or neither.
+function toleranceField(item, key, caption, render) {
+  const problem = document.createElement("span");
+  problem.className = "field-problem";
+  const input = optInput(item[key] ?? "", `${item.name} ${caption}`, (value) => {
+    const entered = String(value).trim();
+    if (entered === "") delete item[key];
+    else item[key] = optNumber(entered);
+    const other = key === "absolute_tolerance" ? "relative_tolerance" : "absolute_tolerance";
+    // Supplying one alone means the other defaults to zero, which is valid
+    // only while this one is above zero; pin it so the pair is always whole.
+    if (item[key] !== undefined && item[other] === undefined) item[other] = 0;
+    if (item[key] === undefined && item[other] === 0) delete item[other];
+    refresh();
+    render();
+    scheduleOptimizationPreview();
+  });
+  input.placeholder = "0";
+
+  function refresh() {
+    problem.textContent = toleranceProblem(item);
+    problem.hidden = !problem.textContent;
+    input.setAttribute("aria-invalid", problem.textContent ? "true" : "false");
+  }
+  refresh();
+
+  const field = optField(caption, input);
+  field.append(problem);
+  return field;
+}
+
+function toleranceProblem(item) {
+  const absolute = item.absolute_tolerance;
+  const relative = item.relative_tolerance;
+  if (absolute === undefined && relative === undefined) return "";
+  const values = [absolute ?? 0, relative ?? 0].map(Number);
+  if (values.some((value) => !Number.isFinite(value))) return "Tolerances must be numbers.";
+  if (values.some((value) => value < 0)) return "Tolerances cannot be negative.";
+  if (values.every((value) => value === 0)) return "One tolerance must be above zero.";
+  return "";
 }
 
 function renderOptimizationSelectors() {
@@ -289,10 +498,12 @@ function renderOptimizationSelectors() {
       selectorField(item, "name", "Name"),
       selectorField(item, "experiment", "Study", [["ac", "AC"], ["transient", "Transient"]]),
       selectorField(item, "analysis", "Analysis"),
-      selectorField(item, "metric", "Metric"),
+      metricField(item, renderOptimizationSelectors),
       selectorField(item, "goal", "Goal", [["minimize", "Minimize"], ["maximize", "Maximize"]]),
       selectorField(item, "weight", "Weight", null, true),
-      optField("Metric arguments", optInput(metricParametersText(item), `${item.name} metric arguments`, (value) => { setMetricParameters(item, value); scheduleOptimizationPreview(); })),
+      metricArgumentsField(item, renderOptimizationSelectors),
+      toleranceField(item, "absolute_tolerance", "Abs. tolerance", renderOptimizationSelectors),
+      toleranceField(item, "relative_tolerance", "Rel. tolerance", renderOptimizationSelectors),
     );
     return row;
   }));
@@ -306,10 +517,10 @@ function renderOptimizationSelectors() {
       selectorField(item, "name", "Name"),
       selectorField(item, "experiment", "Study", [["ac", "AC"], ["transient", "Transient"]]),
       selectorField(item, "analysis", "Analysis"),
-      selectorField(item, "metric", "Metric"),
+      metricField(item, renderOptimizationSelectors),
       selectorField(item, "operator", "Limit", [["<", "<"], ["<=", "≤"], [">", ">"], [">=", "≥"]]),
       selectorField(item, "target", "Target", null, true),
-      optField("Metric arguments", optInput(metricParametersText(item), `${item.name} metric arguments`, (value) => { setMetricParameters(item, value); scheduleOptimizationPreview(); })),
+      metricArgumentsField(item, renderOptimizationSelectors),
     );
     return row;
   }));
@@ -691,7 +902,10 @@ function renderOptimizationCandidates(result) {
 // cross-link button on the optimization results, and the dashboard's
 // attention note.
 function setQualificationAvailability(available) {
+  optId("refine-optimization-link").hidden = !available;
+  optId("robust-selection-link").hidden = !available;
   optId("qualification-panel").hidden = !available;
+  if (available) renderQualificationModelEditor();
   optId("qualification-empty").hidden = available;
   optId("goto-qualification-link").hidden = !available;
   optId("qualification-nav-badge").hidden = !available;
@@ -720,6 +934,7 @@ function renderOptimizationResults(result) {
   const selected = (result.candidates || []).find((candidate) => candidate.selected) || null;
   selectedQualificationSource = selected ? {study_id: result.study_id, candidate_index: selected.candidate_index} : null;
   setQualificationAvailability(selectedQualificationSource !== null);
+  renderRobustFinalists(result);
   renderSelectedOptimizationCandidate(result, selected);
   renderOptimizationParetoPlot(result);
   renderOptimizationCandidates(result);
@@ -735,6 +950,229 @@ function renderOptimizationResults(result) {
   optId("optimization-results").hidden = false;
   recoverQualificationJob().catch(() => {});
 }
+
+// The manufacturing tolerance model the qualification samples over. It lives
+// in the .ltopt's qualification block and was previously visible only as the
+// resolved read-only summary a preview returned.
+const QUALIFICATION_VARIABLE_KEYS = ["sigma_fraction", "minimum_factor", "maximum_factor"];
+
+function renderQualificationModelEditor() {
+  const model = optimizationRecipe?.qualification;
+  const editor = optId("qualification-model-editor");
+  if (!model) { editor.hidden = true; return; }
+  editor.hidden = false;
+  const variables = model.variables || (model.variables = []);
+  const rows = variables.map((variable, index) => {
+    const row = document.createElement("div");
+    row.className = "qualification-variable-row";
+    const name = optInput(variable.name, `qualification variable ${index + 1} name`, (value) => {
+      variable.name = String(value).trim();
+      scheduleOptimizationPreview();
+    });
+    row.append(optField("Parameter", name));
+
+    // Components are specified by a +/- tolerance band, so that is the control:
+    // entering it fills the limit factors, and sigma at one third of the band
+    // so the +/-3 sigma spread matches the part's own rating.
+    const tolerance = optInput(
+      tolerancePercent(variable),
+      `qualification ${variable.name} tolerance percent`,
+      (value) => {
+        const entered = String(value).trim();
+        if (entered === "") return;
+        const percent = Number(entered);
+        if (!Number.isFinite(percent) || percent < 0) return;
+        applyTolerancePercent(variable, percent);
+        renderQualificationModelEditor();
+        scheduleOptimizationPreview();
+      },
+    );
+    tolerance.placeholder = "5";
+    row.append(optField("Tolerance \u00b1%", tolerance));
+
+    for (const [key, caption] of [
+      ["minimum_factor", "Min factor"],
+      ["maximum_factor", "Max factor"],
+      ["sigma_fraction", "Sigma fraction"],
+    ]) {
+      const input = optInput(variable[key], `qualification ${variable.name} ${key}`, (value) => {
+        variable[key] = optNumber(String(value).trim());
+        // A hand-edited limit can make the band asymmetric, which no single
+        // tolerance percentage describes -- the field reads "custom" then.
+        tolerance.value = tolerancePercent(variable);
+        scheduleOptimizationPreview();
+      });
+      row.append(optField(caption, input));
+    }
+
+    const unit = optInput(variable.unit ?? "", `qualification ${variable.name} unit`, (value) => {
+      // The engine requires exactly these five keys, so unit is always
+      // written even when it is blank.
+      variable.unit = String(value);
+      scheduleOptimizationPreview();
+    });
+    row.append(optField("Unit", unit));
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove-button";
+    remove.textContent = "\u00d7";
+    remove.title = `Remove ${variable.name}`;
+    remove.setAttribute("aria-label", `Remove qualification variable ${variable.name}`);
+    remove.addEventListener("click", () => {
+      variables.splice(index, 1);
+      renderQualificationModelEditor();
+      scheduleOptimizationPreview();
+    });
+    row.append(remove);
+    return row;
+  });
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "compact-button";
+  add.textContent = "+ Toleranced parameter";
+  add.addEventListener("click", () => {
+    const variable = {name: "", sigma_fraction: 0, minimum_factor: 0, maximum_factor: 0, unit: ""};
+    applyTolerancePercent(variable, 5);
+    variables.push(variable);
+    renderQualificationModelEditor();
+    scheduleOptimizationPreview();
+  });
+  optId("qualification-variables").replaceChildren(...rows, add);
+  optId("qualification-fixed").replaceChildren(
+    fixedParameterEditor(model, renderQualificationModelEditor, "No fixed conditions."),
+  );
+}
+
+// A +/-t% band becomes limit factors 1-t and 1+t, with sigma at t/3 so the
+// part's rating sits at three sigma.
+function applyTolerancePercent(variable, percent) {
+  const fraction = percent / 100;
+  variable.minimum_factor = round12(1 - fraction);
+  variable.maximum_factor = round12(1 + fraction);
+  variable.sigma_fraction = round12(fraction / 3);
+}
+
+function tolerancePercent(variable) {
+  const below = 1 - Number(variable.minimum_factor);
+  const above = Number(variable.maximum_factor) - 1;
+  if (!Number.isFinite(below) || !Number.isFinite(above)) return "";
+  if (Math.abs(below - above) > 1e-9) return "custom";
+  return String(round12(above * 100));
+}
+
+// Keeps 1 - 0.05 from serialising as 0.9500000000000001.
+function round12(value) {
+  return Number(Number(value).toPrecision(12));
+}
+
+// Only feasible selected or Pareto candidates can be finalists -- the engine
+// refuses anything else, so the picker offers only those.
+function renderRobustFinalists(result) {
+  const eligible = (result.candidates || []).filter(
+    (candidate) => candidate.status === "feasible" && (candidate.selected || candidate.pareto),
+  );
+  const host = optId("robust-finalists");
+  if (eligible.length < 2) {
+    const note = document.createElement("p");
+    note.className = "muted-copy";
+    note.textContent = "This study has only one feasible Pareto candidate, so there is nothing to compare it against.";
+    host.replaceChildren(note);
+    optId("robust-run").disabled = true;
+    return;
+  }
+  optId("robust-run").disabled = false;
+  host.replaceChildren(...eligible.map((candidate) => {
+    const label = document.createElement("label");
+    label.className = "trace-toggle";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.id = `finalist-${candidate.candidate_index}`;
+    box.value = String(candidate.candidate_index);
+    box.checked = Boolean(candidate.selected);
+    const text = document.createElement("span");
+    text.textContent = `candidate ${candidate.candidate_index}${candidate.selected ? " (winner)" : ""}`;
+    label.append(box, text);
+    return label;
+  }));
+}
+
+async function runRobustSelection() {
+  if (!displayedOptimizationStudy) return;
+  const chosen = [...document.querySelectorAll("#robust-finalists input:checked")]
+    .map((box) => Number(box.value));
+  const status = optId("robust-status");
+  if (chosen.length < 2) {
+    status.textContent = "Pick at least two candidates to compare.";
+    return;
+  }
+  const button = optId("robust-run");
+  button.disabled = true;
+  status.textContent = "Freezing paired tolerance plans\u2026";
+  try {
+    const response = await fetch("/api/optimization/robust-selection", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({
+        study_id: displayedOptimizationStudy,
+        finalists: chosen,
+        sample_count: Number(optId("robust-samples").value),
+        seed: Number(optId("robust-seed").value),
+        qualification: optimizationRecipe?.qualification,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Selection plan failed");
+    status.textContent =
+      `Plan ${result.selection_id || result.plan_id} froze ${chosen.length} finalists`
+      + `${result.point_count ? ` \u00b7 ${result.point_count} points each` : ""}`;
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+optId("robust-run").addEventListener("click", runRobustSelection);
+
+async function refineOptimization() {
+  if (!displayedOptimizationStudy) return;
+  const button = optId("refine-optimization");
+  const status = optId("refine-status");
+  button.disabled = true;
+  status.textContent = "Freezing refined candidates\u2026";
+  try {
+    const response = await fetch("/api/optimization/refine", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({
+        parent_study_id: displayedOptimizationStudy,
+        max_candidates: Number(optId("refine-candidates").value),
+        max_points: Number(optId("refine-points").value),
+        recipe: optimizationRecipe,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Refinement failed");
+    const refinement = result.refinement || {};
+    status.textContent =
+      `Refined plan ${refinement.plan_id} is running \u00b7 `
+      + `${refinement.candidate_count} candidates \u00b7 ${refinement.point_count} points`;
+    renderOptimizationJob(result);
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+optId("refine-optimization").addEventListener("click", refineOptimization);
 
 function qualificationRequest() {
   return {

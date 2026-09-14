@@ -104,6 +104,30 @@ analyses through the same durable experiment manager used by MCP. Editing the
 recipe invalidates the confirmation, and repeated Start requests cannot
 duplicate the launch.
 
+### Requirement metrics and their parameters
+
+Each requirement picks its metric from a list grouped into AC/frequency-domain
+and time-domain metrics, and the editor then shows exactly the parameters that
+metric accepts, read from `GET /api/metrics` rather than from a table kept in
+the browser. Parameters are written as flat sibling keys of
+`metric`/`operator`/`target` inside the requirement, which is the `.ltstudy`
+shape; the nested `metric_parameters` object is the separate `.ltopt`
+optimization-goal shape and is not interchangeable with it.
+
+Parameters a metric cannot use are dropped when the metric changes, and a
+required one -- `frequency_value` for `ac_gain_db`, `reference_frequency` for
+`cutoff_frequency` and `peaking_db`, `threshold_value` for `frequency`, and so
+on -- is marked and flagged while empty. The recipe validator rejects a missing
+or misspelled parameter during preview, so it surfaces before a run rather than
+part-way through one.
+
+Frequency-valued fields show the parent experiment's `.AC` sweep range, parsed
+from its netlist, and flag a value outside it. Those values are read by
+interpolation in log frequency between the two bracketing simulated points, not
+snapped to the nearest one, which the field's help text states. Entries may use
+SPICE magnitude suffixes (`50k`, `1Meg`); the recipe stores the resolved number
+and the field reports what it resolved to.
+
 Engineering-unit selectors are available for capacitance (`pF`, `nF`, `µF`)
 and resistance (`Ω`, `kΩ`, `MΩ`). These are display and entry choices only: the
 portable recipe and immutable plan retain canonical SI values, so changing a
@@ -121,6 +145,49 @@ The DAQ acceptance test proves that the human-authored recipe and the existing
 agent-authored definition produce byte-identical statistical plans. Its default
 preview resolves 12 manufacturing samples across two ADC-load corners into 24
 points and two paired experiments: 48 prospective LTspice runs.
+
+### Execution, corners, and study identity
+
+Parallelism (up to four concurrent LTspice runs) and simulation cache reuse are
+editable beside the sampling controls rather than fixed when the project was
+scaffolded. `corner_aggregate` is a checkbox over the corner axes, and
+disappears with the last axis because the engine rejects it without them. The
+study's name, description, and the report's narrative fields live in a "Study
+identity and report narrative" block.
+
+## Waveforms, comparison, and history
+
+Every finished job offers **Waveforms**, which plots the `.raw` captures the run
+already wrote: a capture picker, per-trace toggles, selectable resolution, and
+a CSV export at full resolution. A transient axis is drawn linearly and a
+frequency axis in decades; AC captures are complex, so the viewer plots
+magnitude and says so -- exact gain and phase remain the requirement engine's
+job. Nothing in the viewer launches LTspice or writes an artifact.
+
+**Simulate once** on the netlist editor runs one deck through LTspice without
+the define/preview/freeze/acknowledge sequence, for checking that a deck runs
+at all, and opens the viewer on whatever it captured.
+
+The history view filters by text, status, and outcome, and **Compare runs**
+diffs two completed experiments, reporting requirement regressions and
+improvements alongside the portable comparison artifact it writes.
+
+## Studies beyond yield
+
+Three engines that were previously MCP-only are now driven from the browser:
+
+- **Sensitivity** perturbs each manufacturing variable above and below one
+  finished sample and draws a tornado of how far every requirement margin
+  moves, widest swing first. It answers which component actually matters.
+- **Boundary** bisects one variable between a sampled point that passes a check
+  and one that fails it, advancing a batch at a time, to find the value a
+  requirement turns over at rather than a yield percentage.
+- **Robust selection** compares several feasible Pareto finalists under the
+  same manufacturing model, instead of qualifying only the winner.
+
+A finished optimization also offers **Refine this study**, which freezes new
+candidates in the neighbourhoods it already proved feasible and runs them
+through the same paired analyses.
 
 ## Remote Windows execution
 
@@ -208,7 +275,11 @@ window.
 The separate optimization workspace is backed directly by the Phase 4 engine.
 It edits continuous, integer, categorical, explicit preferred-value, and
 generated E6/E12/E24 domains; finite operating corners; Pareto objectives; hard
-constraints; weights; targets; and metric arguments.
+constraints; weights; targets; and metric arguments. Goal metrics come from
+the same list as study requirements, and metric arguments are checked against
+the selected metric's parameters -- an argument it does not take, or a missing
+one that would leave the goal matching more than one measured result, is
+reported in place.
 
 Preview reports domain expansion, candidate/corner/point counts, the AC and
 transient run workload, engine ceilings, selection policy, and the exact future

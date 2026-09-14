@@ -23,6 +23,54 @@ class WaveformMetricTests(unittest.TestCase):
                     measure_metric(axis, values, metric)
 
 
+    def test_every_registry_parameter_is_described_for_the_editors(self) -> None:
+        for metric, specification in waveform_metrics._METRIC_REGISTRY.items():
+            described = {
+                parameter.name
+                for parameter in waveform_metrics.metric_parameters(metric)
+            }
+            expected = specification.parameters - waveform_metrics.ANALYSIS_LEVEL_PARAMETERS
+            with self.subTest(metric=metric):
+                self.assertEqual(expected - described, set())
+                self.assertEqual(described - expected, {"window_start", "window_end"})
+
+    def test_declared_required_parameters_are_the_ones_measurement_demands(self) -> None:
+        """Every parameter flagged required must actually be refused when absent."""
+        axis = [0.0, 1.0, 2.0, 3.0]
+        values = [0.0, 1.0, 1.0, 0.0]
+        complete: dict[str, dict[str, float]] = {
+            "pulse_width": {"threshold_value": 0.5},
+            "duty_cycle": {"threshold_value": 0.5},
+            "forbidden_region_samples": {"forbidden_min": 0.2, "forbidden_max": 0.8},
+        }
+        for metric, parameters in complete.items():
+            required = {
+                parameter.name
+                for parameter in waveform_metrics.metric_parameters(metric)
+                if parameter.required
+            }
+            with self.subTest(metric=metric):
+                self.assertEqual(required, set(parameters))
+                for name in required:
+                    withheld = {k: v for k, v in parameters.items() if k != name}
+                    with self.assertRaisesRegex(ValueError, f"{name} is required"):
+                        measure_metric(axis, values, metric, **withheld)
+
+    def test_statistical_metrics_take_only_the_common_window(self) -> None:
+        for metric in ("minimum", "maximum", "mean", "rms", "peak_to_peak", "ripple"):
+            with self.subTest(metric=metric):
+                self.assertEqual(
+                    [
+                        parameter.name
+                        for parameter in waveform_metrics.metric_parameters(metric)
+                    ],
+                    ["window_start", "window_end"],
+                )
+
+    def test_unknown_metric_has_no_parameter_schema(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unknown waveform metric"):
+            waveform_metrics.metric_parameters("not_a_metric")
+
     def test_registry_is_complete_and_routes_metric_parameters(self) -> None:
         self.assertEqual(
             set(waveform_metrics._METRIC_REGISTRY),

@@ -684,6 +684,14 @@ def list_netlist_files(workspace_root: Path, *, maximum: int = 250) -> list[str]
     return files
 
 
+def resolve_netlist_path(workspace_root: Path, relative_path: object) -> Path:
+    """Resolve a workspace-confined .cir/.net file, or raise with the reason."""
+    path, error = _confined_file(workspace_root, relative_path, "netlist_path")
+    if error is not None or path is None:
+        raise ValueError(error["message"] if error else "netlist was not found")
+    return path
+
+
 def read_netlist_text(workspace_root: Path, relative_path: object) -> str:
     """Read and decode a workspace-confined .cir/.net file's text content."""
     path, error = _confined_file(workspace_root, relative_path, "netlist_path")

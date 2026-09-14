@@ -196,6 +196,41 @@
         </div>
         <p id="study-description" class="muted-copy">Open a project from Projects or load a study recipe to begin.</p>
 
+        <details id="study-identity" class="identity-block" hidden>
+          <summary>Study identity and report narrative</summary>
+          <div class="field-grid identity-fields">
+            <label>
+              <span>Study name</span>
+              <input id="identity-name" type="text" placeholder="Untitled study">
+            </label>
+            <label>
+              <span>Description</span>
+              <input id="identity-description" type="text" placeholder="Portable LTspice study recipe">
+            </label>
+            <label class="wide-field">
+              <span>Report title</span>
+              <input id="identity-title" type="text" placeholder="Defaults to the study name">
+            </label>
+            <label class="wide-field">
+              <span>Circuit summary</span>
+              <textarea id="identity-circuit-summary" rows="2" placeholder="What the circuit is and what it has to do."></textarea>
+            </label>
+            <label class="wide-field">
+              <span>Simulation summary</span>
+              <textarea id="identity-simulation-summary" rows="2" placeholder="What the analyses sweep and why those requirements."></textarea>
+            </label>
+            <label class="wide-field">
+              <span>Schematic caption</span>
+              <input id="identity-schematic-caption" type="text" placeholder="Caption printed under the schematic image">
+            </label>
+            <label class="wide-field">
+              <span>Agent context</span>
+              <textarea id="identity-mcp-context" rows="2" placeholder="Notes carried into the report for whoever picks this up later."></textarea>
+            </label>
+          </div>
+          <p class="muted-copy identity-note">These fields become the generated HTML report's narrative. Each holds up to 1,200 characters.</p>
+        </details>
+
         <div class="field-grid" id="primary-netlist-row" hidden>
           <label class="wide-field">
             <span>Netlist (.cir/.net)</span>
@@ -221,6 +256,16 @@
               <option value="latin_hypercube">Latin hypercube</option>
               <option value="independent">Independent random</option>
             </select>
+          </label>
+          <label>
+            <span>Parallel LTspice runs</span>
+            <input id="max-concurrency" type="number" min="1" max="4" step="1" value="2">
+            <span class="field-hint">Up to 4. Higher finishes sooner and loads the machine harder.</span>
+          </label>
+          <label class="checkbox-field">
+            <input id="reuse-cache" type="checkbox">
+            <span>Reuse cached simulations</span>
+            <span class="field-hint">Skips points already simulated for an identical netlist. Clear it to force every point to re-run.</span>
           </label>
         </div>
 
@@ -473,7 +518,7 @@
               <tbody id="optimization-domains"></tbody>
             </table>
           </div>
-          <p class="editor-note">Fixed circuit conditions: <code id="optimization-fixed">—</code></p>
+          <div class="editor-note"><p class="step">FIXED CIRCUIT CONDITIONS</p><div id="optimization-fixed"></div></div>
 
           <div class="subsection-heading"><div><p class="step">02 / OPERATING CORNERS</p><h3>Finite corner axes</h3></div></div>
           <div id="optimization-corners" class="editor-stack"></div>
@@ -586,6 +631,33 @@
           <div id="optimization-evidence-links"></div>
         </div>
 
+        <div class="cross-link" id="robust-selection-link" hidden>
+          <div>
+            <strong>Compare finalists under tolerance</strong>
+            <p>Qualification proves the winner survives. This asks which of several feasible Pareto candidates holds up best, sampling each against the same manufacturing model.</p>
+            <div id="robust-finalists" class="robust-finalists"></div>
+            <div class="refine-controls">
+              <label class="field-caption">Samples<input id="robust-samples" type="number" min="2" max="4096" step="1" value="32"></label>
+              <label class="field-caption">Seed<input id="robust-seed" type="number" min="0" step="1" value="20260827"></label>
+            </div>
+            <p id="robust-status" class="muted-copy refine-status" aria-live="polite"></p>
+          </div>
+          <button id="robust-run" class="secondary-button" type="button">Freeze selection plans</button>
+        </div>
+
+        <div class="cross-link" id="refine-optimization-link" hidden>
+          <div>
+            <strong>Search again around the winning region</strong>
+            <p>Refinement freezes new candidates in the neighbourhoods this study already proved feasible, so the next pass spends its budget where the answer is.</p>
+            <div class="refine-controls">
+              <label class="field-caption">Candidates<input id="refine-candidates" type="number" min="1" max="64" step="1" value="24"></label>
+              <label class="field-caption">Points<input id="refine-points" type="number" min="1" max="256" step="1" value="96"></label>
+            </div>
+            <p id="refine-status" class="muted-copy refine-status" aria-live="polite"></p>
+          </div>
+          <button id="refine-optimization" class="secondary-button" type="button">Refine this study</button>
+        </div>
+
         <div class="cross-link" id="goto-qualification-link" hidden>
           <div>
             <strong>Prove this candidate survives real tolerances</strong>
@@ -609,6 +681,15 @@
           <label class="field-caption">Deterministic seed<input id="qualification-seed" type="number" min="0" value="20260827"></label>
           <button id="qualification-preview" class="secondary-button" type="button">Preview qualification</button>
         </div>
+        <details id="qualification-model-editor" class="identity-block">
+          <summary>Manufacturing tolerance model</summary>
+          <p class="muted-copy identity-note">Each variable's spread is a fraction of the winning candidate's own value: σ and the min/max bounds are multipliers on its nominal. Names must match a parameter the candidate carries.</p>
+          <div id="qualification-variables" class="qualification-variable-rows"></div>
+          <div class="qualification-fixed-block">
+            <p class="step">FIXED CIRCUIT CONDITIONS</p>
+            <div id="qualification-fixed"></div>
+          </div>
+        </details>
         <div id="qualification-errors" class="errors" role="alert" hidden></div>
         <section id="qualification-preview-card" hidden>
           <dl class="confirmation-grid">
@@ -651,7 +732,10 @@
           <h2>Evidence that is already yours.</h2>
           <p>Live durable-job progress comes directly from manifests. Completed studies and reports come from the same portable evidence used by MCP and CLI workflows.</p>
         </div>
+        <div class="heading-actions">
+        <button id="open-compare" class="compact-button" type="button">Compare runs</button>
         <button id="refresh-history" class="secondary-button" type="button">Refresh status</button>
+      </div>
       </div>
 
       <div class="history-metrics">
@@ -661,7 +745,154 @@
         <div><span>Index</span><strong id="history-index">Checking</strong></div>
       </div>
 
+      <div class="history-tools">
+        <label class="field-caption">Filter runs
+          <input id="history-search" type="search" placeholder="experiment id or metric" spellcheck="false">
+        </label>
+        <label class="field-caption">Status
+          <select id="history-status">
+            <option value="">Any</option>
+            <option value="completed">Completed</option>
+            <option value="running">Running</option>
+            <option value="failed">Failed</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </label>
+        <label class="field-caption">Outcome
+          <select id="history-outcome">
+            <option value="">Any</option>
+            <option value="true">All requirements passed</option>
+            <option value="false">Had failures</option>
+          </select>
+        </label>
+        <label class="field-caption">Show
+          <select id="history-limit">
+            <option value="12" selected>12 most recent</option>
+            <option value="30">30 most recent</option>
+            <option value="60">60 most recent</option>
+          </select>
+        </label>
+      </div>
+
+      <section id="boundary-panel" class="panel compare-panel" hidden>
+        <div class="panel-heading compact">
+          <div>
+            <p class="step">BOUNDARY</p>
+            <h3 id="boundary-title">Where the requirement turns over</h3>
+          </div>
+          <button id="boundary-close" class="compact-button" type="button">Close</button>
+        </div>
+        <p class="editor-note">Bisects one variable between a sampled point that passes a check and one that fails it, so you get the value the requirement actually turns over at rather than a yield percentage.</p>
+        <div class="compare-controls">
+          <label class="field-caption">Passing point
+            <input id="boundary-first" type="number" min="0" step="1" value="0">
+          </label>
+          <label class="field-caption">Failing point
+            <input id="boundary-second" type="number" min="0" step="1" value="1">
+          </label>
+          <label class="field-caption">Check id
+            <input id="boundary-check" type="text" spellcheck="false" placeholder="analog_bandwidth:0">
+          </label>
+          <label class="field-caption">Variable
+            <input id="boundary-variable" type="text" spellcheck="false" placeholder="CAA1">
+          </label>
+          <button id="boundary-define" class="secondary-button" type="button">Bracket boundary</button>
+        </div>
+        <div id="boundary-errors" class="inline-errors" aria-live="polite" hidden></div>
+        <div id="boundary-state" hidden>
+          <div id="boundary-metrics" class="metric-grid"></div>
+          <div class="button-row">
+            <button id="boundary-advance" class="secondary-button" type="button">Advance one batch</button>
+            <span id="boundary-status" class="muted-copy refine-status"></span>
+          </div>
+        </div>
+      </section>
+
+      <section id="sensitivity-panel" class="panel compare-panel" hidden>
+        <div class="panel-heading compact">
+          <div>
+            <p class="step">SENSITIVITY</p>
+            <h3 id="sensitivity-title">Which component moves the margin</h3>
+          </div>
+          <button id="sensitivity-close" class="compact-button" type="button">Close</button>
+        </div>
+        <p class="editor-note">Perturbs each manufacturing variable above and below one finished sample and measures how far every requirement margin moves. The nominal design is not changed.</p>
+        <div class="compare-controls">
+          <label class="field-caption">Sample point
+            <input id="sensitivity-point" type="number" min="0" step="1" value="0">
+          </label>
+          <label class="field-caption">Relative step
+            <input id="sensitivity-step" type="number" min="0.001" max="0.5" step="0.001" value="0.01">
+          </label>
+          <button id="sensitivity-run" class="secondary-button" type="button">Run sensitivity study</button>
+        </div>
+        <div id="sensitivity-errors" class="inline-errors" aria-live="polite" hidden></div>
+        <div id="sensitivity-result" hidden>
+          <div id="sensitivity-requirement-row" class="compare-controls">
+            <label class="field-caption">Requirement
+              <select id="sensitivity-requirement"></select>
+            </label>
+            <a id="sensitivity-csv" class="compact-button" href="#" download>Export tornado CSV</a>
+          </div>
+          <div id="sensitivity-plot" class="waveform-plot"></div>
+          <p id="sensitivity-meta" class="muted-copy waveform-meta"></p>
+        </div>
+      </section>
+
+      <section id="compare-panel" class="panel compare-panel" hidden>
+        <div class="panel-heading compact">
+          <div>
+            <p class="step">COMPARE</p>
+            <h3>Diff two finished runs</h3>
+          </div>
+          <button id="compare-close" class="compact-button" type="button">Close</button>
+        </div>
+        <div class="compare-controls">
+          <label class="field-caption">Baseline
+            <select id="compare-baseline"></select>
+          </label>
+          <label class="field-caption">Candidate
+            <select id="compare-candidate"></select>
+          </label>
+          <button id="compare-run" class="secondary-button" type="button">Compare</button>
+        </div>
+        <div id="compare-errors" class="inline-errors" aria-live="polite" hidden></div>
+        <div id="compare-result" hidden>
+          <div id="compare-metrics" class="metric-grid"></div>
+          <div id="compare-links" class="result-evidence"></div>
+        </div>
+      </section>
+
       <div id="history-errors" class="errors" role="alert" hidden></div>
+
+      <section id="waveform-panel" class="panel waveform-panel" hidden>
+        <div class="panel-heading compact">
+          <div>
+            <p class="step">WAVEFORMS</p>
+            <h3 id="waveform-title">Captured traces</h3>
+          </div>
+          <div class="heading-actions">
+            <a id="waveform-csv" class="compact-button" href="#" download>Export CSV</a>
+            <button id="waveform-close" class="compact-button" type="button">Close</button>
+          </div>
+        </div>
+        <div class="waveform-controls">
+          <label class="field-caption">Capture
+            <select id="waveform-capture"></select>
+          </label>
+          <label class="field-caption">Resolution
+            <select id="waveform-resolution">
+              <option value="600">600 points</option>
+              <option value="1200" selected>1,200 points</option>
+              <option value="4000">4,000 points</option>
+            </select>
+          </label>
+          <div id="waveform-traces" class="waveform-traces"></div>
+        </div>
+        <div id="waveform-errors" class="inline-errors" aria-live="polite" hidden></div>
+        <div id="waveform-plot" class="waveform-plot"></div>
+        <p id="waveform-meta" class="muted-copy waveform-meta"></p>
+      </section>
       <div class="history-grid">
         <article class="panel history-panel">
           <div class="panel-heading compact">

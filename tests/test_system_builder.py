@@ -8,8 +8,11 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+import experiment_engine
+import frequency_domain_metrics
 import ltspice_wrapper
 import system_builder
+import waveform_metrics
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -119,6 +122,99 @@ class SystemBuilderTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
 
+    def test_quick_run_refuses_a_netlist_outside_the_workspace(self) -> None:
+        self._open()
+        for path in ("../outside.cir", "/etc/passwd", "deck.txt", ""):
+            with self.subTest(path=path):
+                response = self.client.post(
+                    "/api/netlist/run",
+                    json={"netlist_path": path},
+                    headers=self._headers(),
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(
+                    response.json()["error"]["code"], "invalid_quick_run"
+                )
+
+    def test_quick_run_bounds_its_timeout(self) -> None:
+        self._open()
+        for timeout in (0, 3601, 2.5, True, "120"):
+            with self.subTest(timeout=timeout):
+                response = self.client.post(
+                    "/api/netlist/run",
+                    json={
+                        "netlist_path": "examples/rc_lowpass.cir",
+                        "timeout_seconds": timeout,
+                    },
+                    headers=self._headers(),
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("timeout_seconds", response.json()["error"]["message"])
+
+    def test_comparison_refuses_a_run_against_itself(self) -> None:
+        self._open()
+        response = self.client.post(
+            "/api/compare",
+            json={
+                "baseline_experiment_id": "same-run",
+                "candidate_experiment_id": "same-run",
+            },
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("different", response.json()["error"]["message"])
+
+    def test_waveform_route_refuses_paths_outside_the_runs_directory(self) -> None:
+        self._open()
+        response = self.client.get("/api/waveform", params={"path": "../secrets.raw"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "waveform_unavailable")
+
+    def test_metric_schema_route_matches_the_measurement_registries(self) -> None:
+        self._open()
+        response = self.client.get("/api/metrics")
+
+        self.assertEqual(response.status_code, 200)
+        metrics = {entry["name"]: entry for entry in response.json()["metrics"]}
+        self.assertEqual(
+            set(metrics),
+            waveform_metrics.SUPPORTED_METRICS
+            | frequency_domain_metrics.SUPPORTED_METRICS,
+        )
+        for name, entry in metrics.items():
+            with self.subTest(metric=name):
+                self.assertEqual(
+                    [parameter["name"] for parameter in entry["parameters"]],
+                    [
+                        parameter.name
+                        for parameter in experiment_engine.metric_parameters(name)
+                    ],
+                )
+
+    def test_metric_schema_marks_the_fields_the_requirement_form_must_enforce(
+        self,
+    ) -> None:
+        self._open()
+        metrics = {
+            entry["name"]: entry
+            for entry in self.client.get("/api/metrics").json()["metrics"]
+        }
+
+        gain = {
+            parameter["name"]: parameter
+            for parameter in metrics["ac_gain_db"]["parameters"]
+        }
+        self.assertEqual(metrics["ac_gain_db"]["domain"], "frequency")
+        self.assertTrue(gain["frequency_value"]["required"])
+        self.assertTrue(gain["frequency_value"]["axis_interpolated"])
+        self.assertEqual(gain["frequency_value"]["unit"], "Hz")
+        self.assertFalse(
+            any(parameter["required"] for parameter in metrics["maximum"]["parameters"])
+        )
+        self.assertEqual(metrics["rise_time"]["domain"], "time")
+
     def test_unloaded_page_has_no_daq_schematic_or_circuit_details(self) -> None:
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
@@ -162,10 +258,13 @@ class SystemBuilderTests(unittest.TestCase):
         expected = {
             ("DELETE", "/api/projects/{slug}"),
             ("GET", "/"),
+            ("GET", "/api/boundary/{adaptive_id}"),
             ("GET", "/api/examples/mixed-signal-daq"),
             ("GET", "/api/examples/mixed-signal-daq-optimization"),
+            ("GET", "/api/experiments/query"),
             ("GET", "/api/history"),
             ("GET", "/api/jobs/{experiment_id}"),
+            ("GET", "/api/metrics"),
             ("GET", "/api/optimization/jobs"),
             ("GET", "/api/optimization/jobs/{optimization_job_id}"),
             ("GET", "/api/optimization/jobs/{optimization_job_id}/results"),
@@ -176,11 +275,15 @@ class SystemBuilderTests(unittest.TestCase):
             ("GET", "/api/qualification/jobs/{job_id}/results"),
             ("GET", "/api/recipe/netlist"),
             ("GET", "/api/recipe/netlists"),
+            ("GET", "/api/runs/{experiment_id}/captures"),
             ("GET", "/api/remote/jobs"),
+            ("GET", "/api/sensitivity/{experiment_id}"),
             ("GET", "/api/schematic/files"),
             ("GET", "/api/schematic/image"),
             ("GET", "/api/session"),
             ("GET", "/api/settings/ltspice"),
+            ("GET", "/api/waveform"),
+            ("GET", "/api/waveform.csv"),
             ("GET", "/assets/app.css"),
             ("GET", "/assets/app.js"),
             ("GET", "/assets/daq-schematic.png"),
@@ -188,14 +291,20 @@ class SystemBuilderTests(unittest.TestCase):
             ("GET", "/assets/optimization.js"),
             ("GET", "/evidence/{artifact_path}"),
             ("GET", "/health"),
+            ("POST", "/api/boundary/define"),
+            ("POST", "/api/boundary/{adaptive_id}/advance"),
+            ("POST", "/api/compare"),
             ("POST", "/api/freeze"),
+            ("POST", "/api/netlist/run"),
             ("POST", "/api/jobs/{experiment_id}/cancel"),
             ("POST", "/api/jobs/{experiment_id}/finalize"),
             ("POST", "/api/jobs/{experiment_id}/resume"),
             ("POST", "/api/optimization/freeze"),
             ("POST", "/api/optimization/jobs/{optimization_job_id}/cancel"),
             ("POST", "/api/optimization/jobs/{optimization_job_id}/resume"),
+            ("POST", "/api/optimization/refine"),
             ("POST", "/api/optimization/preview"),
+            ("POST", "/api/optimization/robust-selection"),
             ("POST", "/api/optimization/start"),
             ("POST", "/api/preview"),
             ("POST", "/api/projects"),
@@ -206,6 +315,7 @@ class SystemBuilderTests(unittest.TestCase):
             ("POST", "/api/qualification/start"),
             ("POST", "/api/recipe/netlist"),
             ("POST", "/api/remote/auth"),
+            ("POST", "/api/sensitivity/start"),
             ("POST", "/api/remote/dispatch"),
             ("POST", "/api/remote/jobs/{remote_job_id}/download"),
             ("POST", "/api/remote/jobs/{remote_job_id}/refresh"),

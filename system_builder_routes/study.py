@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -9,6 +10,8 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
+import adaptive_boundary
+import local_sensitivity
 import statistical_engine
 from remote_execution import build_remote_preview
 from study_recipe import (
@@ -24,6 +27,7 @@ from study_recipe import (
 )
 
 from .common import (
+    JOB_ACTION_EXCEPTIONS,
     Authorization,
     JsonBodyReader,
     add_job_crud_routes,
@@ -60,6 +64,179 @@ def create_study_router(
         cancel_failed_code="cancel_failed",
         resume_failed_code="resume_failed",
     )
+
+    @router.post("/api/sensitivity/start")
+    async def start_local_sensitivity(request: Request) -> Response:
+        """Run a one-at-a-time sensitivity study around one finished sample.
+
+        The study answers "which component actually moves this margin?" for a
+        design point that already has electrical evidence. It reuses the
+        durable experiment manager, so it appears in history and is cancelled
+        and resumed like any other job.
+        """
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        payload, error = await read_json_body(request, maximum=4096)
+        if error is not None:
+            return error
+        if not isinstance(payload, dict):
+            return json_error(400, "invalid_sensitivity", "request must be an object")
+        experiment_id = payload.get("source_experiment_id")
+        point_index = payload.get("source_point_index", 0)
+        step = payload.get("relative_step", 0.01)
+        concurrency = payload.get("max_concurrency", 2)
+        if not isinstance(experiment_id, str) or not experiment_id:
+            return json_error(
+                400, "invalid_sensitivity", "source_experiment_id is required"
+            )
+        if not isinstance(point_index, int) or isinstance(point_index, bool):
+            return json_error(
+                400, "invalid_sensitivity", "source_point_index must be an integer"
+            )
+        if not isinstance(concurrency, int) or isinstance(concurrency, bool):
+            return json_error(
+                400, "invalid_sensitivity", "max_concurrency must be an integer"
+            )
+        try:
+            prepared = local_sensitivity.prepare_local_sensitivity_study(
+                workspace / "runs", experiment_id, point_index, step
+            )
+        except (FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+            return json_error(409, "sensitivity_failed", str(exc))
+        with execution_lock:
+            manager = get_execution_manager()
+            try:
+                snapshot = manager.define_explicit(  # type: ignore[attr-defined]
+                    prepared["netlist_template"],
+                    prepared["parameter_order"],
+                    prepared["points"],
+                    prepared["parameter_units"],
+                    prepared["source"],
+                    prepared["waveform_analyses"],
+                    prepared["filename"],
+                    prepared["ascii_raw"],
+                    prepared["timeout_seconds"],
+                    concurrency,
+                    bool(payload.get("reuse_cache", False)),
+                )
+                started = manager.start(str(snapshot["experiment_id"]))  # type: ignore[attr-defined]
+            except JOB_ACTION_EXCEPTIONS as exc:
+                return json_error(409, "sensitivity_failed", str(exc))
+            managed_jobs.add(str(snapshot["experiment_id"]))
+        return JSONResponse(job_payload(started), status_code=202)
+
+    @router.get("/api/sensitivity/{experiment_id}")
+    def local_sensitivity_analysis(request: Request, experiment_id: str) -> Response:
+        """Return tornado effects for a finished sensitivity study."""
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        try:
+            summary = local_sensitivity.analyze_local_sensitivity(
+                workspace / "runs", experiment_id
+            )
+            tornado = json.loads(
+                Path(str(summary["tornado_json"])).read_text(encoding="utf-8")
+            )
+        except (FileNotFoundError, KeyError, OSError, ValueError) as exc:
+            return json_error(409, "sensitivity_unavailable", str(exc))
+        runs_root = (workspace / "runs").resolve()
+        return JSONResponse(
+            {
+                **summary,
+                "analysis": tornado,
+                "csv_url": (
+                    "/evidence/"
+                    + Path(str(summary["tornado_csv"]))
+                    .resolve()
+                    .relative_to(runs_root)
+                    .as_posix()
+                ),
+            }
+        )
+
+    @router.post("/api/boundary/define")
+    async def define_boundary(request: Request) -> Response:
+        """Bracket a pass/fail boundary between two opposite sampled points.
+
+        The study bisects one variable between a point that passes a check and
+        one that fails it, so the answer is the value where the requirement
+        actually turns over rather than a yield percentage.
+        """
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        payload, error = await read_json_body(request, maximum=4096)
+        if error is not None:
+            return error
+        if not isinstance(payload, dict):
+            return json_error(400, "invalid_boundary", "request must be an object")
+        required = {
+            "source_experiment_id": str,
+            "check_id": str,
+            "variable": str,
+        }
+        values: dict[str, object] = {}
+        for field, kind in required.items():
+            value = payload.get(field)
+            if not isinstance(value, kind) or not value:
+                return json_error(400, "invalid_boundary", f"{field} is required")
+            values[field] = value
+        for field in ("first_point_index", "second_point_index"):
+            value = payload.get(field)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                return json_error(
+                    400, "invalid_boundary", f"{field} must be a non-negative integer"
+                )
+            values[field] = value
+        try:
+            snapshot = adaptive_boundary.define_adaptive_boundary_study(
+                workspace / "runs",
+                str(values["source_experiment_id"]),
+                int(values["first_point_index"]),  # type: ignore[arg-type]
+                int(values["second_point_index"]),  # type: ignore[arg-type]
+                str(values["check_id"]),
+                str(values["variable"]),
+                int(payload.get("batch_size", 3) or 3),
+                int(payload.get("max_samples", 12) or 12),
+                float(payload.get("input_tolerance", 1e-6) or 1e-6),
+            )
+        except (FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+            return json_error(409, "boundary_failed", str(exc))
+        return JSONResponse(snapshot, status_code=202)
+
+    @router.post("/api/boundary/{adaptive_id}/advance")
+    def advance_boundary(request: Request, adaptive_id: str) -> Response:
+        """Take in a finished batch, or launch the next one."""
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        with execution_lock:
+            try:
+                snapshot = adaptive_boundary.advance_adaptive_boundary_study(
+                    workspace / "runs", adaptive_id, get_execution_manager()
+                )
+            except JOB_ACTION_EXCEPTIONS as exc:
+                return json_error(409, "boundary_failed", str(exc))
+            active = snapshot.get("active_experiment_id")
+            if isinstance(active, str) and active:
+                managed_jobs.add(active)
+        return JSONResponse(snapshot)
+
+    @router.get("/api/boundary/{adaptive_id}")
+    def get_boundary(request: Request, adaptive_id: str) -> Response:
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        try:
+            return JSONResponse(
+                adaptive_boundary.get_adaptive_boundary_study(
+                    workspace / "runs", adaptive_id
+                )
+            )
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            return json_error(404, "boundary_not_found", str(exc))
 
     @router.post("/api/jobs/{experiment_id}/finalize")
     def finalize_job(request: Request, experiment_id: str) -> Response:

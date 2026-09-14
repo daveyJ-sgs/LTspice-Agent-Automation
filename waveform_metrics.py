@@ -106,6 +106,31 @@ FREQUENCY_METRICS = {
 }
 SUPPORTED_METRICS = set(get_args(MetricName)) - FREQUENCY_METRICS
 
+# Supplied by the analysis-level secondary_variable, not by a requirement.
+ANALYSIS_LEVEL_PARAMETERS = frozenset({"secondary_values"})
+
+
+@dataclass(frozen=True)
+class MetricParameter:
+    """One requirement-level input a metric accepts.
+
+    Requirement parameters are flat sibling keys of ``metric``/``operator``/
+    ``target`` inside a requirement object -- never nested under a
+    ``metric_parameters`` key, which is the separate optimization-goal schema.
+    """
+
+    name: str
+    kind: Literal["number", "integer", "choice"]
+    required: bool = False
+    choices: tuple[str, ...] = ()
+    default: float | int | str | None = None
+    unit: str = ""
+    description: str = ""
+    #: True when the value is read off the analysis axis by log interpolation
+    #: rather than snapped to a simulated point, so it must fall inside the
+    #: swept range. Editors validate these against the .AC directive.
+    axis_interpolated: bool = False
+
 
 @dataclass(frozen=True)
 class MetricMeasurement:
@@ -931,6 +956,147 @@ _METRIC_REGISTRY = {
         frozenset({"initial_value", "final_value", "settling_tolerance"}),
     ),
 }
+
+
+# Every metric accepts these, so they are not repeated in _METRIC_REGISTRY.
+COMMON_PARAMETERS: tuple[MetricParameter, ...] = (
+    MetricParameter(
+        "window_start",
+        "number",
+        unit="s",
+        description="Ignore samples before this time.",
+    ),
+    MetricParameter(
+        "window_end",
+        "number",
+        unit="s",
+        description="Ignore samples after this time.",
+    ),
+)
+
+# Keyed by the names carried in _METRIC_REGISTRY, so a parameter added to a
+# registry entry without a description here fails the registry test rather
+# than silently going missing from the editors that read this schema.
+_PARAMETER_DEFINITIONS: dict[str, MetricParameter] = {
+    parameter.name: parameter
+    for parameter in (
+        MetricParameter(
+            "initial_value",
+            "number",
+            description="Starting level; inferred from the waveform when omitted.",
+        ),
+        MetricParameter(
+            "final_value",
+            "number",
+            description="Settled level; inferred from the waveform when omitted.",
+        ),
+        MetricParameter(
+            "low_fraction",
+            "number",
+            default=0.1,
+            description="Lower transition threshold as a fraction of the swing.",
+        ),
+        MetricParameter(
+            "high_fraction",
+            "number",
+            default=0.9,
+            description="Upper transition threshold as a fraction of the swing.",
+        ),
+        MetricParameter(
+            "settling_tolerance",
+            "number",
+            default=0.02,
+            description="Half-width of the settling band as a fraction of the swing.",
+        ),
+        MetricParameter(
+            "threshold_value",
+            "number",
+            required=True,
+            description="Signal level the pulse is measured against.",
+        ),
+        MetricParameter(
+            "polarity",
+            "choice",
+            choices=("high", "low"),
+            default="high",
+            description="Measure the above-threshold or below-threshold pulse.",
+        ),
+        MetricParameter(
+            "primary_threshold",
+            "number",
+            required=True,
+            description="Level crossed on the primary signal.",
+        ),
+        MetricParameter(
+            "secondary_threshold",
+            "number",
+            required=True,
+            description="Level crossed on the analysis reference signal.",
+        ),
+        MetricParameter(
+            "primary_edge",
+            "choice",
+            choices=("rising", "falling"),
+            description="Edge taken on the primary signal.",
+        ),
+        MetricParameter(
+            "secondary_edge",
+            "choice",
+            choices=("rising", "falling"),
+            description="Edge taken on the reference signal.",
+        ),
+        MetricParameter(
+            "forbidden_min",
+            "number",
+            required=True,
+            description="Lower edge of the forbidden band on the primary signal.",
+        ),
+        MetricParameter(
+            "forbidden_max",
+            "number",
+            required=True,
+            description="Upper edge of the forbidden band on the primary signal.",
+        ),
+        MetricParameter(
+            "secondary_forbidden_min",
+            "number",
+            description="Lower edge of the forbidden band on the reference signal.",
+        ),
+        MetricParameter(
+            "secondary_forbidden_max",
+            "number",
+            description="Upper edge of the forbidden band on the reference signal.",
+        ),
+        MetricParameter(
+            "direction",
+            "choice",
+            choices=("rising", "falling"),
+            description="Expected slope; inferred from the endpoints when omitted.",
+        ),
+    )
+}
+
+
+def describe_parameters(
+    names: frozenset[str],
+    definitions: Mapping[str, MetricParameter],
+    common: tuple[MetricParameter, ...] = COMMON_PARAMETERS,
+) -> tuple[MetricParameter, ...]:
+    """Expand registry parameter names, dropping analysis-level vectors."""
+    described = [
+        definitions[name]
+        for name in sorted(names)
+        if name not in ANALYSIS_LEVEL_PARAMETERS
+    ]
+    return (*described, *common)
+
+
+def metric_parameters(metric: str) -> tuple[MetricParameter, ...]:
+    """Return the requirement parameters a time-domain metric accepts."""
+    spec = _METRIC_REGISTRY.get(metric)
+    if spec is None:
+        raise ValueError(f"Unknown waveform metric: {metric}")
+    return describe_parameters(spec.parameters, _PARAMETER_DEFINITIONS)
 
 
 def measure_metric(
