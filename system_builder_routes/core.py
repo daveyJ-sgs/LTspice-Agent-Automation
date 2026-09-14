@@ -11,6 +11,7 @@ import experiment_engine
 import frequency_domain_metrics
 import ltspice_wrapper
 import optimization_recipe
+import waveform_browser
 import waveform_metrics
 from study_recipe import load_study_recipe
 from system_builder_history import evidence_file, workspace_history
@@ -211,6 +212,66 @@ def create_core_router(
             return JSONResponse(workspace_history(workspace, limit=limit))
         except ValueError as exc:
             return json_error(400, "history_limit", str(exc))
+
+    @router.get("/api/runs/{experiment_id}/captures")
+    def run_captures(request: Request, experiment_id: str) -> Response:
+        """List the .raw waveforms a finished experiment wrote."""
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        try:
+            return JSONResponse(
+                waveform_browser.list_run_captures(workspace / "runs", experiment_id)
+            )
+        except ValueError as exc:
+            return json_error(404, "captures_not_found", str(exc))
+
+    @router.get("/api/waveform")
+    def waveform(
+        request: Request,
+        path: str,
+        variables: str | None = None,
+        max_points: int = 1200,
+    ) -> Response:
+        """Return one capture's vectors, downsampled for plotting."""
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        selected = (
+            [name for name in variables.split(",") if name] if variables else None
+        )
+        try:
+            return JSONResponse(
+                waveform_browser.read_capture(
+                    workspace / "runs",
+                    path,
+                    variables=selected,
+                    max_points=max_points,
+                )
+            )
+        except ValueError as exc:
+            return json_error(400, "waveform_unavailable", str(exc))
+
+    @router.get("/api/waveform.csv")
+    def waveform_csv(request: Request, path: str) -> Response:
+        """Export one capture at full resolution as CSV."""
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        try:
+            raw_path = evidence_file(workspace / "runs", path)
+            body = waveform_browser.capture_csv(raw_path)
+        except ValueError as exc:
+            return json_error(400, "waveform_unavailable", str(exc))
+        return Response(
+            body,
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{raw_path.stem}.csv"'
+                )
+            },
+        )
 
     @router.get("/evidence/{artifact_path:path}")
     def evidence(request: Request, artifact_path: str) -> Response:

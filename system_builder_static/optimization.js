@@ -967,13 +967,41 @@ function renderQualificationModelEditor() {
       scheduleOptimizationPreview();
     });
     row.append(optField("Parameter", name));
-    for (const key of QUALIFICATION_VARIABLE_KEYS) {
+
+    // Components are specified by a +/- tolerance band, so that is the control:
+    // entering it fills the limit factors, and sigma at one third of the band
+    // so the +/-3 sigma spread matches the part's own rating.
+    const tolerance = optInput(
+      tolerancePercent(variable),
+      `qualification ${variable.name} tolerance percent`,
+      (value) => {
+        const entered = String(value).trim();
+        if (entered === "") return;
+        const percent = Number(entered);
+        if (!Number.isFinite(percent) || percent < 0) return;
+        applyTolerancePercent(variable, percent);
+        renderQualificationModelEditor();
+        scheduleOptimizationPreview();
+      },
+    );
+    tolerance.placeholder = "5";
+    row.append(optField("Tolerance \u00b1%", tolerance));
+
+    for (const [key, caption] of [
+      ["minimum_factor", "Min factor"],
+      ["maximum_factor", "Max factor"],
+      ["sigma_fraction", "Sigma fraction"],
+    ]) {
       const input = optInput(variable[key], `qualification ${variable.name} ${key}`, (value) => {
         variable[key] = optNumber(String(value).trim());
+        // A hand-edited limit can make the band asymmetric, which no single
+        // tolerance percentage describes -- the field reads "custom" then.
+        tolerance.value = tolerancePercent(variable);
         scheduleOptimizationPreview();
       });
-      row.append(optField(key.replace(/_/g, " "), input));
+      row.append(optField(caption, input));
     }
+
     const unit = optInput(variable.unit ?? "", `qualification ${variable.name} unit`, (value) => {
       // The engine requires exactly these five keys, so unit is always
       // written even when it is blank.
@@ -981,6 +1009,7 @@ function renderQualificationModelEditor() {
       scheduleOptimizationPreview();
     });
     row.append(optField("Unit", unit));
+
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "remove-button";
@@ -1000,13 +1029,9 @@ function renderQualificationModelEditor() {
   add.className = "compact-button";
   add.textContent = "+ Toleranced parameter";
   add.addEventListener("click", () => {
-    variables.push({
-      name: "",
-      sigma_fraction: 0.05,
-      minimum_factor: 0.8,
-      maximum_factor: 1.2,
-      unit: "",
-    });
+    const variable = {name: "", sigma_fraction: 0, minimum_factor: 0, maximum_factor: 0, unit: ""};
+    applyTolerancePercent(variable, 5);
+    variables.push(variable);
     renderQualificationModelEditor();
     scheduleOptimizationPreview();
   });
@@ -1014,6 +1039,28 @@ function renderQualificationModelEditor() {
   optId("qualification-fixed").replaceChildren(
     fixedParameterEditor(model, renderQualificationModelEditor, "No fixed conditions."),
   );
+}
+
+// A +/-t% band becomes limit factors 1-t and 1+t, with sigma at t/3 so the
+// part's rating sits at three sigma.
+function applyTolerancePercent(variable, percent) {
+  const fraction = percent / 100;
+  variable.minimum_factor = round12(1 - fraction);
+  variable.maximum_factor = round12(1 + fraction);
+  variable.sigma_fraction = round12(fraction / 3);
+}
+
+function tolerancePercent(variable) {
+  const below = 1 - Number(variable.minimum_factor);
+  const above = Number(variable.maximum_factor) - 1;
+  if (!Number.isFinite(below) || !Number.isFinite(above)) return "";
+  if (Math.abs(below - above) > 1e-9) return "custom";
+  return String(round12(above * 100));
+}
+
+// Keeps 1 - 0.05 from serialising as 0.9500000000000001.
+function round12(value) {
+  return Number(Number(value).toPrecision(12));
 }
 
 function qualificationRequest() {

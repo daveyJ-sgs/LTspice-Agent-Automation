@@ -1681,6 +1681,231 @@ function bindStudyIdentity() {
 
 bindStudyIdentity();
 
+// --- Waveform viewer ------------------------------------------------------
+// Reads the .raw files a finished run already wrote. Nothing here launches
+// LTspice or writes an artifact; the generated HTML report stays the record.
+let waveformCaptures = [];
+let waveformData = null;
+const waveformHidden = new Set();
+
+const TRACE_COLORS = ["#e08a4b", "#5fa8c9", "#4fae78", "#d97575", "#b48ead", "#d9a64e"];
+
+async function openWaveforms(experimentId) {
+  const panel = byId("waveform-panel");
+  panel.hidden = false;
+  byId("waveform-title").textContent = `Captured traces · ${experimentId}`;
+  waveformError("");
+  waveformHidden.clear();
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(experimentId)}/captures`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Captures could not be listed");
+    waveformCaptures = result.captures || [];
+  } catch (error) {
+    waveformCaptures = [];
+    waveformError(error.message);
+  }
+  const select = byId("waveform-capture");
+  if (waveformCaptures.length === 0) {
+    select.replaceChildren();
+    byId("waveform-plot").replaceChildren();
+    byId("waveform-traces").replaceChildren();
+    byId("waveform-meta").textContent = "";
+    waveformError("This run wrote no .raw captures. Compressed or cleaned runs keep only their report.");
+    return;
+  }
+  select.replaceChildren(...waveformCaptures.map((capture) => {
+    const option = document.createElement("option");
+    option.value = capture.path;
+    option.textContent = `point ${capture.point_index} · ${capture.filename}`;
+    return option;
+  }));
+  select.value = waveformCaptures[0].path;
+  panel.scrollIntoView({behavior: "smooth", block: "nearest"});
+  await loadWaveform();
+}
+
+function waveformError(message) {
+  const box = byId("waveform-errors");
+  box.textContent = message;
+  box.hidden = !message;
+}
+
+async function loadWaveform() {
+  const path = byId("waveform-capture").value;
+  if (!path) return;
+  const maxPoints = byId("waveform-resolution").value;
+  byId("waveform-csv").href = `/api/waveform.csv?path=${encodeURIComponent(path)}`;
+  try {
+    const response = await fetch(
+      `/api/waveform?path=${encodeURIComponent(path)}&max_points=${maxPoints}`,
+    );
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Waveform could not be read");
+    waveformData = result;
+    waveformError("");
+  } catch (error) {
+    waveformData = null;
+    waveformError(error.message);
+    byId("waveform-plot").replaceChildren();
+    return;
+  }
+  renderTraceToggles();
+  renderWaveformPlot();
+  const data = waveformData;
+  const steps = data.step_count > 1 ? ` · ${data.step_count} stepped blocks` : "";
+  byId("waveform-meta").textContent =
+    `${data.returned_points.toLocaleString()} of ${data.total_points.toLocaleString()} points`
+    + ` · axis ${data.axis_variable} (${data.axis_unit})`
+    + (data.complex ? " · AC capture, plotted as magnitude" : "")
+    + steps;
+}
+
+function renderTraceToggles() {
+  const names = Object.keys(waveformData.series);
+  const toggles = names.map((name, index) => {
+    const label = document.createElement("label");
+    label.className = "trace-toggle";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.id = `trace-${index}`;
+    box.checked = !waveformHidden.has(name);
+    box.addEventListener("change", () => {
+      if (box.checked) waveformHidden.delete(name);
+      else waveformHidden.add(name);
+      renderWaveformPlot();
+    });
+    const swatch = document.createElement("span");
+    swatch.className = "trace-swatch";
+    swatch.style.background = TRACE_COLORS[index % TRACE_COLORS.length];
+    const text = document.createElement("span");
+    text.textContent = name;
+    label.append(box, swatch, text);
+    return label;
+  });
+  byId("waveform-traces").replaceChildren(...toggles);
+}
+
+function svgElement(name, attributes) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+  return node;
+}
+
+function renderWaveformPlot() {
+  const data = waveformData;
+  const host = byId("waveform-plot");
+  if (!data) { host.replaceChildren(); return; }
+  const shown = Object.entries(data.series).filter(([name]) => !waveformHidden.has(name));
+  if (!shown.length || data.axis.length < 2) {
+    host.replaceChildren(emptyEditor("Select at least one trace."));
+    return;
+  }
+
+  const width = 860;
+  const height = 360;
+  const pad = {left: 78, right: 20, top: 18, bottom: 46};
+  const axis = data.axis;
+  // AC captures span decades, so the frequency axis is drawn logarithmically;
+  // a transient axis stays linear.
+  const logAxis = data.axis_unit === "Hz" && axis[0] > 0;
+  const project = (value) => (logAxis ? Math.log10(value) : value);
+  const xMin = project(axis[0]);
+  const xMax = project(axis[axis.length - 1]);
+  let yMin = Infinity;
+  let yMax = -Infinity;
+  for (const [, values] of shown) {
+    for (const value of values) {
+      if (!Number.isFinite(value)) continue;
+      if (value < yMin) yMin = value;
+      if (value > yMax) yMax = value;
+    }
+  }
+  if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) {
+    host.replaceChildren(emptyEditor("This capture holds no finite samples."));
+    return;
+  }
+  if (yMin === yMax) { yMin -= 1; yMax += 1; }
+  const yPad = (yMax - yMin) * 0.08;
+  yMin -= yPad; yMax += yPad;
+
+  const xAt = (value) => pad.left + ((project(value) - xMin) / (xMax - xMin || 1)) * (width - pad.left - pad.right);
+  const yAt = (value) => height - pad.bottom - ((value - yMin) / (yMax - yMin)) * (height - pad.top - pad.bottom);
+
+  const svg = svgElement("svg", {
+    viewBox: `0 0 ${width} ${height}`,
+    role: "img",
+    "aria-label": `${data.filename} waveform`,
+  });
+  svg.classList.add("waveform-svg");
+
+  for (let index = 0; index <= 4; index += 1) {
+    const gx = pad.left + index * (width - pad.left - pad.right) / 4;
+    const gy = pad.top + index * (height - pad.top - pad.bottom) / 4;
+    svg.append(
+      svgElement("line", {x1: gx, y1: pad.top, x2: gx, y2: height - pad.bottom, class: "plot-grid"}),
+      svgElement("line", {x1: pad.left, y1: gy, x2: width - pad.right, y2: gy, class: "plot-grid"}),
+    );
+    const xValue = logAxis
+      ? 10 ** (xMin + index * (xMax - xMin) / 4)
+      : xMin + index * (xMax - xMin) / 4;
+    const xTick = svgElement("text", {x: gx, y: height - pad.bottom + 20, class: "plot-tick", "text-anchor": "middle"});
+    xTick.textContent = axisLabel(xValue, data.axis_unit);
+    const yTick = svgElement("text", {x: pad.left - 9, y: gy + 4, class: "plot-tick", "text-anchor": "end"});
+    yTick.textContent = axisLabel(yMax - index * (yMax - yMin) / 4, "");
+    svg.append(xTick, yTick);
+  }
+
+  const names = Object.keys(data.series);
+  for (const [name, values] of shown) {
+    const color = TRACE_COLORS[names.indexOf(name) % TRACE_COLORS.length];
+    let path = "";
+    let pen = false;
+    for (let index = 0; index < values.length; index += 1) {
+      const value = values[index];
+      if (!Number.isFinite(value)) { pen = false; continue; }
+      const command = pen ? "L" : "M";
+      path += `${command}${xAt(axis[index]).toFixed(2)} ${yAt(value).toFixed(2)}`;
+      pen = true;
+    }
+    svg.append(svgElement("path", {d: path, fill: "none", stroke: color, "stroke-width": "1.6", "stroke-linejoin": "round"}));
+  }
+
+  host.replaceChildren(svg);
+}
+
+function axisLabel(value, unit) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  const magnitude = Math.abs(number);
+  const scales = unit === "Hz"
+    ? [[1e9, "G"], [1e6, "M"], [1e3, "k"], [1, ""]]
+    : unit === "s"
+      ? [[1, ""], [1e-3, "m"], [1e-6, "µ"], [1e-9, "n"]]
+      : [[1e9, "G"], [1e6, "M"], [1e3, "k"], [1, ""], [1e-3, "m"], [1e-6, "µ"], [1e-9, "n"]];
+  const [factor, prefix] = scales.find(([candidate]) => magnitude >= candidate) || scales[scales.length - 1];
+  return `${Number((number / factor).toPrecision(3))}${prefix ? " " + prefix : ""}${unit}`;
+}
+
+function waveformButton(experimentId) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "compact-button";
+  button.textContent = "Waveforms";
+  button.title = `Plot the .raw captures ${experimentId} wrote`;
+  button.addEventListener("click", () => {
+    showView("history");
+    openWaveforms(experimentId);
+  });
+  return button;
+}
+
+byId("waveform-capture").addEventListener("change", loadWaveform);
+byId("waveform-resolution").addEventListener("change", loadWaveform);
+byId("waveform-close").addEventListener("click", () => {
+  byId("waveform-panel").hidden = true;
+});
+
 function renderErrors(errors) {
   const container = byId("errors");
   if (!errors || errors.length === 0) {
@@ -1900,6 +2125,9 @@ function renderTrackedJobs() {
       }));
     }
     if (job.report_url) actions.append(reportLink(job.report_url));
+    if (["completed", "failed", "cancelled"].includes(job.status)) {
+      actions.append(waveformButton(job.experiment_id));
+    }
     if (job.postprocess_error) {
       const error = document.createElement("span");
       error.className = "job-error";
@@ -1985,6 +2213,7 @@ function renderHistory(result) {
     details.textContent = `${job.finished_points}/${job.point_count} points · ${job.passed_points} pass · ${job.failed_points} fail`;
     bottom.append(details);
     if (job.report_url) bottom.append(reportLink(job.report_url));
+    bottom.append(waveformButton(job.experiment_id));
     if (["queued", "running", "cancelling"].includes(job.status)) {
       bottom.append(jobActionButton("Cancel", async () => {
         trackedJobs.set(job.experiment_id, {name: "recovered", ...job, ...await mutateJob(job.experiment_id, "cancel")});

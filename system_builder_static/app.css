@@ -346,6 +346,18 @@ td:first-child { color: var(--text); font-weight: 600; }
 .qualification-variable-row input { padding: 8px 9px; font-size: 11.5px; }
 .qualification-variable-row .remove-button { align-self: center; }
 .qualification-fixed-block { margin-top: 16px; }
+.waveform-panel { margin-top: 18px; }
+.waveform-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 18px; margin: 14px 0; }
+.waveform-controls select { min-width: 150px; }
+.waveform-traces { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.trace-toggle { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font: 500 11.5px "IBM Plex Mono", monospace; cursor: pointer; }
+.trace-toggle input { width: 14px; height: 14px; accent-color: var(--accent); margin: 0; }
+.trace-swatch { width: 13px; height: 3px; border-radius: 2px; flex: 0 0 auto; }
+.waveform-plot { margin-top: 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); padding: 10px; overflow-x: auto; }
+.waveform-svg { display: block; width: 100%; height: auto; min-width: 460px; }
+.waveform-svg .plot-grid { stroke: var(--border); stroke-width: 1; }
+.waveform-svg .plot-tick { fill: var(--subtle); font: 400 10px "IBM Plex Mono", monospace; }
+.waveform-meta { margin: 9px 0 0; font-size: 12px; font-family: "IBM Plex Mono", monospace; }
 .experiment-group { border-color: var(--accent); }
 .experiment-group > .compact-fields { grid-template-columns: 1fr 2fr; }
 .analysis-stack { margin-top: 13px; gap: 10px; }
