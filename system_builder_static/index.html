@@ -631,6 +631,20 @@
           <div id="optimization-evidence-links"></div>
         </div>
 
+        <div class="cross-link" id="robust-selection-link" hidden>
+          <div>
+            <strong>Compare finalists under tolerance</strong>
+            <p>Qualification proves the winner survives. This asks which of several feasible Pareto candidates holds up best, sampling each against the same manufacturing model.</p>
+            <div id="robust-finalists" class="robust-finalists"></div>
+            <div class="refine-controls">
+              <label class="field-caption">Samples<input id="robust-samples" type="number" min="2" max="4096" step="1" value="32"></label>
+              <label class="field-caption">Seed<input id="robust-seed" type="number" min="0" step="1" value="20260827"></label>
+            </div>
+            <p id="robust-status" class="muted-copy refine-status" aria-live="polite"></p>
+          </div>
+          <button id="robust-run" class="secondary-button" type="button">Freeze selection plans</button>
+        </div>
+
         <div class="cross-link" id="refine-optimization-link" hidden>
           <div>
             <strong>Search again around the winning region</strong>

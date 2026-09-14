@@ -304,6 +304,7 @@ class SystemBuilderTests(unittest.TestCase):
             ("POST", "/api/optimization/jobs/{optimization_job_id}/resume"),
             ("POST", "/api/optimization/refine"),
             ("POST", "/api/optimization/preview"),
+            ("POST", "/api/optimization/robust-selection"),
             ("POST", "/api/optimization/start"),
             ("POST", "/api/preview"),
             ("POST", "/api/projects"),

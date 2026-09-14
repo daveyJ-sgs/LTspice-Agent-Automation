@@ -903,6 +903,7 @@ function renderOptimizationCandidates(result) {
 // attention note.
 function setQualificationAvailability(available) {
   optId("refine-optimization-link").hidden = !available;
+  optId("robust-selection-link").hidden = !available;
   optId("qualification-panel").hidden = !available;
   if (available) renderQualificationModelEditor();
   optId("qualification-empty").hidden = available;
@@ -933,6 +934,7 @@ function renderOptimizationResults(result) {
   const selected = (result.candidates || []).find((candidate) => candidate.selected) || null;
   selectedQualificationSource = selected ? {study_id: result.study_id, candidate_index: selected.candidate_index} : null;
   setQualificationAvailability(selectedQualificationSource !== null);
+  renderRobustFinalists(result);
   renderSelectedOptimizationCandidate(result, selected);
   renderOptimizationParetoPlot(result);
   renderOptimizationCandidates(result);
@@ -1063,6 +1065,78 @@ function tolerancePercent(variable) {
 function round12(value) {
   return Number(Number(value).toPrecision(12));
 }
+
+// Only feasible selected or Pareto candidates can be finalists -- the engine
+// refuses anything else, so the picker offers only those.
+function renderRobustFinalists(result) {
+  const eligible = (result.candidates || []).filter(
+    (candidate) => candidate.status === "feasible" && (candidate.selected || candidate.pareto),
+  );
+  const host = optId("robust-finalists");
+  if (eligible.length < 2) {
+    const note = document.createElement("p");
+    note.className = "muted-copy";
+    note.textContent = "This study has only one feasible Pareto candidate, so there is nothing to compare it against.";
+    host.replaceChildren(note);
+    optId("robust-run").disabled = true;
+    return;
+  }
+  optId("robust-run").disabled = false;
+  host.replaceChildren(...eligible.map((candidate) => {
+    const label = document.createElement("label");
+    label.className = "trace-toggle";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.id = `finalist-${candidate.candidate_index}`;
+    box.value = String(candidate.candidate_index);
+    box.checked = Boolean(candidate.selected);
+    const text = document.createElement("span");
+    text.textContent = `candidate ${candidate.candidate_index}${candidate.selected ? " (winner)" : ""}`;
+    label.append(box, text);
+    return label;
+  }));
+}
+
+async function runRobustSelection() {
+  if (!displayedOptimizationStudy) return;
+  const chosen = [...document.querySelectorAll("#robust-finalists input:checked")]
+    .map((box) => Number(box.value));
+  const status = optId("robust-status");
+  if (chosen.length < 2) {
+    status.textContent = "Pick at least two candidates to compare.";
+    return;
+  }
+  const button = optId("robust-run");
+  button.disabled = true;
+  status.textContent = "Freezing paired tolerance plans\u2026";
+  try {
+    const response = await fetch("/api/optimization/robust-selection", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({
+        study_id: displayedOptimizationStudy,
+        finalists: chosen,
+        sample_count: Number(optId("robust-samples").value),
+        seed: Number(optId("robust-seed").value),
+        qualification: optimizationRecipe?.qualification,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Selection plan failed");
+    status.textContent =
+      `Plan ${result.selection_id || result.plan_id} froze ${chosen.length} finalists`
+      + `${result.point_count ? ` \u00b7 ${result.point_count} points each` : ""}`;
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+optId("robust-run").addEventListener("click", runRobustSelection);
 
 async function refineOptimization() {
   if (!displayedOptimizationStudy) return;

@@ -11,6 +11,8 @@ from fastapi.responses import JSONResponse, Response
 
 import optimization_engine
 import optimization_recipe
+import qualification_recipe
+import robust_selection
 
 from .common import (
     Authorization,
@@ -302,6 +304,70 @@ def create_optimization_router(
             },
             status_code=202,
         )
+
+    @router.post("/api/optimization/robust-selection")
+    async def robust_selection_plan(request: Request) -> Response:
+        """Freeze paired tolerance plans for several finalists at once.
+
+        Qualification proves one winner survives its tolerances. This asks the
+        harder question: of several feasible Pareto candidates, which one holds
+        up best. Each finalist's statistical variables are derived from its own
+        candidate parameters and the shared tolerance model, because the engine
+        requires every variable's nominal to equal that candidate's value.
+        """
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        payload, error = await read_json_body(request, maximum=16384)
+        if error is not None:
+            return error
+        if not isinstance(payload, dict):
+            return json_error(400, "invalid_selection", "request must be an object")
+        study_id = payload.get("study_id")
+        finalists = payload.get("finalists")
+        model = payload.get("qualification")
+        if not isinstance(study_id, str) or not study_id:
+            return json_error(400, "invalid_selection", "study_id is required")
+        if (
+            not isinstance(finalists, list)
+            or not 2 <= len(finalists) <= 8
+            or not all(isinstance(entry, int) and not isinstance(entry, bool) for entry in finalists)
+        ):
+            return json_error(
+                400,
+                "invalid_selection",
+                "choose 2 to 8 candidate indexes to compare",
+            )
+        sample_count = payload.get("sample_count", 32)
+        seed = payload.get("seed", 20260827)
+        for field, value in (("sample_count", sample_count), ("seed", seed)):
+            if not isinstance(value, int) or isinstance(value, bool):
+                return json_error(400, "invalid_selection", f"{field} must be an integer")
+        entries: list[dict[str, object]] = []
+        variables_by_finalist: dict[str, object] = {}
+        try:
+            for candidate_index in finalists:
+                label = f"candidate_{candidate_index}"
+                entries.append(
+                    {
+                        "label": label,
+                        "study_id": study_id,
+                        "candidate_index": candidate_index,
+                    }
+                )
+                variables_by_finalist[label] = qualification_recipe.qualification_variables(
+                    workspace / "runs", study_id, candidate_index, model
+                )
+            result = robust_selection.generate_robust_selection_plan(
+                workspace / "runs",
+                entries,
+                variables_by_finalist,  # type: ignore[arg-type]
+                int(sample_count),
+                int(seed),
+            )
+        except (FileNotFoundError, KeyError, OSError, TypeError, ValueError) as exc:
+            return json_error(409, "selection_failed", str(exc))
+        return JSONResponse(result)
 
     @router.get("/api/optimization/jobs")
     def optimization_jobs(request: Request, limit: int = 8) -> Response:
