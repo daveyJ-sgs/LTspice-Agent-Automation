@@ -122,6 +122,56 @@ class SystemBuilderTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
 
+    def test_quick_run_refuses_a_netlist_outside_the_workspace(self) -> None:
+        self._open()
+        for path in ("../outside.cir", "/etc/passwd", "deck.txt", ""):
+            with self.subTest(path=path):
+                response = self.client.post(
+                    "/api/netlist/run",
+                    json={"netlist_path": path},
+                    headers=self._headers(),
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(
+                    response.json()["error"]["code"], "invalid_quick_run"
+                )
+
+    def test_quick_run_bounds_its_timeout(self) -> None:
+        self._open()
+        for timeout in (0, 3601, 2.5, True, "120"):
+            with self.subTest(timeout=timeout):
+                response = self.client.post(
+                    "/api/netlist/run",
+                    json={
+                        "netlist_path": "examples/rc_lowpass.cir",
+                        "timeout_seconds": timeout,
+                    },
+                    headers=self._headers(),
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("timeout_seconds", response.json()["error"]["message"])
+
+    def test_comparison_refuses_a_run_against_itself(self) -> None:
+        self._open()
+        response = self.client.post(
+            "/api/compare",
+            json={
+                "baseline_experiment_id": "same-run",
+                "candidate_experiment_id": "same-run",
+            },
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("different", response.json()["error"]["message"])
+
+    def test_waveform_route_refuses_paths_outside_the_runs_directory(self) -> None:
+        self._open()
+        response = self.client.get("/api/waveform", params={"path": "../secrets.raw"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "waveform_unavailable")
+
     def test_metric_schema_route_matches_the_measurement_registries(self) -> None:
         self._open()
         response = self.client.get("/api/metrics")
@@ -241,6 +291,7 @@ class SystemBuilderTests(unittest.TestCase):
             ("GET", "/health"),
             ("POST", "/api/compare"),
             ("POST", "/api/freeze"),
+            ("POST", "/api/netlist/run"),
             ("POST", "/api/jobs/{experiment_id}/cancel"),
             ("POST", "/api/jobs/{experiment_id}/finalize"),
             ("POST", "/api/jobs/{experiment_id}/resume"),

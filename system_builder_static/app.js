@@ -579,6 +579,41 @@ function buildNetlistEditor(experiment) {
   const status = document.createElement("span");
   status.className = "muted-copy netlist-editor-status";
 
+  const runButton = document.createElement("button");
+  runButton.type = "button";
+  runButton.className = "compact-button";
+  runButton.textContent = "Simulate once";
+  runButton.title = "Run this deck through LTspice now, without defining a study";
+  runButton.disabled = true;
+  runButton.addEventListener("click", async () => {
+    const path = experiment.netlist_path;
+    if (!path) return;
+    runButton.disabled = true;
+    status.textContent = "Simulating\u2026";
+    try {
+      const response = await fetch("/api/netlist/run", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-LTspice-System-Builder": "1",
+        },
+        body: JSON.stringify({netlist_path: path}),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error?.message || "Simulation failed");
+      const captures = result.captures || [];
+      status.textContent = `${result.status} \u00b7 ${captures.length} capture${captures.length === 1 ? "" : "s"}`;
+      if (captures.length) {
+        showView("history");
+        openWaveforms(result.run_id);
+      }
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      runButton.disabled = false;
+    }
+  });
+
   const saveButton = document.createElement("button");
   saveButton.type = "button";
   saveButton.className = "primary-button";
@@ -612,7 +647,7 @@ function buildNetlistEditor(experiment) {
 
   const buttonRow = document.createElement("div");
   buttonRow.className = "button-row";
-  buttonRow.append(saveButton, status);
+  buttonRow.append(saveButton, runButton, status);
 
   container.append(toolbar, textarea, buttonRow);
 
@@ -623,6 +658,7 @@ function buildNetlistEditor(experiment) {
       textarea.value = netlistEditorBuffers.get(path);
       textarea.disabled = false;
       saveButton.disabled = false;
+      runButton.disabled = false;
       return;
     }
     status.textContent = "Loading…";
@@ -634,6 +670,7 @@ function buildNetlistEditor(experiment) {
       netlistEditorBuffers.set(path, result.content);
       textarea.disabled = false;
       saveButton.disabled = false;
+      runButton.disabled = false;
       status.textContent = "";
     } catch (error) {
       status.textContent = error.message;

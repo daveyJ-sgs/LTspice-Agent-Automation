@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -14,7 +16,7 @@ import ltspice_wrapper
 import optimization_recipe
 import waveform_browser
 import waveform_metrics
-from study_recipe import load_study_recipe
+from study_recipe import load_study_recipe, resolve_netlist_path
 from system_builder_history import evidence_file, workspace_history
 
 from .common import Authorization, JsonBodyReader, json_error
@@ -213,6 +215,75 @@ def create_core_router(
             return JSONResponse(workspace_history(workspace, limit=limit))
         except ValueError as exc:
             return json_error(400, "history_limit", str(exc))
+
+    @router.post("/api/netlist/run")
+    async def quick_run(request: Request) -> Response:
+        """Simulate one workspace netlist once, without defining a study.
+
+        Every other path to LTspice goes through define, preview, freeze, and
+        an acknowledgement, which is right for a qualification run and heavy
+        for "does this deck even simulate?". This writes an ordinary run
+        directory under runs/, so its output is inspectable in the waveform
+        viewer like any other.
+        """
+        denied = authorize_mutation(request)
+        if denied is not None:
+            return denied
+        payload, error = await read_json_body(request, maximum=4096)
+        if error is not None:
+            return error
+        if not isinstance(payload, dict):
+            return json_error(400, "invalid_quick_run", "request must be an object")
+        timeout = payload.get("timeout_seconds", 120)
+        if (
+            not isinstance(timeout, int)
+            or isinstance(timeout, bool)
+            or not 1 <= timeout <= 3600
+        ):
+            return json_error(
+                400, "invalid_quick_run", "timeout_seconds must be 1 to 3600"
+            )
+        try:
+            netlist_path = resolve_netlist_path(workspace, payload.get("netlist_path"))
+        except ValueError as exc:
+            return json_error(400, "invalid_quick_run", str(exc))
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+        output_dir = workspace / "runs" / f"quick-{stamp}"
+        try:
+            result_dir = ltspice_wrapper.run_netlist(
+                netlist_path,
+                output_dir=output_dir,
+                timeout_seconds=timeout,
+                disable_compression=True,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            return json_error(409, "quick_run_failed", str(exc))
+        runs_root = (workspace / "runs").resolve()
+        manifest_path = result_dir / "run_manifest.json"
+        manifest: dict[str, object] = {}
+        if manifest_path.is_file():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                manifest = {}
+        captures = [
+            {
+                "filename": raw.name,
+                "path": raw.resolve().relative_to(runs_root).as_posix(),
+                "size_bytes": raw.stat().st_size,
+            }
+            for raw in sorted(result_dir.glob("*.raw"))
+            if raw.is_file() and not raw.is_symlink()
+        ]
+        return JSONResponse(
+            {
+                "run_id": result_dir.name,
+                "status": manifest.get("status", "unknown"),
+                "duration_seconds": manifest.get("duration_seconds"),
+                "netlist_path": payload.get("netlist_path"),
+                "captures": captures,
+            }
+        )
 
     @router.get("/api/experiments/query")
     def experiment_query(
