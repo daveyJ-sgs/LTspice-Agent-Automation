@@ -24,6 +24,7 @@ import os
 import tempfile
 import threading
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -699,6 +700,33 @@ def get_waveform(
     }
 
 
+def _requirement_metric_parameters(
+    metric: str, requirement: Mapping[str, object]
+) -> dict[str, float | int | str]:
+    """Coerce the parameters one metric accepts out of a requirement object.
+
+    The accepted names and their types come from the measurement registries
+    (via experiment_engine.metric_schema), so this cannot drift from what the
+    metric actually reads. Parameters are flat sibling keys of
+    metric/operator/target; a key this metric does not accept is left out
+    rather than handed to a measurement that would ignore it.
+    """
+    parameters: dict[str, float | int | str] = {}
+    for parameter in experiment_engine.metric_parameters(metric):
+        if parameter.name not in requirement:
+            continue
+        value = requirement[parameter.name]
+        if parameter.kind == "integer":
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ValueError(f"{parameter.name} must be an integer")
+            parameters[parameter.name] = value
+        elif parameter.kind == "choice":
+            parameters[parameter.name] = str(value)
+        else:
+            parameters[parameter.name] = float(value)  # type: ignore[arg-type]
+    return parameters
+
+
 @mcp.tool()
 def analyze_waveform(
     run_dir: str,
@@ -792,41 +820,6 @@ def _analyze_waveform_impl(
     if resolved_axis_unit is None:
         resolved_axis_unit = "Hz" if axis_name.lower() == "frequency" else "s"
     results: list[waveform_metrics.RequirementResult] = []
-    waveform_numeric_parameters = {
-        "initial_value",
-        "final_value",
-        "low_fraction",
-        "high_fraction",
-        "settling_tolerance",
-        "window_start",
-        "window_end",
-        "threshold_value",
-        "primary_threshold",
-        "secondary_threshold",
-        "forbidden_min",
-        "forbidden_max",
-        "secondary_forbidden_min",
-        "secondary_forbidden_max",
-    }
-    frequency_numeric_parameters = {
-        "window_start",
-        "window_end",
-        "threshold_value",
-        "frequency_min",
-        "frequency_max",
-        "frequency_resolution",
-        "fundamental_frequency",
-        "frequency_value",
-        "reference_frequency",
-        "cutoff_drop_db",
-    }
-    waveform_string_parameters = {
-        "polarity",
-        "primary_edge",
-        "secondary_edge",
-        "direction",
-    }
-    frequency_string_parameters = {"edge", "direction"}
     for requirement in requirements:
         try:
             metric = str(requirement["metric"])
@@ -834,34 +827,8 @@ def _analyze_waveform_impl(
             target = float(requirement["target"])
         except KeyError as exc:
             raise ValueError(f"requirement is missing {exc.args[0]}") from exc
-        all_numeric_parameters = waveform_numeric_parameters | frequency_numeric_parameters
-        parameters: dict[str, float | int | str] = {
-            name: float(requirement[name])
-            for name in all_numeric_parameters
-            if name in requirement
-        }
-        if "maximum_harmonic" in requirement:
-            harmonic = requirement["maximum_harmonic"]
-            if not isinstance(harmonic, int) or isinstance(harmonic, bool):
-                raise ValueError("maximum_harmonic must be an integer")
-            parameters["maximum_harmonic"] = harmonic
-        all_string_parameters = waveform_string_parameters | frequency_string_parameters
-        parameters.update(
-            {
-                name: str(requirement[name])
-                for name in all_string_parameters
-                if name in requirement
-            }
-        )
+        metric_parameters = _requirement_metric_parameters(metric, requirement)
         if metric in frequency_domain_metrics.SUPPORTED_METRICS:
-            accepted = (
-                frequency_numeric_parameters
-                | frequency_string_parameters
-                | {"maximum_harmonic"}
-            )
-            metric_parameters = {
-                name: value for name, value in parameters.items() if name in accepted
-            }
             measurement = frequency_domain_metrics.measure_metric(
                 axis,
                 values,
@@ -872,10 +839,6 @@ def _analyze_waveform_impl(
                 **metric_parameters,
             )
         else:
-            accepted = waveform_numeric_parameters | waveform_string_parameters
-            metric_parameters = {
-                name: value for name, value in parameters.items() if name in accepted
-            }
             measurement = waveform_metrics.measure_metric(
                 axis,
                 values,

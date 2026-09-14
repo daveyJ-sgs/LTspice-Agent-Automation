@@ -316,7 +316,10 @@ class FrequencyDomainMetricTests(unittest.TestCase):
 
         self.assertEqual(phase_margin.value, 45.0)
         self.assertEqual(phase_margin.evidence["frequency"], 10.0)
-        self.assertEqual(gain_margin.value, -5.0)
+        # The margin is a gain, so it round-trips through rect/abs/log10 and
+        # lands a representation step off -5.0; the frequency it was read at is
+        # what this test is pinning down.
+        self.assertAlmostEqual(gain_margin.value, -5.0)
         self.assertEqual(gain_margin.evidence["frequency"], 10.0)
 
     def test_ac_rejects_ambiguous_or_invalid_data(self) -> None:
