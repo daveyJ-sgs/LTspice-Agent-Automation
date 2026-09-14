@@ -747,6 +747,37 @@
         </label>
       </div>
 
+      <section id="sensitivity-panel" class="panel compare-panel" hidden>
+        <div class="panel-heading compact">
+          <div>
+            <p class="step">SENSITIVITY</p>
+            <h3 id="sensitivity-title">Which component moves the margin</h3>
+          </div>
+          <button id="sensitivity-close" class="compact-button" type="button">Close</button>
+        </div>
+        <p class="editor-note">Perturbs each manufacturing variable above and below one finished sample and measures how far every requirement margin moves. The nominal design is not changed.</p>
+        <div class="compare-controls">
+          <label class="field-caption">Sample point
+            <input id="sensitivity-point" type="number" min="0" step="1" value="0">
+          </label>
+          <label class="field-caption">Relative step
+            <input id="sensitivity-step" type="number" min="0.001" max="0.5" step="0.001" value="0.01">
+          </label>
+          <button id="sensitivity-run" class="secondary-button" type="button">Run sensitivity study</button>
+        </div>
+        <div id="sensitivity-errors" class="inline-errors" aria-live="polite" hidden></div>
+        <div id="sensitivity-result" hidden>
+          <div id="sensitivity-requirement-row" class="compare-controls">
+            <label class="field-caption">Requirement
+              <select id="sensitivity-requirement"></select>
+            </label>
+            <a id="sensitivity-csv" class="compact-button" href="#" download>Export tornado CSV</a>
+          </div>
+          <div id="sensitivity-plot" class="waveform-plot"></div>
+          <p id="sensitivity-meta" class="muted-copy waveform-meta"></p>
+        </div>
+      </section>
+
       <section id="compare-panel" class="panel compare-panel" hidden>
         <div class="panel-heading compact">
           <div>

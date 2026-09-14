@@ -1924,6 +1924,186 @@ function axisLabel(value, unit) {
   return `${Number((number / factor).toPrecision(3))}${prefix ? " " + prefix : ""}${unit}`;
 }
 
+// --- Local sensitivity ----------------------------------------------------
+// Answers "which component actually moves this margin?" for a design point
+// that already has electrical evidence, by perturbing each variable above and
+// below it one at a time.
+let sensitivitySource = null;
+let sensitivityAnalysis = null;
+
+function openSensitivity(experimentId) {
+  sensitivitySource = experimentId;
+  sensitivityAnalysis = null;
+  byId("sensitivity-title").textContent = `Which component moves the margin · ${experimentId}`;
+  byId("sensitivity-result").hidden = true;
+  sensitivityError("");
+  const panel = byId("sensitivity-panel");
+  panel.hidden = false;
+  panel.scrollIntoView({behavior: "smooth", block: "nearest"});
+  // A finished study can be read back without re-running it.
+  loadSensitivityAnalysis(experimentId, {quiet: true});
+}
+
+function sensitivityError(message) {
+  const box = byId("sensitivity-errors");
+  box.textContent = message;
+  box.hidden = !message;
+}
+
+async function runSensitivity() {
+  if (!sensitivitySource) return;
+  const button = byId("sensitivity-run");
+  button.disabled = true;
+  button.textContent = "Starting…";
+  sensitivityError("");
+  try {
+    const response = await fetch("/api/sensitivity/start", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({
+        source_experiment_id: sensitivitySource,
+        source_point_index: Number(byId("sensitivity-point").value),
+        relative_step: Number(byId("sensitivity-step").value),
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Sensitivity study failed");
+    trackedJobs.set(result.experiment_id, {name: "sensitivity", ...result});
+    renderTrackedJobs();
+    scheduleJobPoll(250);
+    sensitivityError("");
+    byId("sensitivity-meta").textContent =
+      `Study ${result.experiment_id} is running. Its tornado appears here once every point finishes.`;
+    byId("sensitivity-result").hidden = false;
+    sensitivitySource = result.experiment_id;
+  } catch (error) {
+    sensitivityError(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Run sensitivity study";
+  }
+}
+
+async function loadSensitivityAnalysis(experimentId, {quiet = false} = {}) {
+  try {
+    const response = await fetch(`/api/sensitivity/${encodeURIComponent(experimentId)}`);
+    const result = await response.json();
+    if (!response.ok) {
+      if (!quiet) sensitivityError(result.error?.message || "No tornado is available yet");
+      return;
+    }
+    sensitivityAnalysis = result;
+    byId("sensitivity-csv").href = result.csv_url;
+    const requirements = result.analysis.requirements || [];
+    byId("sensitivity-requirement").replaceChildren(...requirements.map((requirement, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = `${requirement.analysis} · ${requirement.metric} ${requirement.operator} ${requirement.target}`;
+      return option;
+    }));
+    byId("sensitivity-result").hidden = false;
+    renderTornado();
+  } catch (error) {
+    if (!quiet) sensitivityError(error.message);
+  }
+}
+
+function renderTornado() {
+  const host = byId("sensitivity-plot");
+  const analysis = sensitivityAnalysis?.analysis;
+  const index = Number(byId("sensitivity-requirement").value || 0);
+  const requirement = analysis?.requirements?.[index];
+  if (!requirement) { host.replaceChildren(emptyEditor("No completed effects yet.")); return; }
+
+  // One bar per variable, widest total swing first: this is the ordering that
+  // makes a tornado readable.
+  const bars = (requirement.effects || [])
+    .filter((effect) => effect.status === "complete")
+    .map((effect) => ({
+      name: effect.name,
+      low: Number(effect.low_effect) || 0,
+      high: Number(effect.high_effect) || 0,
+    }))
+    .sort((a, b) => (Math.abs(b.low) + Math.abs(b.high)) - (Math.abs(a.low) + Math.abs(a.high)));
+  if (!bars.length) {
+    host.replaceChildren(emptyEditor("This requirement has no complete effects — some perturbed points did not finish."));
+    return;
+  }
+
+  const rowHeight = 26;
+  const width = 860;
+  const pad = {left: 132, right: 30, top: 26, bottom: 38};
+  const height = pad.top + pad.bottom + bars.length * rowHeight;
+  const extent = Math.max(...bars.flatMap((bar) => [Math.abs(bar.low), Math.abs(bar.high)]), 1e-12);
+  const xAt = (value) => pad.left + ((value + extent) / (2 * extent)) * (width - pad.left - pad.right);
+
+  const svg = svgElement("svg", {
+    viewBox: `0 0 ${width} ${height}`,
+    role: "img",
+    "aria-label": `Tornado of margin effects for ${requirement.metric}`,
+  });
+  svg.classList.add("waveform-svg");
+
+  for (let step = 0; step <= 4; step += 1) {
+    const value = -extent + step * (2 * extent) / 4;
+    const x = xAt(value);
+    svg.append(svgElement("line", {x1: x, y1: pad.top, x2: x, y2: height - pad.bottom, class: "plot-grid"}));
+    const tick = svgElement("text", {x, y: height - pad.bottom + 20, class: "plot-tick", "text-anchor": "middle"});
+    tick.textContent = Number(value.toPrecision(3)).toString();
+    svg.append(tick);
+  }
+
+  bars.forEach((bar, row) => {
+    const y = pad.top + row * rowHeight;
+    const label = svgElement("text", {x: pad.left - 10, y: y + rowHeight / 2 + 4, class: "plot-tick", "text-anchor": "end"});
+    label.textContent = bar.name;
+    svg.append(label);
+    for (const [value, color] of [[bar.low, "#5fa8c9"], [bar.high, "#e08a4b"]]) {
+      if (value === 0) continue;
+      const from = Math.min(xAt(0), xAt(value));
+      svg.append(svgElement("rect", {
+        x: from,
+        y: y + 5,
+        width: Math.max(Math.abs(xAt(value) - xAt(0)), 1),
+        height: rowHeight - 12,
+        fill: color,
+        opacity: "0.85",
+        rx: "2",
+      }));
+    }
+  });
+  const zero = xAt(0);
+  svg.append(svgElement("line", {x1: zero, y1: pad.top, x2: zero, y2: height - pad.bottom, stroke: "currentColor", "stroke-width": "1", opacity: "0.5"}));
+
+  host.replaceChildren(svg);
+  byId("sensitivity-meta").textContent =
+    `${bars.length} variables · baseline margin ${Number(requirement.baseline_margin).toPrecision(4)}`
+    + ` · ±${(analysis.relative_step * 100).toFixed(2)}% step`
+    + ` · blue is the low perturbation, copper the high`;
+}
+
+function sensitivityButton(experimentId) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "compact-button";
+  button.textContent = "Sensitivity";
+  button.title = `Find which variable moves ${experimentId}'s margins`;
+  button.addEventListener("click", () => {
+    showView("history");
+    openSensitivity(experimentId);
+  });
+  return button;
+}
+
+byId("sensitivity-run").addEventListener("click", runSensitivity);
+byId("sensitivity-requirement").addEventListener("change", renderTornado);
+byId("sensitivity-close").addEventListener("click", () => {
+  byId("sensitivity-panel").hidden = true;
+});
+
 // --- History filtering and run comparison ---------------------------------
 function matchesHistoryFilter(job) {
   const search = byId("history-search").value.trim().toLowerCase();
@@ -2381,6 +2561,9 @@ function renderHistory(result) {
     bottom.append(details);
     if (job.report_url) bottom.append(reportLink(job.report_url));
     bottom.append(waveformButton(job.experiment_id));
+    if (job.status === "completed" && job.statistical) {
+      bottom.append(sensitivityButton(job.experiment_id));
+    }
     if (["queued", "running", "cancelling"].includes(job.status)) {
       bottom.append(jobActionButton("Cancel", async () => {
         trackedJobs.set(job.experiment_id, {name: "recovered", ...job, ...await mutateJob(job.experiment_id, "cancel")});
