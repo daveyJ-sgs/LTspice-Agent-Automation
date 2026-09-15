@@ -1061,11 +1061,6 @@ function tolerancePercent(variable) {
   return String(round12(above * 100));
 }
 
-// Keeps 1 - 0.05 from serialising as 0.9500000000000001.
-function round12(value) {
-  return Number(Number(value).toPrecision(12));
-}
-
 // Only feasible selected or Pareto candidates can be finalists -- the engine
 // refuses anything else, so the picker offers only those.
 function renderRobustFinalists(result) {

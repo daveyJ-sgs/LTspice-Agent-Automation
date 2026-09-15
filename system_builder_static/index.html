@@ -289,7 +289,7 @@
         </div>
         <div class="table-wrap">
           <table class="editor-table variable-table">
-            <thead><tr><th>Name</th><th>Distribution</th><th>Nominal</th><th>Tolerance</th><th>Minimum</th><th>Maximum</th><th>Unit</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Distribution</th><th>Nominal</th><th>Tolerance ±%</th><th>Minimum</th><th>Maximum</th><th>Sigma</th><th>Unit</th><th></th></tr></thead>
             <tbody id="variables"></tbody>
           </table>
         </div>
@@ -887,10 +887,23 @@
               <option value="4000">4,000 points</option>
             </select>
           </label>
-          <div id="waveform-traces" class="waveform-traces"></div>
+          <label class="field-caption">Vertical
+            <select id="waveform-scale">
+              <option value="linear">Linear</option>
+              <option value="db">dB (20·log10)</option>
+            </select>
+          </label>
+          <div class="waveform-trace-picker">
+            <div class="waveform-trace-actions">
+              <button id="waveform-select-all" class="text-button" type="button">All</button>
+              <button id="waveform-select-none" class="text-button" type="button">None</button>
+            </div>
+            <div id="waveform-traces" class="waveform-traces"></div>
+          </div>
         </div>
         <div id="waveform-errors" class="inline-errors" aria-live="polite" hidden></div>
         <div id="waveform-plot" class="waveform-plot"></div>
+        <p id="waveform-note" class="muted-copy waveform-note" hidden></p>
         <p id="waveform-meta" class="muted-copy waveform-meta"></p>
       </section>
       <div class="history-grid">

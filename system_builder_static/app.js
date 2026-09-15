@@ -291,6 +291,38 @@ function textCell(value = "—") {
   return cell;
 }
 
+// A +/-t% band around the nominal becomes the limit pair, with sigma at a
+// third of the band so the part's rating sits at three sigma -- the same
+// convention setDistribution uses when it seeds a new variable.
+function applyStudyTolerance(variable, percent) {
+  const nominal = Number(variable.nominal);
+  if (!Number.isFinite(nominal) || nominal === 0) return false;
+  const span = Math.abs(nominal) * Math.abs(percent) / 100;
+  variable.minimum = round12(nominal - span);
+  variable.maximum = round12(nominal + span);
+  if (variable.distribution === "gaussian") variable.sigma = round12(span / 3);
+  return true;
+}
+
+// Reads the band back as a percentage. Limits edited by hand need not be
+// symmetric, and no single percentage describes those.
+function studyTolerancePercent(variable) {
+  const nominal = Number(variable.nominal);
+  const minimum = Number(variable.minimum);
+  const maximum = Number(variable.maximum);
+  if (![nominal, minimum, maximum].every(Number.isFinite) || nominal === 0) return "";
+  const below = (nominal - minimum) / Math.abs(nominal);
+  const above = (maximum - nominal) / Math.abs(nominal);
+  if (Math.abs(below - above) > 1e-9) return "custom";
+  if (above <= 0) return "";
+  return String(round12(above * 100));
+}
+
+// Keeps 1 - 0.05 from serialising as 0.9500000000000001.
+function round12(value) {
+  return Number(Number(value).toPrecision(12));
+}
+
 function setDistribution(variable, distribution) {
   const previousNominal = Number(variable.nominal);
   const nominal = Number.isFinite(previousNominal) ? previousNominal : 1;
@@ -929,20 +961,75 @@ function populateVariables() {
     let tolerance;
     let minimum;
     let maximum;
+    let sigma;
     let unit;
     if (continuous) {
       const selectedUnit = variableDisplayUnits.get(variable) || defaultDisplayUnit(variable);
       const factor = studyUnitFactor(variable.unit, selectedUnit);
       nominal = scaledFieldInput(variable.nominal, factor, `${base}.nominal`);
-      setScaledRecipeField(nominal, variable, "nominal", factor);
-      tolerance = scaledFieldInput(variable.sigma, factor, `${base}.sigma`);
-      tolerance.placeholder = distribution.value === "gaussian" ? "σ" : "n/a";
-      tolerance.disabled = distribution.value !== "gaussian";
-      if (!tolerance.disabled) setScaledRecipeField(tolerance, variable, "sigma", factor);
       minimum = scaledFieldInput(variable.minimum, factor, `${base}.minimum`);
-      setScaledRecipeField(minimum, variable, "minimum", factor);
       maximum = scaledFieldInput(variable.maximum, factor, `${base}.maximum`);
-      setScaledRecipeField(maximum, variable, "maximum", factor);
+      sigma = scaledFieldInput(variable.sigma, factor, `${base}.sigma`);
+      sigma.placeholder = distribution.value === "gaussian" ? "σ" : "n/a";
+      sigma.disabled = distribution.value !== "gaussian";
+
+      // A part is specified by its +/- tolerance band, not by the limits it
+      // implies, so that is the control: entering it fills minimum and
+      // maximum, and sigma at a third of the band so the +/-3 sigma spread
+      // matches the part's own rating.
+      tolerance = fieldInput(studyTolerancePercent(variable), `${base}.tolerance_percent`);
+      tolerance.placeholder = "%";
+      const nominalValue = Number(variable.nominal);
+      if (!Number.isFinite(nominalValue) || nominalValue === 0) {
+        tolerance.disabled = true;
+        tolerance.title = "A percentage band needs a non-zero nominal. Set the limits directly.";
+      }
+
+      const showBand = () => {
+        minimum.value = displayValue(variable.minimum, factor);
+        maximum.value = displayValue(variable.maximum, factor);
+        sigma.value = displayValue(variable.sigma, factor);
+      };
+      const enteredPercent = () => {
+        const text = tolerance.value.trim();
+        if (text === "") return null;
+        const percent = Number(text);
+        return Number.isFinite(percent) && percent > 0 ? percent : null;
+      };
+
+      tolerance.addEventListener("input", () => {
+        const percent = enteredPercent();
+        if (percent === null) return;
+        if (!applyStudyTolerance(variable, percent)) return;
+        showBand();
+        schedulePreview();
+      });
+
+      // The band is a percentage *of the nominal*, so moving the nominal
+      // carries the limits with it rather than leaving a stale pair behind.
+      nominal.addEventListener("input", () => {
+        const parsed = numericValue(nominal.value);
+        variable.nominal = typeof parsed === "number"
+          ? Number((parsed * factor).toPrecision(15))
+          : parsed;
+        const percent = enteredPercent();
+        if (percent !== null && applyStudyTolerance(variable, percent)) showBand();
+        schedulePreview();
+      });
+
+      for (const [input, key] of [[minimum, "minimum"], [maximum, "maximum"], [sigma, "sigma"]]) {
+        if (input.disabled) continue;
+        input.addEventListener("input", () => {
+          const parsed = numericValue(input.value);
+          variable[key] = typeof parsed === "number"
+            ? Number((parsed * factor).toPrecision(15))
+            : parsed;
+          // A hand-edited limit can make the band asymmetric, which no single
+          // percentage describes -- the field reads "custom" then.
+          if (key !== "sigma") tolerance.value = studyTolerancePercent(variable);
+          schedulePreview();
+        });
+      }
       unit = unitSelect(variable, variableDisplayUnits, `${base}.display_unit`, populateVariables);
     } else if (variable.distribution === "discrete") {
       nominal = selectInput(
@@ -964,7 +1051,7 @@ function populateVariables() {
       cell.append(control);
       row.append(cell);
     }
-    for (const control of [nominal, tolerance, minimum, maximum]) {
+    for (const control of [nominal, tolerance, minimum, maximum, sigma]) {
       if (control) {
         const cell = document.createElement("td");
         cell.append(control);
@@ -991,7 +1078,7 @@ function populateVariables() {
       details.className = "distribution-detail-row";
       details.dataset.path = base;
       const cell = document.createElement("td");
-      cell.colSpan = 8;
+      cell.colSpan = 9;
       cell.append(variable.distribution === "discrete"
         ? discreteEditor(variable, base)
         : empiricalEditor(variable, base));
@@ -1723,7 +1810,9 @@ bindStudyIdentity();
 // LTspice or writes an artifact; the generated HTML report stays the record.
 let waveformCaptures = [];
 let waveformData = null;
+let waveformSelectionPath = null;
 const waveformHidden = new Set();
+const MAX_DEFAULT_TRACES = 6;
 
 const TRACE_COLORS = ["#e08a4b", "#5fa8c9", "#4fae78", "#d97575", "#b48ead", "#d9a64e"];
 
@@ -1733,6 +1822,7 @@ async function openWaveforms(experimentId) {
   byId("waveform-title").textContent = `Captured traces · ${experimentId}`;
   waveformError("");
   waveformHidden.clear();
+  waveformSelectionPath = null;
   try {
     const response = await fetch(`/api/runs/${encodeURIComponent(experimentId)}/captures`);
     const result = await response.json();
@@ -1781,6 +1871,14 @@ async function loadWaveform() {
     if (!response.ok) throw new Error(result.error?.message || "Waveform could not be read");
     waveformData = result;
     waveformError("");
+    // A new capture gets a fresh, readable selection; changing only the
+    // resolution keeps whatever the reader has chosen.
+    if (waveformSelectionPath !== path) {
+      waveformSelectionPath = path;
+      waveformHidden.clear();
+      for (const name of defaultHiddenTraces(result)) waveformHidden.add(name);
+      byId("waveform-scale").value = result.complex ? "db" : "linear";
+    }
   } catch (error) {
     waveformData = null;
     waveformError(error.message);
@@ -1789,38 +1887,89 @@ async function loadWaveform() {
   }
   renderTraceToggles();
   renderWaveformPlot();
+  refreshWaveformMeta();
+}
+
+function refreshWaveformMeta() {
   const data = waveformData;
+  if (!data) { byId("waveform-meta").textContent = ""; return; }
   const steps = data.step_count > 1 ? ` · ${data.step_count} stepped blocks` : "";
   byId("waveform-meta").textContent =
     `${data.returned_points.toLocaleString()} of ${data.total_points.toLocaleString()} points`
     + ` · axis ${data.axis_variable} (${data.axis_unit})`
-    + (data.complex ? " · AC capture, plotted as magnitude" : "")
+    + (data.complex
+      ? (byId("waveform-scale").value === "db"
+        ? " · AC capture, magnitude in dB"
+        : " · AC capture, plotted as magnitude")
+      : "")
     + steps;
 }
 
 function renderTraceToggles() {
-  const names = Object.keys(waveformData.series);
-  const toggles = names.map((name, index) => {
-    const label = document.createElement("label");
-    label.className = "trace-toggle";
-    const box = document.createElement("input");
-    box.type = "checkbox";
-    box.id = `trace-${index}`;
-    box.checked = !waveformHidden.has(name);
-    box.addEventListener("change", () => {
-      if (box.checked) waveformHidden.delete(name);
-      else waveformHidden.add(name);
-      renderWaveformPlot();
-    });
-    const swatch = document.createElement("span");
-    swatch.className = "trace-swatch";
-    swatch.style.background = TRACE_COLORS[index % TRACE_COLORS.length];
-    const text = document.createElement("span");
-    text.textContent = name;
-    label.append(box, swatch, text);
-    return label;
+  const data = waveformData;
+  const names = Object.keys(data.series);
+  // Grouped by unit, because that is also how they are plotted: a reader who
+  // sees two axes needs to know which trace belongs to which.
+  const groups = new Map();
+  for (const name of names) {
+    const unit = traceUnit(data, name);
+    if (!groups.has(unit)) groups.set(unit, []);
+    groups.get(unit).push(name);
+  }
+  const blocks = [...groups.entries()].map(([unit, members]) => {
+    const block = document.createElement("div");
+    block.className = "trace-group";
+    if (groups.size > 1) {
+      const caption = document.createElement("span");
+      caption.className = "trace-group-unit";
+      caption.textContent = unit || "unitless";
+      block.append(caption);
+    }
+    for (const name of members) {
+      const label = document.createElement("label");
+      label.className = "trace-toggle";
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = !waveformHidden.has(name);
+      box.setAttribute("aria-label", `Plot ${name}`);
+      box.addEventListener("change", () => {
+        if (box.checked) waveformHidden.delete(name);
+        else waveformHidden.add(name);
+        renderWaveformPlot();
+      });
+      const swatch = document.createElement("span");
+      swatch.className = "trace-swatch";
+      swatch.style.background = TRACE_COLORS[names.indexOf(name) % TRACE_COLORS.length];
+      const text = document.createElement("span");
+      text.textContent = name;
+      label.append(box, swatch, text);
+      block.append(label);
+    }
+    return block;
   });
-  byId("waveform-traces").replaceChildren(...toggles);
+  byId("waveform-traces").replaceChildren(...blocks);
+}
+
+function traceUnit(data, name) {
+  return (data.units && data.units[name]) || "";
+}
+
+// A capture holds every node and every device current the deck produced.
+// Plotting all of them at once is unreadable, so the viewer opens on one
+// coherent family -- voltages where there are any -- and the rest are one
+// click away.
+function defaultHiddenTraces(data) {
+  const names = Object.keys(data.series);
+  const counts = new Map();
+  for (const name of names) {
+    const unit = traceUnit(data, name);
+    counts.set(unit, (counts.get(unit) || 0) + 1);
+  }
+  const ranked = [...counts.entries()].sort((left, right) => right[1] - left[1]);
+  const primary = counts.has("V") ? "V" : (ranked[0]?.[0] ?? "");
+  const preferred = names.filter((name) => traceUnit(data, name) === primary);
+  const visible = new Set((preferred.length ? preferred : names).slice(0, MAX_DEFAULT_TRACES));
+  return new Set(names.filter((name) => !visible.has(name)));
 }
 
 function svgElement(name, attributes) {
@@ -1829,19 +1978,87 @@ function svgElement(name, attributes) {
   return node;
 }
 
+function decibels(value) {
+  // 0 is negative infinity dB; leaving it non-finite breaks the trace there,
+  // which is the honest rendering of a null.
+  return value === 0 ? -Infinity : 20 * Math.log10(Math.abs(value));
+}
+
+// Volts and amperes must never share a linear axis -- a milliamp trace drawn
+// against a 3.3 V range is a flat line on the baseline, which is what makes a
+// capture look empty. Each unit gets its own vertical scale instead. In dB
+// everything is already dimensionless, so one axis serves.
+function traceGroups(shown, data, mode) {
+  if (mode === "db") return [{unit: "dB", traces: shown}];
+  const byUnit = new Map();
+  for (const entry of shown) {
+    const unit = traceUnit(data, entry[0]);
+    if (!byUnit.has(unit)) byUnit.set(unit, []);
+    byUnit.get(unit).push(entry);
+  }
+  return [...byUnit.entries()].map(([unit, traces]) => ({unit, traces}));
+}
+
+function groupRange(group, mode) {
+  let low = Infinity;
+  let high = -Infinity;
+  for (const [, values] of group.traces) {
+    for (const sample of values) {
+      const value = mode === "db" ? decibels(sample) : sample;
+      if (!Number.isFinite(value)) continue;
+      if (value < low) low = value;
+      if (value > high) high = value;
+    }
+  }
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return null;
+  if (low === high) { low -= 1; high += 1; }
+  const padding = (high - low) * 0.08;
+  return {low: low - padding, high: high + padding};
+}
+
 function renderWaveformPlot() {
   const data = waveformData;
   const host = byId("waveform-plot");
+  const note = byId("waveform-note");
+  note.hidden = true;
   if (!data) { host.replaceChildren(); return; }
+  const mode = byId("waveform-scale").value;
   const shown = Object.entries(data.series).filter(([name]) => !waveformHidden.has(name));
-  if (!shown.length || data.axis.length < 2) {
+  if (!shown.length) {
     host.replaceChildren(emptyEditor("Select at least one trace."));
     return;
+  }
+  if (data.axis.length === 0) {
+    host.replaceChildren(emptyEditor("This capture holds no samples."));
+    return;
+  }
+
+  // Two vertical scales are drawn, left and right. A third unit would need a
+  // third axis nobody can read, so it is named instead of silently flattened.
+  const groups = traceGroups(shown, data, mode).map((group) => ({...group, range: groupRange(group, mode)}));
+  const plotted = groups.filter((group) => group.range).slice(0, 2);
+  const dropped = groups.filter((group) => !plotted.includes(group));
+  if (!plotted.length) {
+    host.replaceChildren(emptyEditor(
+      mode === "db"
+        ? "Every selected trace is zero, which is negative infinity dB. Switch the vertical scale to linear."
+        : "This capture holds no finite samples.",
+    ));
+    return;
+  }
+  if (dropped.length) {
+    const flat = dropped.filter((group) => !group.range).map((group) => group.unit || "unitless");
+    const extra = dropped.filter((group) => group.range).map((group) => group.unit || "unitless");
+    const parts = [];
+    if (extra.length) parts.push(`${extra.join(" and ")} needs its own axis — deselect one of the plotted families to see it`);
+    if (flat.length) parts.push(`${flat.join(" and ")} holds no finite samples`);
+    note.textContent = parts.join(". ") + ".";
+    note.hidden = false;
   }
 
   const width = 860;
   const height = 360;
-  const pad = {left: 78, right: 20, top: 18, bottom: 46};
+  const pad = {left: 78, right: plotted.length > 1 ? 78 : 20, top: 18, bottom: 46};
   const axis = data.axis;
   // AC captures span decades, so the frequency axis is drawn logarithmically;
   // a transient axis stays linear.
@@ -1849,28 +2066,15 @@ function renderWaveformPlot() {
   const project = (value) => (logAxis ? Math.log10(value) : value);
   const xMin = project(axis[0]);
   const xMax = project(axis[axis.length - 1]);
-  let yMin = Infinity;
-  let yMax = -Infinity;
-  for (const [, values] of shown) {
-    for (const value of values) {
-      if (!Number.isFinite(value)) continue;
-      if (value < yMin) yMin = value;
-      if (value > yMax) yMax = value;
-    }
-  }
-  if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) {
-    host.replaceChildren(emptyEditor("This capture holds no finite samples."));
-    return;
-  }
-  if (yMin === yMax) { yMin -= 1; yMax += 1; }
-  const yPad = (yMax - yMin) * 0.08;
-  yMin -= yPad; yMax += yPad;
-
   const xAt = (value) => pad.left + ((project(value) - xMin) / (xMax - xMin || 1)) * (width - pad.left - pad.right);
-  const yAt = (value) => height - pad.bottom - ((value - yMin) / (yMax - yMin)) * (height - pad.top - pad.bottom);
+  const yFor = (group) => (value) =>
+    height - pad.bottom - ((value - group.range.low) / (group.range.high - group.range.low)) * (height - pad.top - pad.bottom);
 
   const svg = svgElement("svg", {
     viewBox: `0 0 ${width} ${height}`,
+    width,
+    height,
+    preserveAspectRatio: "xMidYMid meet",
     role: "img",
     "aria-label": `${data.filename} waveform`,
   });
@@ -1888,24 +2092,45 @@ function renderWaveformPlot() {
       : xMin + index * (xMax - xMin) / 4;
     const xTick = svgElement("text", {x: gx, y: height - pad.bottom + 20, class: "plot-tick", "text-anchor": "middle"});
     xTick.textContent = axisLabel(xValue, data.axis_unit);
-    const yTick = svgElement("text", {x: pad.left - 9, y: gy + 4, class: "plot-tick", "text-anchor": "end"});
-    yTick.textContent = axisLabel(yMax - index * (yMax - yMin) / 4, "");
-    svg.append(xTick, yTick);
+    svg.append(xTick);
+
+    plotted.forEach((group, side) => {
+      const value = group.range.high - index * (group.range.high - group.range.low) / 4;
+      const tick = svgElement("text", {
+        x: side === 0 ? pad.left - 9 : width - pad.right + 9,
+        y: gy + 4,
+        class: "plot-tick",
+        "text-anchor": side === 0 ? "end" : "start",
+      });
+      tick.textContent = axisLabel(value, group.unit === "dB" ? "dB" : group.unit);
+      svg.append(tick);
+    });
   }
 
   const names = Object.keys(data.series);
-  for (const [name, values] of shown) {
-    const color = TRACE_COLORS[names.indexOf(name) % TRACE_COLORS.length];
-    let path = "";
-    let pen = false;
-    for (let index = 0; index < values.length; index += 1) {
-      const value = values[index];
-      if (!Number.isFinite(value)) { pen = false; continue; }
-      const command = pen ? "L" : "M";
-      path += `${command}${xAt(axis[index]).toFixed(2)} ${yAt(value).toFixed(2)}`;
-      pen = true;
+  const singlePoint = axis.length === 1;
+  for (const group of plotted) {
+    const yAt = yFor(group);
+    for (const [name, values] of group.traces) {
+      const color = TRACE_COLORS[names.indexOf(name) % TRACE_COLORS.length];
+      let path = "";
+      let pen = false;
+      for (let index = 0; index < values.length; index += 1) {
+        const value = mode === "db" ? decibels(values[index]) : values[index];
+        if (!Number.isFinite(value)) { pen = false; continue; }
+        // An operating point, or a run that stopped after one step, has a
+        // single sample. A line cannot show that, so it is drawn as a marker.
+        if (singlePoint) {
+          svg.append(svgElement("circle", {cx: xAt(axis[index]), cy: yAt(value), r: 3.5, fill: color}));
+          continue;
+        }
+        path += `${pen ? "L" : "M"}${xAt(axis[index]).toFixed(2)} ${yAt(value).toFixed(2)}`;
+        pen = true;
+      }
+      if (path) {
+        svg.append(svgElement("path", {d: path, fill: "none", stroke: color, "stroke-width": "1.6", "stroke-linejoin": "round"}));
+      }
     }
-    svg.append(svgElement("path", {d: path, fill: "none", stroke: color, "stroke-width": "1.6", "stroke-linejoin": "round"}));
   }
 
   host.replaceChildren(svg);
@@ -1914,6 +2139,7 @@ function renderWaveformPlot() {
 function axisLabel(value, unit) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "—";
+  if (unit === "dB") return `${Number(number.toPrecision(3))} dB`;
   const magnitude = Math.abs(number);
   const scales = unit === "Hz"
     ? [[1e9, "G"], [1e6, "M"], [1e3, "k"], [1, ""]]
@@ -2382,6 +2608,21 @@ function waveformButton(experimentId) {
 
 byId("waveform-capture").addEventListener("change", loadWaveform);
 byId("waveform-resolution").addEventListener("change", loadWaveform);
+byId("waveform-scale").addEventListener("change", () => {
+  renderWaveformPlot();
+  refreshWaveformMeta();
+});
+byId("waveform-select-all").addEventListener("click", () => {
+  waveformHidden.clear();
+  renderTraceToggles();
+  renderWaveformPlot();
+});
+byId("waveform-select-none").addEventListener("click", () => {
+  if (!waveformData) return;
+  for (const name of Object.keys(waveformData.series)) waveformHidden.add(name);
+  renderTraceToggles();
+  renderWaveformPlot();
+});
 byId("waveform-close").addEventListener("click", () => {
   byId("waveform-panel").hidden = true;
 });

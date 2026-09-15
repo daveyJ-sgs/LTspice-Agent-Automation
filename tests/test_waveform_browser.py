@@ -171,5 +171,61 @@ class WaveformBrowserTests(unittest.TestCase):
         self.assertTrue(rows[1].startswith("0,0.0,0.0,5.0"))
 
 
+class TraceUnitTests(unittest.TestCase):
+    """The viewer needs a unit per trace so volts and amps get separate axes."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.runs = Path(self.temporary.name)
+
+    def test_every_raw_variable_kind_maps_onto_its_si_unit(self) -> None:
+        self.assertEqual(waveform_browser.trace_unit("voltage"), "V")
+        self.assertEqual(waveform_browser.trace_unit("device_current"), "A")
+        self.assertEqual(waveform_browser.trace_unit("subckt_current"), "A")
+        self.assertEqual(waveform_browser.trace_unit("power"), "W")
+        self.assertEqual(waveform_browser.trace_unit("  Voltage  "), "V")
+
+    def test_an_unrecognised_kind_is_unitless_rather_than_an_error(self) -> None:
+        self.assertEqual(waveform_browser.trace_unit("something_new"), "")
+
+    def test_a_capture_reports_the_unit_of_each_returned_trace(self) -> None:
+        capture = self.runs / "units-run" / "point-0000" / "attempt-0000" / "c.raw"
+        write_raw(
+            capture,
+            [("time", "time"), ("V(out)", "voltage"), ("I(R1)", "device_current")],
+            {"time": [0.0, 1e-6], "V(out)": [0.0, 3.3], "I(R1)": [0.0, 1e-3]},
+        )
+
+        result = waveform_browser.read_capture(
+            self.runs, "units-run/point-0000/attempt-0000/c.raw"
+        )
+
+        self.assertEqual(result["units"], {"V(out)": "V", "I(R1)": "A"})
+        self.assertEqual(result["axis_unit"], "s")
+
+    def test_a_raw_without_variable_kinds_still_reads(self) -> None:
+        capture = self.runs / "bare-run" / "point-0000" / "attempt-0000" / "c.raw"
+        header = (
+            "Title: * bare\r\nDate: Sun Sep 14 12:00:00 2026\r\n"
+            "Plotname: Transient Analysis\r\nFlags: real forward\r\n"
+            "No. Variables: 2\r\nNo. Points: 2\r\nVariables:\r\n"
+            "\t0\ttime\r\n\t1\tV(out)\r\nBinary:\r\n"
+        )
+        body = bytearray()
+        for moment, value in ((0.0, 0.0), (1e-6, 3.3)):
+            body += struct.pack("<d", moment) + struct.pack("<f", value)
+        capture.parent.mkdir(parents=True, exist_ok=True)
+        capture.write_bytes(header.encode("utf-16-le") + bytes(body))
+
+        result = waveform_browser.read_capture(
+            self.runs, "bare-run/point-0000/attempt-0000/c.raw"
+        )
+
+        self.assertEqual(result["units"], {"V(out)": ""})
+        # Falls back to the axis name when the header carries no kind.
+        self.assertEqual(result["axis_unit"], "s")
+
+
 if __name__ == "__main__":
     unittest.main()

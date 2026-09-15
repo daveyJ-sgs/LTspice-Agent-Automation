@@ -58,6 +58,25 @@ def list_run_captures(runs: Path, experiment_id: str) -> dict[str, object]:
     return {"experiment_id": experiment_id, "captures": captures, "truncated": False}
 
 
+# LTspice names each vector's quantity in the RAW header. The viewer needs
+# the unit so that volts and amperes are never scaled onto one shared axis --
+# a milliamp trace drawn against a 3.3 V axis is a flat line on the baseline.
+_TRACE_UNITS = {
+    "voltage": "V",
+    "current": "A",
+    "device_current": "A",
+    "subckt_current": "A",
+    "power": "W",
+    "time": "s",
+    "frequency": "Hz",
+}
+
+
+def trace_unit(kind: str) -> str:
+    """Map a RAW variable type onto its SI unit, or "" when unrecognised."""
+    return _TRACE_UNITS.get(kind.strip().casefold(), "")
+
+
 def _downsampled_indices(total: int, maximum: int) -> list[int]:
     if total <= maximum:
         return list(range(total))
@@ -114,9 +133,11 @@ def read_capture(
         # An AC capture's vectors are complex; the viewer plots magnitude, and
         # the requirement engine remains the place exact gain and phase are
         # measured.
-        "axis_unit": "Hz" if axis_name.casefold() == "frequency" else "s",
+        "axis_unit": trace_unit(data.types.get(axis_name, ""))
+        or ("Hz" if axis_name.casefold() == "frequency" else "s"),
         "signal_kind": "magnitude" if complex_data else "value",
         "variables": data.variables,
+        "units": {name: trace_unit(data.types.get(name, "")) for name in wanted},
         "step_count": data.step_count,
         "total_points": data.points,
         "returned_points": len(indices),
