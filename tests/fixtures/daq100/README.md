@@ -28,3 +28,17 @@ physical model accuracy. Harmonics are not used to claim SFDR or SINAD.
 
 Runtime artifacts retain all raw results and per-run metrics. A fast run that
 fails numerical checks does not qualify as a successful speed comparison.
+
+## Duplicate vendor helper names found by Windows qualification
+
+The original LMH5401 and LMH6401 libraries both define global `VNSE` and `FEMT`
+subcircuits, with different noise parameters. LTspice 26 on Windows rejects
+this combination as ill-formed; Mac 17.2.4 accepted it. The benchmark now adds
+`_LMH5401` to the FDA's two definitions and three active calls on **both**
+platforms. All equations, parameters, comments and source models are preserved.
+The script verifies original hashes before this change and separate portable
+hashes afterward. Historical project files are not modified.
+
+AC/transient metrics must still match the original reference. This does not
+revalidate the original project's noise studies: duplicate noise helper names
+make those worth revisiting separately with the portable models.

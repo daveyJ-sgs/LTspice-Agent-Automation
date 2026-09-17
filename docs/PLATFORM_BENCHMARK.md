@@ -69,3 +69,9 @@ The wrapper median includes simulation launch and file handling, while the
 separate wall median also includes waveform parsing and numerical validation.
 This compares the analog model on the two hosted setups; it does not simulate
 the DAQ's digital capture, USB transport, PCB or actual ADC silicon.
+
+The first DAQ Windows run exposed duplicate global `VNSE` / `FEMT` helpers in
+the TI FDA and VGA libraries. The portable benchmark uniquely names the FDA
+helpers on both platforms without changing equations; original and portable
+model hashes are both pinned. See the fixture notes for provenance and the
+separate implication for historical noise studies.

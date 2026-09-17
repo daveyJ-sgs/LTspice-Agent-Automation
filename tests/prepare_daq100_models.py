@@ -10,11 +10,32 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-MODEL_HASHES = {
+ORIGINAL_MODEL_HASHES = {
     "OPA817_ltspice.lib": "ee7660aa53e837403f57794feb3c752baf69ca3ac8c6f7150d7e708787705379",
     "LMH5401.lib": "8502d521e24dd2cd25370aa9fe0deaab1c1f29f01c0917269a1566dd6d210400",
     "LMH6401_ltspice.lib": "603e4d92d5eb510b3cd724256603706d22830c8a67ed5f1aec2674084078aa98",
 }
+MODEL_HASHES = {
+    **ORIGINAL_MODEL_HASHES,
+    "LMH5401.lib": "26fafdf65a9676577588edf84ba5b8605ab9f1df41f6e1a7f4f1a84863545615",
+}
+
+
+def namespace_fda(data: bytes) -> bytes:
+    """Keep FDA noise helpers distinct from the VGA's different definitions."""
+    output = []
+    count = 0
+    for line in data.splitlines(keepends=True):
+        if not line.lstrip().startswith(b"*"):
+            line, changes = re.subn(
+                rb"\b(VNSE|FEMT)\b", lambda m: m[1].upper() + b"_LMH5401",
+                line, flags=re.IGNORECASE,
+            )
+            count += changes
+        output.append(line)
+    if count != 5:
+        raise ValueError(f"Expected two helper definitions and three calls, found {count}")
+    return b"".join(output)
 
 
 def fetch(url: str, expected: str) -> bytes:
@@ -63,8 +84,12 @@ def prepare(destination: Path) -> None:
         "LMH6401_ltspice.lib": vga.encode("cp1252"),
     }
     for name, data in models.items():
-        if hashlib.sha256(data).hexdigest() != MODEL_HASHES[name]:
+        if hashlib.sha256(data).hexdigest() != ORIGINAL_MODEL_HASHES[name]:
             raise ValueError(f"Adapted model differs from original DAQ project: {name}")
+        if name == "LMH5401.lib":
+            data = namespace_fda(data)
+        if hashlib.sha256(data).hexdigest() != MODEL_HASHES[name]:
+            raise ValueError(f"Portable model checksum mismatch: {name}")
         (destination / name).write_bytes(data)
         print(f"Verified {name}: {MODEL_HASHES[name]}", flush=True)
 
