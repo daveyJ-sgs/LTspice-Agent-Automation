@@ -51,6 +51,7 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app/Contents/Info.plist")" = '17.2.4'
           file "$app/Contents/MacOS/LTspice"
           echo "LTSPICE_EXECUTABLE=$app/Contents/MacOS/LTspice" >> "$GITHUB_ENV"
+          echo "LTSPICE_VERSION=17.2.4" >> "$GITHUB_ENV"
 
       - name: Download and verify official LTspice installer
         if: runner.os == 'Windows'
