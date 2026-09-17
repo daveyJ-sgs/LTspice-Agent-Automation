@@ -75,3 +75,39 @@ the TI FDA and VGA libraries. The portable benchmark uniquely names the FDA
 helpers on both platforms without changing equations; original and portable
 model hashes are both pinned. See the fixture notes for provenance and the
 separate implication for historical noise studies.
+
+## Verified DAQ comparison — September 17, 2026
+
+[Successful parallel run 35226604299](https://github.com/daveyJ-sgs/LTspice-Agent-Automation/actions/runs/35226604299)
+ran commit `f4cd31d05447a5ac1d2869dff5b0193b20747d30`. Both platforms passed
+all eight simulations (one warmup plus three measured runs per circuit).
+[Software CI passed separately](https://github.com/daveyJ-sgs/LTspice-Agent-Automation/actions/runs/35226587357).
+
+| Workload | Mac median (range), seconds | Windows median (range), seconds | Faster setup for this workload |
+|---|---:|---:|---|
+| Full-chain AC, 1 kHz–2 GHz | 3.926 (3.610–4.851) | 24.731 (24.204–25.233) | Mac, 6.30× |
+| 100 MHz sine, 600 ns transient | 20.783 (19.336–21.111) | 11.053 (10.940–11.196) | Windows, 1.88× |
+
+These are wrapper durations, excluding parsing/analysis and installation.
+Mac used LTspice 17.2.4 on macOS 26.6.2 ARM64, three logical CPUs; Windows
+used LTspice 26.0.2 on Server 2025 x64, four logical CPUs. Simulator logs
+reported maximum thread counts of **one on Mac and four on Windows**.
+Both required operating-point convergence fallbacks; the logged stepping
+sequences differed. These observations do not isolate the cause of the timing
+difference. There is no universal platform speed winner in this comparison.
+
+Each AC result contained 1,514 points and each transient 60,036 points.
+Representative measured outputs agreed closely:
+
+- Bandwidth: 123.815509 MHz on both.
+- Relative gain at 100 MHz: −0.266391 dB on both.
+- Minimum rejection over 300 MHz–1 GHz: 69.284825 dB on both.
+- Transient fundamental peak: 0.811158905 V on Mac, 0.811166911 V on Windows
+  (about 0.001% difference).
+
+The first attempted Windows run rejected duplicate vendor noise helper names;
+that failure and the portable fix are documented above. Mac setup needs fewer
+first-run steps, but its older simulator accepted that ambiguous input. The
+original project's noise studies remain outside this AC/transient validation.
+Original project files were left unchanged; both runners used the same
+checksum-verified, uniquely named benchmark models.
