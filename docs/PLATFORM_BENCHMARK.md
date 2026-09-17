@@ -47,3 +47,25 @@ larger representative circuits are needed to compare solver throughput.
 
 This workflow qualifies batch simulation, not GUI rendering or native LSB app
 packaging. It does not add macOS as an LSB remote-execution backend.
+
+## Full 100 MHz DAQ analog-channel comparison
+
+Choose **Run workflow → workload: daq100** to benchmark the separate
+100 MHz DAQ project's full analog channel. The default `rc` workload and
+push-triggered RC checks remain quick. The DAQ option runs one warmup and
+three measured iterations of each of two circuits: the nominal AC sweep and
+a 600 ns, 100 MHz sine transient with a 10 ps maximum step.
+
+[Fixture provenance and numerical acceptance](../tests/fixtures/daq100/README.md)
+record the original saved studies and exact model hashes. Models are fetched
+from TI and transformed identically on both runners, then checked against the
+original project. Circuit settings and numerical shunts are preserved. Every
+trace must be finite, engineering checks must pass, and selected numerical
+metrics must match the retained reference before timings are reported.
+
+Each simulation has a 180-second timeout. The job has a 30-minute bound.
+`benchmark.json`, `samples.json`, RAW files, logs and manifests are uploaded.
+The wrapper median includes simulation launch and file handling, while the
+separate wall median also includes waveform parsing and numerical validation.
+This compares the analog model on the two hosted setups; it does not simulate
+the DAQ's digital capture, USB transport, PCB or actual ADC silicon.

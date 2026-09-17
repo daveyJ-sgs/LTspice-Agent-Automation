@@ -1,0 +1,47 @@
+{
+  "project": "100MHz_DAQ",
+  "scope": "Full analog channel; ADC represented by RC load, not silicon model",
+  "cases": {
+    "ac": {
+      "source": "results/20260905T050044652570Z-nominal/netlists/1m_1_code21.cir",
+      "source_sha256": "a1af1659b5f8006ff54afdd0982788673473889c9c3a91b831c98939970f8ebf",
+      "fixture_sha256": "604c7262d67229c0c9225657894c3f487fe104862b2a5145970a0686012e8a2c",
+      "changes": "Only absolute include paths replaced by relative models/ paths",
+      "reference_metrics": {
+        "gain_dc_db": 8.950010488204478,
+        "gain_100mhz_relative_db": -0.2663908213247114,
+        "passband_peak_db": 0.0022247216980151308,
+        "passband_min_db": -0.2663908213247114,
+        "bandwidth_3db_hz": 123815509.30241801,
+        "rejection_300mhz_db": 69.28482501861369,
+        "minimum_rejection_300_to_1000mhz_db": 69.28482501861369,
+        "buf_ac_at_100mhz": 0.9242824817025075,
+        "bout_ac_at_100mhz": 0.9257922675491007,
+        "op_ac_at_100mhz": 1.5271256911066222,
+        "om_ac_at_100mhz": 1.5271253865862082,
+        "vgap_ac_at_100mhz": 2.430089667528787,
+        "vgam_ac_at_100mhz": 2.430089667562064
+      }
+    },
+    "transient": {
+      "source": "results/20260905T050442238499Z-transient/netlists/50_sine100.cir",
+      "source_sha256": "a178c5aa1ab02dea3636cd843bb871f34908cba4a1e50c1b84af1432d460a75d",
+      "fixture_sha256": "18751f4178d9d98b57af72f7f1cc6dfc5cb6ba08db0b2b07f13184fa70e6b1b3",
+      "changes": "Only absolute include paths replaced by relative models/ paths",
+      "reference_metrics": {
+        "output_min_V": -0.8183739349047563,
+        "output_max_V": 0.8279138464429916,
+        "adc_common_mode_min_V": 1.4018043452738254,
+        "adc_common_mode_max_V": 1.401804345682251,
+        "fundamental_peak_V": 0.8111589052118876,
+        "modeled_harmonics_dBc": [
+          -137.86819973860813,
+          -162.17006048899904,
+          -184.3564218544215,
+          -184.41126754036287
+        ],
+        "distortion_validation": "Not a system SFDR proof: OPA817 and LMH6401 models do not specify harmonic accuracy"
+      }
+    }
+  }
+}

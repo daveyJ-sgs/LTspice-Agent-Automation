@@ -1,0 +1,59 @@
+100MHz DAQ candidate - model-level feasibility only
+.options plotwinsize=0 numdgt=7 reltol=1e-5 gshunt=3e-11
+.temp 27
+VIN src 0 SIN(0 0.6 100000000)
+.include "models/OPA817_ltspice.lib"
+.include "models/LMH5401.lib"
+.include "models/LMH6401_ltspice.lib"
+VPB vpb 0 6
+VNB vnb 0 -6
+VPA vpa 0 3.9
+VNA vna 0 -1.1
+VCM cm 0 1.4
+VLOG logic 0 2.5
+RSRC src conn 50
+RTERM conn 0 50
+RLINK conn buf 0.001
+CPORT conn 0 2p
+CPROT buf 0 0.3p
+XBUF buf bout bout vpb vnb OPA817
+RGP bout ip 49.9
+RGN 0 im 49.9
+RFP fp im 174
+RFN fn ip 174
+XFDA op om fp fn ip im cm 0 vpa vna 0 LMH5401
+XVGA logic 0 logic 0 logic 0 om op vgam vgap 0 vpa vna cm LMH6401
+RSP vgap filp 40
+RSM vgam film 40
+L1p filp p1 2.21095726677e-08 Rser=0.289413629445
+CL1p filp p1 0.1p
+L1m film m1 2.21095726677e-08 Rser=0.289413629445
+CL1m film m1 0.1p
+C2 p1 m1 1.27323954474e-11 Rser=0.05 Lser=0.2n
+L3p p1 p3 9.75358078004e-08 Rser=1.27674073853
+CL3p p1 p3 0.1p
+L3m m1 m3 9.75358078004e-08 Rser=1.27674073853
+CL3m m1 m3 0.1p
+C4 p3 m3 2.39290760936e-11 Rser=0.05 Lser=0.2n
+L5p p3 p5 1.27323954474e-07 Rser=1.66666666667
+CL5p p3 p5 0.1p
+L5m m3 m5 1.27323954474e-07 Rser=1.66666666667
+CL5m m3 m5 0.1p
+C6 p5 m5 2.39290760936e-11 Rser=0.05 Lser=0.2n
+L7p p5 p7 9.75358078004e-08 Rser=1.27674073853
+CL7p p5 p7 0.1p
+L7m m5 m7 9.75358078004e-08 Rser=1.27674073853
+CL7m m5 m7 0.1p
+C8 p7 m7 1.27323954474e-11 Rser=0.05 Lser=0.2n
+L9p p7 adcp 2.21095726677e-08 Rser=0.289413629445
+CL9p p7 adcp 0.1p
+L9m m7 adcm 2.21095726677e-08 Rser=0.289413629445
+CL9m m7 adcm 0.1p
+RADC adcp adcm 100
+CADC adcp adcm 2e-12
+CXp filp adcp 1e-15
+CXm film adcm 1e-15
+EDIFF diff 0 adcp adcm 1
+.tran 0 600n 0 1e-11
+.save V(src) V(adcp) V(adcm) V(diff) V(conn) V(buf) V(bout) V(op) V(om) V(vgap) V(vgam)
+.end

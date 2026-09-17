@@ -2,6 +2,12 @@ name: Real LTspice platform benchmark
 
 on:
   workflow_dispatch:
+    inputs:
+      workload:
+        description: Circuit workload to compare on both platforms
+        type: choice
+        default: rc
+        options: [rc, daq100]
   push:
     branches: [main]
     paths:
@@ -24,7 +30,7 @@ jobs:
       matrix:
         os: [macos-26, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       PYTHONPATH: .
       LTSPICE_VERSION: 26.0.2
@@ -197,9 +203,20 @@ jobs:
           }
 
       - name: Run identical real AC and transient workload
+        if: inputs.workload != 'daq100'
         env:
           REAL_LTSPICE_EVIDENCE_DIR: ${{ runner.temp }}/ltspice-benchmark
         run: python tests/real_ltspice_benchmark.py
+      - name: Fetch and verify original 100 MHz DAQ models
+        if: inputs.workload == 'daq100'
+        env:
+          REAL_LTSPICE_EVIDENCE_DIR: ${{ runner.temp }}/ltspice-benchmark
+        run: python tests/prepare_daq100_models.py
+      - name: Benchmark real 100 MHz DAQ analog channel
+        if: inputs.workload == 'daq100'
+        env:
+          REAL_LTSPICE_EVIDENCE_DIR: ${{ runner.temp }}/ltspice-benchmark
+        run: python tests/real_daq100_benchmark.py
       - name: Upload simulation evidence and timings
         if: always()
         uses: actions/upload-artifact@v4
