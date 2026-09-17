@@ -7,14 +7,17 @@ import json
 import math
 import os
 import platform
+import re
 import shutil
 import statistics
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
 from prepare_daq100_models import MODEL_HASHES
 
+from ltspice_text import decode_text
 from ltspice_wrapper import run_netlist
 from raw_parser import parse_raw
 
@@ -73,37 +76,67 @@ def main():
         if hashlib.sha256(source.read_bytes()).hexdigest() != info["fixture_sha256"]:
             raise AssertionError(f"Netlist mismatch: {case}")
         shutil.copyfile(source, inputs / source.name)
-    samples = []
-    for trial in range(4):
-        for case, info in provenance["cases"].items():
-            print(f"Trial {trial} {case} (warmup={trial == 0})", flush=True)
-            start = time.perf_counter()
-            directory = run_netlist(inputs / f"{case}.cir", root / f"trial-{trial}" / case,
-                                   timeout_seconds=180, disable_compression=True)
-            raw = parse_raw(directory / f"{case}.raw")
-            metrics = metrics_for(case, raw)
-            for name, actual in metrics.items():
-                expected = info["reference_metrics"][name]
-                tolerance = 0.05 if name.endswith("db") else max(abs(expected) * 0.01, 0.001)
-                if not math.isclose(actual, expected, abs_tol=tolerance, rel_tol=0):
-                    raise AssertionError(f"{case} {name}: {actual} vs reference {expected}")
-            wall = time.perf_counter() - start
-            manifest = json.loads((directory / "run_manifest.json").read_text())
-            if manifest["execution_source"] != "simulator" or manifest["cache"]["hit"]:
-                raise AssertionError("Real uncached simulations required")
-            samples.append({"case": case, "trial": trial, "warmup": trial == 0,
-                            "wrapper_seconds": manifest["duration_seconds"],
-                            "wall_seconds": wall, "points": raw.points, "metrics": metrics})
+    workers = int(os.environ.get("DAQ_WORKERS", "1"))
+    threads = int(os.environ.get("DAQ_THREADS", "0"))
+    if workers not in (1, 3, 4) or threads not in (0, 1, 4):
+        raise ValueError("Unsupported benchmark concurrency profile")
+    if threads:
+        for case in provenance["cases"]:
+            path = inputs / f"{case}.cir"
+            path.write_text(path.read_text().replace(
+                "\n.end", f"\n.options threads={threads}\n.end"), newline="\n")
+
+    def run_case(case, trial):
+        info = provenance["cases"][case]
+        print(f"Trial {trial} {case} (warmup={trial == 0})", flush=True)
+        start = time.perf_counter()
+        directory = run_netlist(inputs / f"{case}.cir", root / f"trial-{trial}" / case,
+                               timeout_seconds=180, disable_compression=True)
+        raw = parse_raw(directory / f"{case}.raw")
+        metrics = metrics_for(case, raw)
+        for name, actual in metrics.items():
+            expected = info["reference_metrics"][name]
+            tolerance = 0.05 if name.endswith("db") else max(abs(expected) * 0.01, 0.001)
+            if not math.isclose(actual, expected, abs_tol=tolerance, rel_tol=0):
+                raise AssertionError(f"{case} {name}: {actual} vs reference {expected}")
+        manifest = json.loads((directory / "run_manifest.json").read_text())
+        if manifest["execution_source"] != "simulator" or manifest["cache"]["hit"]:
+            raise AssertionError("Real uncached simulations required")
+        log = decode_text((directory / f"{case}.log").read_bytes())
+        match = re.search(r"Maximum thread count:\s*(\d+)", log)
+        observed = int(match[1]) if match else None
+        if threads and observed != threads:
+            raise AssertionError(f"Requested {threads} simulator threads, observed {observed}")
+        return {"case": case, "trial": trial, "warmup": trial == 0,
+                "wrapper_seconds": manifest["duration_seconds"],
+                "wall_seconds": time.perf_counter() - start,
+                "points": raw.points, "metrics": metrics,
+                "maximum_threads": observed, "simulator": manifest["simulator"],
+                "netlist_sha256": manifest["netlist_sha256"]}
+
+    warmup_started = time.perf_counter()
+    samples = [run_case(case, 0) for case in provenance["cases"]]
+    warmup_seconds = time.perf_counter() - warmup_started
+    measured_started = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(run_case, case, trial)
+                   for trial in range(1, 4) for case in provenance["cases"]]
+        for future in as_completed(futures):
+            samples.append(future.result())
             (root / "samples.json").write_text(json.dumps(samples, indent=2, allow_nan=False) + "\n")
+    batch_seconds = time.perf_counter() - measured_started
     report = {"platform": platform.platform(), "machine": platform.machine(),
               "logical_cpus": os.cpu_count(), "python": platform.python_version(),
               "runner_image": os.environ.get("ImageOS"),
               "runner_image_version": os.environ.get("ImageVersion"),
-              "commit": os.environ.get("GITHUB_SHA"), "simulator": manifest["simulator"],
+              "commit": os.environ.get("GITHUB_SHA"), "simulator": samples[0]["simulator"],
+              "workers": workers, "requested_threads": threads,
+              "warmup_seconds": warmup_seconds, "measured_batch_seconds": batch_seconds,
               "models": MODEL_HASHES, "provenance": provenance, "samples": samples,
               "timings_seconds": {}}
     md = "### 100 MHz DAQ real-solver benchmark\n\n"
-    md += f"{report['platform']} / {report['machine']} / {report['logical_cpus']} CPUs; LTspice {manifest['simulator']['version']}\n\n"
+    md += f"{report['platform']} / {report['machine']} / {report['logical_cpus']} CPUs; LTspice {samples[0]['simulator']['version']}\n\n"
+    md += f"Workers: {workers}; requested threads per simulator: {threads or 'default'}. Measured six-run batch: **{batch_seconds:.3f} s**. Warmup: {warmup_seconds:.3f} s.\n\n"
     md += "One warmup and three measured runs per case. All numerical checks passed.\n\n"
     md += "| Case | Wrapper median (s) | Min (s) | Max (s) | Including analysis median (s) |\n|---|---:|---:|---:|---:|\n"
     for case in provenance["cases"]:

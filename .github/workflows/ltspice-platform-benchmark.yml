@@ -7,7 +7,7 @@ on:
         description: Circuit workload to compare on both platforms
         type: choice
         default: rc
-        options: [rc, daq100]
+        options: [rc, daq100, daq-concurrency]
   push:
     branches: [main]
     paths:
@@ -28,11 +28,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-26, windows-2025]
+        include: ${{ fromJSON(inputs.workload == 'daq-concurrency' && '[{"os":"macos-26","profile":"serial-1","workers":1,"threads":1},{"os":"macos-26","profile":"parallel-3","workers":3,"threads":1},{"os":"windows-2025","profile":"serial-1","workers":1,"threads":1},{"os":"windows-2025","profile":"serial-4","workers":1,"threads":4},{"os":"windows-2025","profile":"parallel-4","workers":4,"threads":1}]' || '[{"os":"macos-26","profile":"default","workers":1,"threads":0},{"os":"windows-2025","profile":"default","workers":1,"threads":0}]') }}
+    name: ${{ matrix.os }} / ${{ matrix.profile }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
       PYTHONPATH: .
+      OPENBLAS_NUM_THREADS: 1
+      DAQ_WORKERS: ${{ matrix.workers }}
+      DAQ_THREADS: ${{ matrix.threads }}
       LTSPICE_VERSION: 26.0.2
       LTSPICE_MSI_SHA256: 485dabd2d7d8293de733a399719f6538efda4a54b48b181a14e07271186984d3
     steps:
@@ -203,17 +207,17 @@ jobs:
           }
 
       - name: Run identical real AC and transient workload
-        if: inputs.workload != 'daq100'
+        if: inputs.workload != 'daq100' && inputs.workload != 'daq-concurrency'
         env:
           REAL_LTSPICE_EVIDENCE_DIR: ${{ runner.temp }}/ltspice-benchmark
         run: python tests/real_ltspice_benchmark.py
       - name: Fetch and verify original 100 MHz DAQ models
-        if: inputs.workload == 'daq100'
+        if: inputs.workload == 'daq100' || inputs.workload == 'daq-concurrency'
         env:
           REAL_LTSPICE_EVIDENCE_DIR: ${{ runner.temp }}/ltspice-benchmark
         run: python tests/prepare_daq100_models.py
       - name: Benchmark real 100 MHz DAQ analog channel
-        if: inputs.workload == 'daq100'
+        if: inputs.workload == 'daq100' || inputs.workload == 'daq-concurrency'
         env:
           REAL_LTSPICE_EVIDENCE_DIR: ${{ runner.temp }}/ltspice-benchmark
         run: python tests/real_daq100_benchmark.py
@@ -221,7 +225,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ltspice-benchmark-${{ matrix.os }}-${{ github.run_id }}
+          name: ltspice-benchmark-${{ matrix.os }}-${{ matrix.profile }}-${{ github.run_id }}
           retention-days: 14
           if-no-files-found: warn
           path: |

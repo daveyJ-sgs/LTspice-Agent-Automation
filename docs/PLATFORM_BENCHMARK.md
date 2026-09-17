@@ -111,3 +111,25 @@ first-run steps, but its older simulator accepted that ambiguous input. The
 original project's noise studies remain outside this AC/transient validation.
 Original project files were left unchanged; both runners used the same
 checksum-verified, uniquely named benchmark models.
+
+## Concurrency study
+
+Choose workload **daq-concurrency** to run five fresh-runner profiles:
+Mac sequential/three concurrent processes (one solver thread each), Windows
+sequential with one/four solver threads, and Windows four concurrent processes
+with one solver thread each. Each profile installs its simulator independently.
+
+Each job runs one sequential warmup AC/transient pair followed by the same six
+measured cases (three AC and three transient). `measured_batch_seconds` is the
+elapsed wall time to finish and validate all six, including scheduling and
+analysis. Compare that number for throughput; individual durations in parallel
+runs include resource contention. Full Actions job durations additionally
+include setup, warmup and artifact upload, and exclude queue time.
+
+Every simulation requests its solver thread limit explicitly and verifies the
+reported maximum in the LTspice log. That maximum is not measured CPU usage.
+NumPy's OpenBLAS analysis is limited to one thread in every job to avoid
+uncontrolled analysis-thread contention. All original numerical, model-hash
+and no-cache checks remain active; each process has a separate output directory.
+The default RC and DAQ workflows retain sequential execution. No LSB scheduler
+settings or user installation preferences are changed by this study.
