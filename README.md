@@ -307,3 +307,11 @@ workflow because they are slower and retain larger evidence bundles.
 This is an experimental local automation bridge, not an official Analog Devices
 product. Keep the REST service and System Builder bound to loopback unless
 authentication and authorization are deliberately added.
+
+### Real simulator checks on Mac and Windows
+
+The [platform benchmark](docs/PLATFORM_BENCHMARK.md) installs LTspice on fresh
+Mac and Windows runners and runs identical RC AC/transient checks in parallel.
+It publishes raw simulation evidence and repeated timings, runs on relevant
+simulator-code pushes, and can also be launched manually from GitHub Actions.
+This is separate from the ordinary software-only **Tests** workflow.
