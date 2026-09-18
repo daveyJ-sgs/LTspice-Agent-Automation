@@ -133,3 +133,41 @@ uncontrolled analysis-thread contention. All original numerical, model-hash
 and no-cache checks remain active; each process has a separate output directory.
 The default RC and DAQ workflows retain sequential execution. No LSB scheduler
 settings or user installation preferences are changed by this study.
+
+### Verified concurrency results — September 17, 2026
+
+[Run 35229166537](https://github.com/daveyJ-sgs/LTspice-Agent-Automation/actions/runs/35229166537)
+verified commit `6fa894cb5ff99305c398c6449296650b44e8afcc`. All five profiles
+passed all eight real simulations and the requested thread-limit assertions.
+Software CI and the default RC benchmark also passed for that commit.
+
+| Platform / configuration | Six measured runs, including validation | Complete job, including installation and upload |
+|---|---:|---:|
+| Mac, sequential, one solver thread | 69.134 s | 1:59 |
+| Mac, three concurrent single-thread simulations | **40.577 s** | **1:46** |
+| Windows, sequential, one solver thread | 141.019 s | 4:36 |
+| Windows, sequential, four solver threads | 133.877 s | 4:37 |
+| Windows, four concurrent single-thread simulations | **69.755 s** | **3:40** |
+
+The complete jobs include two additional sequential warmup simulations and
+exclude queue time. These fresh-runner jobs are observations, not guaranteed
+latencies; installations and host performance vary. In particular, Mac warmup
+took 23.858 s on the sequential runner and 32.777 s on the concurrent runner,
+so this is not a controlled same-machine scaling measurement.
+
+For this mixed workload, process concurrency reduced measured batch time by
+about 41% on Mac and 51% on Windows. The end-to-end improvements were smaller:
+13 seconds (11%) on Mac and 56 seconds (20%) on Windows. The fastest Mac job
+finished about 2.08× sooner than the fastest Windows job.
+
+Changing Windows from one to four solver threads reduced measured batch time
+by only about 5%; full job time was effectively unchanged. Median transient
+wrapper time fell from 16.822 to 14.450 seconds, while AC remained around
+29–30 seconds. Independent simulations concurrently running competed for CPU
+and made individual cases slower, yet finished the overall batch sooner.
+
+The practical candidate for larger independent studies is bounded process
+concurrency, sized to available CPUs and memory, rather than maximizing
+threads per simulation. No production LSB concurrency defaults were changed.
+The Mac 17.2.4 versus Windows 26.0.2 version difference remains part of the
+comparison. Actual CPU utilization and parallel efficiency were not profiled.
