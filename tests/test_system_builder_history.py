@@ -74,6 +74,38 @@ class SystemBuilderHistoryTests(unittest.TestCase):
         # case, the most common "fresh workspace" state a user actually hits.
         self.assertEqual(result["index"]["message"], "No runs index is available yet.")
 
+    def test_history_separates_errored_points_and_names_the_study(self) -> None:
+        experiment = self.write_job(status="completed")
+        manifest_path = experiment / "experiment_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest.update({"error_points": 2, "failed_points": 3})
+        manifest["definition"]["point_plan"] = {
+            "source": {
+                "kind": "statistical",
+                "system_builder": {
+                    "experiment_name": "ac",
+                    "report_context": {"title": "RC study"},
+                },
+            }
+        }
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        (experiment / "point-0000").mkdir()
+        (experiment / "point-0000" / "point_result.json").write_text(
+            json.dumps({"error": None}), encoding="utf-8"
+        )
+        (experiment / "point-0001").mkdir()
+        (experiment / "point-0001" / "point_result.json").write_text(
+            json.dumps({"error": "LTspice executable not found: ltspice"}),
+            encoding="utf-8",
+        )
+
+        job = workspace_history(self.workspace)["jobs"][0]
+
+        self.assertEqual(job["error_points"], 2)
+        self.assertEqual(job["point_error"], "LTspice executable not found: ltspice")
+        self.assertEqual(job["study_title"], "RC study")
+        self.assertEqual(job["experiment_name"], "ac")
+
     def test_history_is_bounded_and_skips_invalid_manifests(self) -> None:
         self.write_job()
         invalid = self.runs / "mcp-experiment-20260827-201101-123456"

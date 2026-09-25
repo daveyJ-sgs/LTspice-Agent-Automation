@@ -5,6 +5,10 @@ let previewTimer = null;
 let previewSequence = 0;
 let latestPreview = null;
 let frozenLaunch = null;
+// Bumped by every invalidation, so a /api/freeze response that arrives after
+// the recipe changed is dropped instead of re-arming Start for a plan that no
+// longer matches the screen.
+let freezeSequence = 0;
 let latestRemotePreview = null;
 let remoteAuthReady = false;
 let remoteJobs = new Map();
@@ -22,6 +26,7 @@ function markDirty(statusId, flagSetter) {
   flagSetter(true);
   const status = byId(statusId);
   status.textContent = "Unsaved changes";
+  status.classList.remove("is-error");
   status.classList.add("unsaved");
 }
 
@@ -29,7 +34,7 @@ function markClean(statusId, flagSetter) {
   flagSetter(false);
   const status = byId(statusId);
   status.textContent = "";
-  status.classList.remove("unsaved");
+  status.classList.remove("unsaved", "is-error");
 }
 
 // Study and Optimization are independent documents -- each project is only
@@ -105,11 +110,31 @@ function showView(view) {
   });
   const crumb = byId("topbar-crumb");
   if (crumb) crumb.textContent = VIEW_LABELS[view];
+  setNavDrawer(false);
   if (window.location.hash.slice(1) !== view) {
     window.history.pushState(null, "", `#${view}`);
   }
   window.scrollTo({top: 0});
 }
+
+// Below the narrow breakpoint the sidebar is a top bar and its navigation a
+// drawer; on wider screens the toggle is hidden and the class is inert.
+function setNavDrawer(open) {
+  const toggle = byId("nav-toggle");
+  if (!toggle) return;
+  toggle.setAttribute("aria-expanded", String(open));
+  document.querySelector(".app-sidebar").classList.toggle("nav-open", open);
+}
+
+byId("nav-toggle").addEventListener("click", () => {
+  setNavDrawer(byId("nav-toggle").getAttribute("aria-expanded") !== "true");
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && byId("nav-toggle").getAttribute("aria-expanded") === "true") {
+    setNavDrawer(false);
+    byId("nav-toggle").focus();
+  }
+});
 
 function routeFromHash() {
   showView((window.location.hash || "#dashboard").slice(1));
@@ -117,9 +142,15 @@ function routeFromHash() {
 
 window.addEventListener("hashchange", routeFromHash);
 window.addEventListener("beforeunload", (event) => {
-  if (!studyDirty && !optimizationDirty) return;
+  if (!studyDirty && !optimizationDirty && !hasUnsavedNetlistEdits()) return;
   event.preventDefault();
   event.returnValue = "";
+});
+// "Load recipe", "Import netlist" and "Load .ltopt.json" are real buttons
+// (focusable, announced as buttons) that open their hidden file input.
+document.addEventListener("click", (event) => {
+  const opener = event.target.closest("[data-file-input]");
+  if (opener) byId(opener.dataset.fileInput)?.click();
 });
 document.addEventListener("click", (event) => {
   const trigger = event.target.closest("[data-view]");
@@ -204,12 +235,56 @@ function unitSelect(item, displayUnits, path, onChange) {
   return select;
 }
 
+// Accessible names for generated controls. data-path stays the machine key
+// (validation errors are matched against it); screen readers get a phrase
+// like "Experiment 1, analysis 1, requirement 2: target" instead.
+const PATH_COLLECTIONS = {
+  variables: "Variable",
+  correlations: "Correlation group",
+  corner_axes: "Corner axis",
+  values: "Value",
+  weights: "Weight",
+  experiments: "Experiment",
+  waveform_analyses: "Analysis",
+  requirements: "Requirement",
+  matrix: "Row",
+};
+
+function humanizeKey(key) {
+  const words = String(key).replaceAll("_", " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function readableLabel(path) {
+  const parts = [];
+  let field = "";
+  for (const segment of String(path).split(".")) {
+    const match = /^([A-Za-z_]+)((?:\[\d+\])*)$/.exec(segment);
+    if (!match) { field = segment; continue; }
+    const [, key, indexes] = match;
+    const numbers = [...indexes.matchAll(/\[(\d+)\]/g)].map((item) => Number(item[1]) + 1);
+    if (key === "plan" || key === "execution" || key === "report_context") continue;
+    if (numbers.length) {
+      const noun = PATH_COLLECTIONS[key] || humanizeKey(key);
+      parts.push(key === "matrix" && numbers.length === 2
+        ? `row ${numbers[0]}, column ${numbers[1]}`
+        : `${noun} ${numbers.join(".")}`);
+    } else {
+      field = key;
+    }
+  }
+  const scope = parts.join(", ");
+  const name = field ? humanizeKey(field).toLowerCase() : "";
+  if (!scope) return humanizeKey(field || path);
+  return name ? `${scope}: ${name}` : scope;
+}
+
 function fieldInput(value, path, className = "") {
   const input = document.createElement("input");
   input.type = "text";
   input.value = value ?? "";
   input.dataset.path = path;
-  input.setAttribute("aria-label", path);
+  input.setAttribute("aria-label", readableLabel(path));
   input.className = className;
   return input;
 }
@@ -217,7 +292,7 @@ function fieldInput(value, path, className = "") {
 function selectInput(value, choices, path, className = "") {
   const select = document.createElement("select");
   select.dataset.path = path;
-  select.setAttribute("aria-label", path);
+  select.setAttribute("aria-label", readableLabel(path));
   select.className = className;
   for (const [choice, label] of choices) {
     const option = document.createElement("option");
@@ -247,6 +322,7 @@ function removeButton(label, handler) {
 }
 
 function invalidateFrozenPlan() {
+  freezeSequence += 1;
   latestPreview = null;
   frozenLaunch = null;
   latestRemotePreview = null;
@@ -260,16 +336,27 @@ function invalidateFrozenPlan() {
   byId("remote-auth-button").disabled = false;
   byId("remote-dispatch-button").disabled = true;
   byId("remote-auth-status").textContent = "GitHub access has not been checked.";
-  if (trackedJobs.size === 0) byId("launch-result").hidden = true;
+  renderTrackedJobs();
   byId("execution-acknowledgement").checked = false;
   byId("execution-acknowledgement").disabled = false;
   byId("start-button").disabled = true;
+  byId("start-button").textContent = "Start local study";
 }
 
+// A recipe edit: the saved file is now out of date and any frozen plan no
+// longer describes what is on screen.
 function schedulePreview() {
   if (!recipe) return;
   markDirty("save-status", (v) => { studyDirty = v; });
   invalidateFrozenPlan();
+  requestPreview();
+}
+
+// Re-resolve without touching the recipe -- after a netlist rescan or save.
+// The recipe stays clean, and a frozen plan survives unless the fresh
+// preview resolves to a different plan (renderPreview checks that).
+function requestPreview() {
+  if (!recipe) return;
   window.clearTimeout(previewTimer);
   const status = byId("preview-status");
   status.className = "status-pill idle preview-pending";
@@ -420,10 +507,27 @@ async function loadSchematicFiles() {
   populate("schematic-image-files", result.images || []);
 }
 
-// Unsaved edits, keyed by workspace-relative netlist path, so a structural
-// re-render elsewhere (e.g. adding a requirement) doesn't clobber text the
-// user hasn't saved yet. Cleared on an explicit "Refresh netlists" click.
-const netlistEditorBuffers = new Map();
+// Netlist text, keyed by workspace-relative path, in two separate maps: what
+// is on disk (a cache, dropped whenever the file list is rescanned) and what
+// the user has typed but not saved. Keeping them apart means a rescan,
+// import, or structural re-render never throws away an unsaved edit, and the
+// page can tell when the editor and the file Simulate once runs disagree.
+const netlistDiskText = new Map();
+const netlistEdits = new Map();
+
+function netlistText(path) {
+  return netlistEdits.has(path) ? netlistEdits.get(path) : netlistDiskText.get(path);
+}
+
+function hasUnsavedNetlistEdits() {
+  return netlistEdits.size > 0;
+}
+
+function recordNetlistEdit(path, text) {
+  if (!path) return;
+  if (netlistDiskText.has(path) && netlistDiskText.get(path) === text) netlistEdits.delete(path);
+  else netlistEdits.set(path, text);
+}
 
 // Served from the measurement registries by /api/metrics, so the requirement
 // form offers exactly the parameters each metric actually reads instead of a
@@ -507,7 +611,8 @@ const netlistTextRequests = new Set();
 function experimentNetlistText(experiment) {
   const path = experiment?.netlist_path;
   if (!path) return null;
-  if (netlistEditorBuffers.has(path)) return netlistEditorBuffers.get(path);
+  const known = netlistText(path);
+  if (known !== undefined) return known;
   requestNetlistText(path);
   return null;
 }
@@ -519,7 +624,7 @@ async function requestNetlistText(path) {
     const response = await fetch(`/api/recipe/netlist?path=${encodeURIComponent(path)}`);
     const result = await response.json();
     if (!response.ok) return;
-    netlistEditorBuffers.set(path, result.content);
+    netlistDiskText.set(path, result.content);
     if (recipe) populateExperiments();
   } catch (_) {
     // The hint is an aid; the backend still range-checks every frequency.
@@ -533,13 +638,16 @@ async function loadNetlistFiles() {
   const result = await response.json();
   if (!response.ok) throw new Error(result.error?.message || "Netlist files could not be listed");
   netlistFiles = result.files || [];
-  netlistEditorBuffers.clear();
+  // Only the disk cache: a file may have changed on disk (re-exported from
+  // LTspice), but text typed into an editor stays until it is saved.
+  netlistDiskText.clear();
   if (recipe) populateExperiments();
 }
 
 function buildNetlistEditor(experiment) {
   const container = document.createElement("div");
   container.className = "netlist-editor";
+  const path = experiment.netlist_path;
 
   const toolbar = document.createElement("div");
   toolbar.className = "netlist-editor-toolbar";
@@ -554,6 +662,33 @@ function buildNetlistEditor(experiment) {
   textarea.rows = 14;
   textarea.disabled = true;
   textarea.placeholder = "Pick a netlist above to view and edit its text here.";
+  textarea.setAttribute(
+    "aria-label",
+    path ? `Netlist text for ${path.split("/").pop()}` : "Netlist text",
+  );
+
+  const status = document.createElement("span");
+  status.className = "muted-copy netlist-editor-status";
+  status.setAttribute("aria-live", "polite");
+
+  function setStatus(message, tone = "") {
+    status.textContent = message;
+    status.classList.toggle("unsaved", tone === "unsaved");
+    status.classList.toggle("is-error", tone === "error");
+  }
+
+  function showDirtyState() {
+    if (netlistEdits.has(path)) {
+      setStatus("Unsaved edits — save the netlist before simulating or starting a study.", "unsaved");
+    } else if (status.classList.contains("unsaved")) {
+      setStatus("");
+    }
+  }
+
+  function edited() {
+    recordNetlistEdit(path, textarea.value);
+    showDirtyState();
+  }
 
   for (const variable of (recipe.plan.variables || [])) {
     if (!variable.name) continue;
@@ -567,7 +702,7 @@ function buildNetlistEditor(experiment) {
       const start = textarea.selectionStart ?? textarea.value.length;
       const end = textarea.selectionEnd ?? textarea.value.length;
       textarea.value = textarea.value.slice(0, start) + insertText + textarea.value.slice(end);
-      netlistEditorBuffers.set(experiment.netlist_path, textarea.value);
+      edited();
       const cursor = start + insertText.length;
       textarea.focus();
       textarea.setSelectionRange(cursor, cursor);
@@ -575,12 +710,45 @@ function buildNetlistEditor(experiment) {
     toolbar.append(button);
   }
 
-  textarea.addEventListener("input", () => {
-    netlistEditorBuffers.set(experiment.netlist_path, textarea.value);
-  });
+  textarea.addEventListener("input", edited);
 
-  const status = document.createElement("span");
-  status.className = "muted-copy netlist-editor-status";
+  const saveButton = document.createElement("button");
+  saveButton.type = "button";
+  saveButton.className = "primary-button";
+  saveButton.textContent = "Save netlist";
+  saveButton.disabled = true;
+
+  async function saveNetlist() {
+    const text = textarea.value;
+    const response = await fetch(`/api/recipe/netlist?path=${encodeURIComponent(path)}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({content: text}),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Netlist could not be saved");
+    netlistDiskText.set(path, text);
+    recordNetlistEdit(path, textarea.value);
+  }
+
+  saveButton.addEventListener("click", async () => {
+    if (!path) return;
+    saveButton.disabled = true;
+    setStatus("Saving…");
+    try {
+      await saveNetlist();
+      setStatus("Saved.");
+      showDirtyState();
+      requestPreview();
+    } catch (error) {
+      setStatus(error.message, "error");
+    } finally {
+      saveButton.disabled = false;
+    }
+  });
 
   const runButton = document.createElement("button");
   runButton.type = "button";
@@ -588,11 +756,26 @@ function buildNetlistEditor(experiment) {
   runButton.textContent = "Simulate once";
   runButton.title = "Run this deck through LTspice now, without defining a study";
   runButton.disabled = true;
+  runButton.dataset.needsLtspice = "true";
   runButton.addEventListener("click", async () => {
-    const path = experiment.netlist_path;
     if (!path) return;
+    // Simulate once runs the file on disk, so an unsaved edit would silently
+    // not be what gets simulated.
+    if (netlistEdits.has(path)) {
+      if (!window.confirm("This netlist has unsaved edits, and Simulate once runs the saved file. Save your edits and simulate?")) return;
+      runButton.disabled = true;
+      setStatus("Saving…");
+      try {
+        await saveNetlist();
+        requestPreview();
+      } catch (error) {
+        setStatus(error.message, "error");
+        runButton.disabled = false;
+        return;
+      }
+    }
     runButton.disabled = true;
-    status.textContent = "Simulating\u2026";
+    setStatus("Simulating…");
     try {
       const response = await fetch("/api/netlist/run", {
         method: "POST",
@@ -605,78 +788,51 @@ function buildNetlistEditor(experiment) {
       const result = await response.json();
       if (!response.ok) throw new Error(result.error?.message || "Simulation failed");
       const captures = result.captures || [];
-      status.textContent = `${result.status} \u00b7 ${captures.length} capture${captures.length === 1 ? "" : "s"}`;
+      setStatus(`${result.status} · ${captures.length} capture${captures.length === 1 ? "" : "s"}`);
       if (captures.length) {
         showView("history");
         openWaveforms(result.run_id);
       }
     } catch (error) {
-      status.textContent = error.message;
+      setStatus(error.message, "error");
     } finally {
       runButton.disabled = false;
-    }
-  });
-
-  const saveButton = document.createElement("button");
-  saveButton.type = "button";
-  saveButton.className = "primary-button";
-  saveButton.textContent = "Save netlist";
-  saveButton.disabled = true;
-  saveButton.addEventListener("click", async () => {
-    const path = experiment.netlist_path;
-    if (!path) return;
-    saveButton.disabled = true;
-    status.textContent = "Saving…";
-    try {
-      const response = await fetch(`/api/recipe/netlist?path=${encodeURIComponent(path)}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "X-LTspice-System-Builder": "1",
-        },
-        body: JSON.stringify({content: textarea.value}),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error?.message || "Netlist could not be saved");
-      netlistEditorBuffers.set(path, textarea.value);
-      status.textContent = "Saved.";
-      schedulePreview();
-    } catch (error) {
-      status.textContent = error.message;
-    } finally {
-      saveButton.disabled = false;
+      applyLtspiceGate();
     }
   });
 
   const buttonRow = document.createElement("div");
   buttonRow.className = "button-row";
-  buttonRow.append(saveButton, runButton, status);
+  buttonRow.append(saveButton, runButton, status, ltspiceGateNote());
 
   container.append(toolbar, textarea, buttonRow);
 
+  const enable = (text) => {
+    textarea.value = text;
+    textarea.disabled = false;
+    saveButton.disabled = false;
+    runButton.disabled = false;
+    applyLtspiceGate();
+    showDirtyState();
+  };
+
   (async () => {
-    const path = experiment.netlist_path;
     if (!path) return;
-    if (netlistEditorBuffers.has(path)) {
-      textarea.value = netlistEditorBuffers.get(path);
-      textarea.disabled = false;
-      saveButton.disabled = false;
-      runButton.disabled = false;
+    const known = netlistText(path);
+    if (known !== undefined) {
+      enable(known);
       return;
     }
-    status.textContent = "Loading…";
+    setStatus("Loading…");
     try {
       const response = await fetch(`/api/recipe/netlist?path=${encodeURIComponent(path)}`);
       const result = await response.json();
       if (!response.ok) throw new Error(result.error?.message || "Netlist could not be loaded");
-      textarea.value = result.content;
-      netlistEditorBuffers.set(path, result.content);
-      textarea.disabled = false;
-      saveButton.disabled = false;
-      runButton.disabled = false;
-      status.textContent = "";
+      netlistDiskText.set(path, result.content);
+      setStatus("");
+      enable(netlistText(path));
     } catch (error) {
-      status.textContent = error.message;
+      setStatus(error.message, "error");
     }
   })();
 
@@ -879,7 +1035,7 @@ function empiricalEditor(variable, base) {
     caption.textContent = "Observations (comma or line separated)";
     const values = document.createElement("textarea");
     values.dataset.path = `${base}.values`;
-    values.setAttribute("aria-label", `${base}.values`);
+    values.setAttribute("aria-label", `${variable.name || readableLabel(base)} observations`);
     values.value = (variable.values || []).join("\n");
     values.addEventListener("input", () => {
       variable.values = values.value
@@ -933,6 +1089,7 @@ function populateVariables() {
     let minimum;
     let maximum;
     let unit;
+    let sigmaHint = null;
     if (continuous) {
       const selectedUnit = variableDisplayUnits.get(variable) || defaultDisplayUnit(variable);
       const factor = studyUnitFactor(variable.unit, selectedUnit);
@@ -941,7 +1098,25 @@ function populateVariables() {
       tolerance = scaledFieldInput(variable.sigma, factor, `${base}.sigma`);
       tolerance.placeholder = distribution.value === "gaussian" ? "σ" : "n/a";
       tolerance.disabled = distribution.value !== "gaussian";
-      if (!tolerance.disabled) setScaledRecipeField(tolerance, variable, "sigma", factor);
+      if (!tolerance.disabled) {
+        setScaledRecipeField(tolerance, variable, "sigma", factor);
+        // σ is one standard deviation in the variable's own unit; show it as
+        // the ±% of nominal most datasheets quote, and the 3σ spread.
+        sigmaHint = document.createElement("span");
+        sigmaHint.className = "field-hint sigma-hint";
+        const updateSigmaHint = () => {
+          const sigma = Number(variable.sigma);
+          const center = Math.abs(Number(variable.nominal));
+          const percent = Number.isFinite(sigma) && center > 0 ? 100 * sigma / center : null;
+          sigmaHint.textContent = percent === null ? "" : `±${Number(percent.toPrecision(3))}% 1σ`;
+          sigmaHint.title = percent === null
+            ? ""
+            : `One standard deviation is ±${Number(percent.toPrecision(3))}% of nominal; about 99.7% of parts fall within ±${Number((3 * percent).toPrecision(3))}% (3σ).`;
+        };
+        updateSigmaHint();
+        tolerance.addEventListener("input", updateSigmaHint);
+        nominal.addEventListener("input", updateSigmaHint);
+      }
       minimum = scaledFieldInput(variable.minimum, factor, `${base}.minimum`);
       setScaledRecipeField(minimum, variable, "minimum", factor);
       maximum = scaledFieldInput(variable.maximum, factor, `${base}.maximum`);
@@ -962,7 +1137,9 @@ function populateVariables() {
       unit = fieldInput(variable.unit, `${base}.unit`, "unit");
       setRecipeField(unit, variable, "unit");
     }
-    for (const control of [name, distribution]) {
+    // Unit sits right after Distribution, beside the values it scales, so it
+    // is on screen without scrolling the table sideways.
+    for (const control of [name, distribution, unit]) {
       const cell = document.createElement("td");
       cell.append(control);
       row.append(cell);
@@ -971,14 +1148,12 @@ function populateVariables() {
       if (control) {
         const cell = document.createElement("td");
         cell.append(control);
+        if (control === tolerance && sigmaHint) cell.append(sigmaHint);
         row.append(cell);
       } else {
         row.append(textCell());
       }
     }
-    const unitCell = document.createElement("td");
-    unitCell.append(unit);
-    row.append(unitCell);
     const remove = document.createElement("td");
     remove.className = "remove-cell";
     remove.append(removeButton(`Remove variable ${variable.name || index + 1}`, () => {
@@ -1421,7 +1596,7 @@ function metricOptionGroups() {
 function metricSelect(value, path) {
   const select = document.createElement("select");
   select.dataset.path = path;
-  select.setAttribute("aria-label", path);
+  select.setAttribute("aria-label", readableLabel(path));
   let matched = false;
   for (const [label, names] of metricOptionGroups()) {
     const group = document.createElement("optgroup");
@@ -1448,6 +1623,37 @@ function metricSelect(value, path) {
 // Parameters are flat sibling keys of metric/operator/target, so the ones the
 // previous metric used have to go when the metric changes -- otherwise they
 // linger as fields the new metric cannot accept.
+// The unit each metric's measured value comes out in, which is the unit its
+// target is compared in. Mirrors the units the waveform_metrics and
+// frequency_domain_metrics handlers return; "signal" and "axis" resolve
+// against the analysis (signal_unit / axis_unit).
+const METRIC_RESULT_UNITS = {
+  minimum: "signal", maximum: "signal", mean: "signal", rms: "signal",
+  peak_to_peak: "signal", ripple: "signal", monotonicity: "signal", spectral_peak: "signal",
+  rise_time: "axis", fall_time: "axis", settling_time: "axis", pulse_width: "axis",
+  propagation_delay: "axis", slew_rate: "signal/axis",
+  overshoot: "%", undershoot: "%", duty_cycle: "%", thd: "%",
+  forbidden_region_samples: "points",
+  frequency: "Hz", cutoff_frequency: "Hz", gain_crossover_frequency: "Hz",
+  ac_gain_db: "dB", peaking_db: "dB", gain_margin: "dB", phase_margin: "deg",
+};
+
+function requirementTargetUnit(metric, analysis) {
+  const kind = METRIC_RESULT_UNITS[metric];
+  if (!kind) return "";
+  const frequencyDomain = metricDefinition(metric)?.domain === "frequency";
+  const axis = analysis?.axis_unit || (frequencyDomain ? "Hz" : "s");
+  const signal = analysis?.signal_unit || "";
+  if (kind === "signal") return signal;
+  if (kind === "axis") return axis;
+  if (kind === "signal/axis") return signal ? `${signal}/${axis}` : `per ${axis}`;
+  return kind;
+}
+
+// Notes left on a requirement whose target was cleared by a metric change,
+// shown once on the re-rendered row.
+const requirementTargetNotes = new WeakMap();
+
 function setRequirementMetric(requirement, metric) {
   // Only prune against a metric the schema actually describes: a recipe written
   // against a newer build can name one this page has never heard of, and
@@ -1473,23 +1679,58 @@ function buildRequirement(analysis, requirement, index, base, experiment) {
 
   const metric = metricSelect(requirement.metric, `${base}.metric`);
   metric.addEventListener("change", () => {
+    const previousUnit = requirementTargetUnit(requirement.metric, analysis);
+    const previousTarget = requirement.target;
     setRequirementMetric(requirement, metric.value);
+    const nextUnit = requirementTargetUnit(requirement.metric, analysis);
+    // A number typed as dB means nothing in Hz: clear it rather than let the
+    // old target silently carry over into the new metric's unit.
+    if (previousUnit !== nextUnit && previousTarget !== "" && previousTarget !== undefined) {
+      requirement.target = "";
+      requirementTargetNotes.set(
+        requirement,
+        `Target cleared: ${previousTarget}${previousUnit ? ` ${previousUnit}` : ""} does not carry over to ${nextUnit || "this metric"}.`,
+      );
+    }
     populateExperiments();
     schedulePreview();
+    if (requirementTargetNotes.has(requirement)) {
+      document.querySelector(`[data-path="${base}.target"]`)?.focus();
+    }
   });
   const operator = selectInput(requirement.operator, [["<", "<"], ["<=", "\u2264"], [">", ">"], [">=", "\u2265"]], `${base}.operator`);
   setRecipeField(operator, requirement, "operator");
   operator.addEventListener("change", schedulePreview);
   const target = fieldInput(requirement.target, `${base}.target`);
+  const targetUnit = requirementTargetUnit(requirement.metric, analysis);
   target.placeholder = "Target";
+  target.setAttribute("aria-label", `${readableLabel(`${base}.target`)}${targetUnit ? ` in ${targetUnit}` : ""}`);
   setRecipeField(target, requirement, "target", true);
+  target.addEventListener("input", () => {
+    requirementTargetNotes.delete(requirement);
+    targetNote.hidden = true;
+  });
+  const targetField = document.createElement("span");
+  targetField.className = "target-field";
+  targetField.append(target);
+  if (targetUnit) {
+    const unit = document.createElement("span");
+    unit.className = "target-unit";
+    unit.textContent = targetUnit;
+    unit.setAttribute("aria-hidden", "true");
+    targetField.append(unit);
+  }
+  const targetNote = document.createElement("span");
+  targetNote.className = "field-problem target-note";
+  targetNote.textContent = requirementTargetNotes.get(requirement) || "";
+  targetNote.hidden = !targetNote.textContent;
 
-  row.append(metric, operator, target, removeButton(`Remove ${requirement.metric} requirement`, () => {
+  row.append(metric, operator, targetField, removeButton(`Remove ${requirement.metric} requirement`, () => {
     analysis.requirements.splice(index, 1);
     populateExperiments();
     schedulePreview();
   }));
-  container.append(row);
+  container.append(row, targetNote);
 
   const parameters = metricParameters(requirement.metric);
   const sweep = acSweepRange(experimentNetlistText(experiment));
@@ -1559,9 +1800,15 @@ function buildRequirementParameter(requirement, parameter, base, sweep) {
   const path = `${base}.${parameter.name}`;
 
   const caption = document.createElement("span");
-  caption.textContent = parameter.unit
-    ? `${parameter.name} (${parameter.unit})`
+  // "cutoff_drop_db" with unit dB reads as "Cutoff drop (dB)".
+  const unitSuffix = parameter.unit ? `_${parameter.unit.toLowerCase()}` : "";
+  const baseName = unitSuffix && parameter.name.toLowerCase().endsWith(unitSuffix)
+    ? parameter.name.slice(0, -unitSuffix.length)
     : parameter.name;
+  caption.textContent = parameter.unit
+    ? `${humanizeKey(baseName)} (${parameter.unit})`
+    : humanizeKey(baseName);
+  caption.title = parameter.name;
   if (parameter.required) {
     const mark = document.createElement("abbr");
     mark.className = "required-mark";
@@ -1577,7 +1824,7 @@ function buildRequirementParameter(requirement, parameter, base, sweep) {
   if (parameter.kind === "choice") {
     control = document.createElement("select");
     control.dataset.path = path;
-    control.setAttribute("aria-label", path);
+    control.setAttribute("aria-label", readableLabel(path));
     const fallback = formatDefault(parameter.default);
     const blank = document.createElement("option");
     blank.value = "";
@@ -1751,7 +1998,12 @@ async function openWaveforms(experimentId) {
     byId("waveform-plot").replaceChildren();
     byId("waveform-traces").replaceChildren();
     byId("waveform-meta").textContent = "";
-    waveformError("This run wrote no .raw captures. Compressed or cleaned runs keep only their report.");
+    const job = trackedJobs.get(experimentId)
+      || (latestHistory?.jobs || []).find((item) => item.experiment_id === experimentId);
+    const errored = Number(job?.error_points || 0);
+    waveformError(errored
+      ? `This run wrote no .raw captures: ${errored} point${errored === 1 ? "" : "s"} did not simulate${job.point_error ? ` (${job.point_error})` : ""}.`
+      : "This run wrote no .raw captures. Compressed or cleaned runs keep only their report.");
     return;
   }
   select.replaceChildren(...waveformCaptures.map((capture) => {
@@ -2002,7 +2254,7 @@ async function advanceBoundary() {
     if (!response.ok) throw new Error(result.error?.message || "Boundary advance failed");
     renderBoundary(result);
     if (result.active_experiment_id) {
-      trackedJobs.set(result.active_experiment_id, {
+      trackJob(result.active_experiment_id, {
         name: "boundary batch",
         experiment_id: result.active_experiment_id,
         status: "running",
@@ -2110,7 +2362,7 @@ async function runSensitivity() {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error?.message || "Sensitivity study failed");
-    trackedJobs.set(result.experiment_id, {name: "sensitivity", ...result});
+    trackJob(result.experiment_id, {name: "sensitivity", ...result});
     renderTrackedJobs();
     scheduleJobPoll(250);
     sensitivityError("");
@@ -2266,7 +2518,7 @@ function refilterHistory() {
 }
 
 function comparableJobs() {
-  return (latestHistory?.jobs || []).filter((job) => job.status === "completed");
+  return (latestHistory?.jobs || []).filter((job) => job.status === "completed" && !jobAllErrored(job));
 }
 
 function openComparePanel() {
@@ -2408,6 +2660,37 @@ function renderErrors(errors) {
   container.hidden = false;
 }
 
+// True when `path` is `ancestor` itself or lies beneath it on a segment
+// boundary, so experiments[1] never claims experiments[10]'s errors and
+// plan.variables does not match plan.variables_extra.
+function isPathWithin(path, ancestor) {
+  if (path === ancestor) return true;
+  if (!path.startsWith(ancestor)) return false;
+  const next = path.charAt(ancestor.length);
+  return next === "." || next === "[";
+}
+
+// Flags only the most specific element an error points at: the field whose
+// path matches exactly, or failing that the closest enclosing element (a
+// requirement card, a variable row). Controls get aria-invalid; containers
+// get an outline, since aria-invalid means nothing on a <section> or <tr>.
+function markErrorPath(errorPath) {
+  const elements = [...document.querySelectorAll("[data-path]")];
+  let targets = elements.filter((element) => element.dataset.path === errorPath);
+  if (targets.length === 0) {
+    const ancestors = elements.filter((element) => isPathWithin(errorPath, element.dataset.path));
+    const longest = Math.max(...ancestors.map((element) => element.dataset.path.length), -1);
+    targets = ancestors.filter((element) => element.dataset.path.length === longest);
+  }
+  for (const element of targets) {
+    if (["INPUT", "SELECT", "TEXTAREA"].includes(element.tagName)) {
+      element.setAttribute("aria-invalid", "true");
+    } else {
+      element.classList.add("scope-invalid");
+    }
+  }
+}
+
 function renderScopedErrors(errors) {
   const scopes = [
     ["variable-errors", ["plan.variables"]],
@@ -2418,9 +2701,10 @@ function renderScopedErrors(errors) {
   ];
   document.querySelectorAll("[data-path]").forEach((element) => {
     element.removeAttribute("aria-invalid");
+    element.classList.remove("scope-invalid");
   });
   for (const [id, prefixes] of scopes) {
-    const matched = (errors || []).filter((error) => prefixes.some((prefix) => error.path.startsWith(prefix)));
+    const matched = (errors || []).filter((error) => prefixes.some((prefix) => isPathWithin(error.path, prefix)));
     const container = byId(id);
     if (matched.length === 0) {
       container.hidden = true;
@@ -2432,15 +2716,17 @@ function renderScopedErrors(errors) {
       const item = document.createElement("li");
       item.textContent = `${error.path}: ${error.message}`;
       list.append(item);
-      document.querySelectorAll("[data-path]").forEach((element) => {
-        const path = element.dataset.path;
-        if (error.path.startsWith(path) || path.startsWith(error.path)) {
-          element.setAttribute("aria-invalid", "true");
-        }
-      });
+      markErrorPath(error.path);
     }
     container.replaceChildren(list);
     container.hidden = false;
+  }
+  // Errors outside every scoped list (plan.sample_count, execution.*) are
+  // still listed in the preview panel; flag their field in place as well.
+  for (const error of errors || []) {
+    if (!scopes.some(([, prefixes]) => prefixes.some((prefix) => isPathWithin(error.path, prefix)))) {
+      markErrorPath(error.path);
+    }
   }
 }
 
@@ -2454,6 +2740,15 @@ function clearPreviewMetrics() {
 
 function renderPreview(result) {
   const status = byId("preview-status");
+  // A re-preview that did not come from a recipe edit (netlist rescan or
+  // save) keeps the frozen plan only while it still resolves to that plan.
+  if (frozenLaunch && (
+    !result.valid
+    || result.plan?.plan_id !== frozenLaunch.plan.plan_id
+    || result.recipe?.sha256 !== frozenLaunch.recipe_sha256
+  )) {
+    invalidateFrozenPlan();
+  }
   if (!result.valid) {
     latestPreview = null;
     byId("freeze-button").disabled = true;
@@ -2474,7 +2769,7 @@ function renderPreview(result) {
   byId("metric-runs").textContent = result.execution.total_run_count.toLocaleString();
   byId("plan-id").textContent = result.plan.plan_id;
   latestPreview = result;
-  byId("freeze-button").disabled = false;
+  byId("freeze-button").disabled = Boolean(frozenLaunch);
   renderErrors([]);
   renderScopedErrors([]);
   byId("experiments").replaceChildren(...result.experiments.map((experiment) => {
@@ -2533,19 +2828,40 @@ function reportLink(url, label = "Open report ↗") {
   return link;
 }
 
-function jobActionButton(label, action, className = "compact-button") {
+// Errors from Cancel/Resume/Build report, keyed by experiment id, so they
+// render next to the button that failed -- in whichever view it lives -- and
+// survive the re-render the next status poll does.
+const jobActionErrors = new Map();
+
+function jobActionError(experimentId) {
+  const message = jobActionErrors.get(experimentId);
+  if (!message) return null;
+  const error = document.createElement("span");
+  error.className = "job-error";
+  error.setAttribute("role", "alert");
+  error.textContent = message;
+  return error;
+}
+
+function jobActionButton(label, action, experimentId, className = "compact-button") {
   const button = document.createElement("button");
   button.type = "button";
   button.className = className;
   button.textContent = label;
   button.addEventListener("click", async () => {
     button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    jobActionErrors.delete(experimentId);
+    button.parentElement?.querySelectorAll(".job-error[role=alert]").forEach((node) => node.remove());
     try {
       await action();
     } catch (error) {
-      renderHistoryErrors([{path: "job action", message: error.message}]);
+      const message = `${label} failed: ${error.message}`;
+      jobActionErrors.set(experimentId, message);
+      button.after(jobActionError(experimentId));
     } finally {
       button.disabled = false;
+      button.removeAttribute("aria-busy");
     }
   });
   return button;
@@ -2561,24 +2877,140 @@ async function mutateJob(experimentId, action) {
   return result;
 }
 
+// Tracked jobs belong to the study that launched them. The Study setup panel
+// shows only the open study's jobs, so opening another project never shows
+// the previous one's cards; polling still covers every tracked job.
+function studyProjectKey() {
+  if (currentStudyProjectSlug) return `project:${currentStudyProjectSlug}`;
+  return recipe ? `recipe:${recipe.name || ""}` : null;
+}
+
+function studyTitle() {
+  return recipe ? (recipe.report_context?.title || recipe.name || "") : "";
+}
+
+function trackJob(experimentId, data, project = null) {
+  const previous = trackedJobs.get(experimentId);
+  trackedJobs.set(experimentId, {...previous, ...data, project: previous?.project ?? project});
+}
+
+// Jobs recovered from history (a reload mid-run) carry no project; claim the
+// ones whose report title is the open study's.
+function adoptRecoveredJobs() {
+  const key = studyProjectKey();
+  const title = studyTitle();
+  if (!key || !title) return;
+  for (const job of trackedJobs.values()) {
+    if (job.project == null && job.study_title === title) job.project = key;
+  }
+}
+
+function forgetFinishedJobs() {
+  for (const [id, job] of trackedJobs) {
+    if (!isActiveJob(job)) trackedJobs.delete(id);
+  }
+}
+
+function isActiveJob(job) {
+  return ["defined", "queued", "running", "cancelling"].includes(job.status) || Boolean(job.finalizing);
+}
+
+function visibleTrackedJobs() {
+  const key = studyProjectKey();
+  return key ? [...trackedJobs.values()].filter((job) => job.project === key) : [];
+}
+
+// Errored and cancelled points count as failed in the engine; split them out
+// so a run where LTspice never produced output does not read as
+// "0 pass · 8 fail", and points a cancel interrupted do not read as failures.
+function jobPointSummary(job) {
+  const finished = Number(job.finished_points || 0);
+  const total = Number(job.point_count || 0);
+  const errored = Number(job.error_points || 0);
+  const cancelled = Number(job.cancelled_points || 0);
+  const failed = Math.max(0, Number(job.failed_points || 0) - errored - cancelled);
+  const parts = [`${finished}/${total} points`, `${job.passed_points || 0} pass`, `${failed} fail`];
+  if (errored) parts.push(`${errored} error`);
+  if (cancelled) parts.push(`${cancelled} interrupted`);
+  return parts.join(" · ");
+}
+
+function jobAllErrored(job) {
+  const finished = Number(job.finished_points || 0);
+  return finished > 0 && Number(job.error_points || 0) >= finished;
+}
+
+function jobStatusLabel(job) {
+  if (job.finalizing) return ["building report", "active"];
+  if (job.status === "completed" && jobAllErrored(job)) return ["no results", "failed"];
+  if (job.status === "completed" && Number(job.error_points || 0) > 0) return ["completed with errors", "defined"];
+  return [job.status, statusClass(job.status)];
+}
+
+function jobErrorNote(job) {
+  const errored = Number(job.error_points || 0);
+  const reason = job.point_error || job.error;
+  if (!errored && !job.error) return null;
+  const note = document.createElement("span");
+  note.className = "job-error";
+  note.textContent = errored
+    ? `${errored} point${errored === 1 ? "" : "s"} did not simulate${reason ? `: ${reason}` : "."}`
+    : reason;
+  return note;
+}
+
+function jobDisplayName(job) {
+  const title = job.study_title || "";
+  const name = job.experiment_name || job.name || "";
+  if (title && name) return `${title} · ${name}`;
+  return title || name || "Experiment";
+}
+
+let jobPollFailures = 0;
+let jobPollError = "";
+const JOB_POLL_MAX_FAILURES = 6;
+
+function jobPollProblem() {
+  if (!jobPollError) return null;
+  const row = document.createElement("div");
+  row.className = "poll-problem";
+  row.setAttribute("role", "alert");
+  const text = document.createElement("span");
+  text.textContent = jobPollFailures >= JOB_POLL_MAX_FAILURES
+    ? `Status unavailable: ${jobPollError}`
+    : `Status unavailable, retrying: ${jobPollError}`;
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "compact-button";
+  retry.textContent = "Retry";
+  retry.addEventListener("click", () => {
+    jobPollFailures = 0;
+    scheduleJobPoll(0);
+  });
+  row.append(text, retry);
+  return row;
+}
+
 function renderTrackedJobs() {
   const container = byId("launch-result");
-  if (trackedJobs.size === 0) {
+  const jobs = visibleTrackedJobs();
+  if (jobs.length === 0) {
     container.hidden = true;
     container.replaceChildren();
     return;
   }
   const title = document.createElement("h3");
   title.textContent = "Durable local execution";
-  const cards = [...trackedJobs.values()].map((job) => {
+  const cards = jobs.map((job) => {
     const card = document.createElement("div");
     card.className = "tracked-job";
     const heading = document.createElement("div");
     const identity = document.createElement("strong");
     identity.textContent = String(job.name || "experiment").toUpperCase();
     const status = document.createElement("span");
-    status.className = `job-status ${statusClass(job.status)}`;
-    status.textContent = job.finalizing ? "building report" : job.status;
+    const [statusText, statusTone] = jobStatusLabel(job);
+    status.className = `job-status ${statusTone}`;
+    status.textContent = statusText;
     heading.append(identity, status);
     const progress = document.createElement("div");
     progress.className = "progress-track";
@@ -2588,29 +3020,33 @@ function renderTrackedJobs() {
     bar.style.width = `${total ? Math.min(100, finished / total * 100) : 0}%`;
     progress.append(bar);
     const detail = document.createElement("small");
-    detail.textContent = `${finished}/${total} points · ${job.passed_points || 0} pass · ${job.failed_points || 0} fail`;
+    detail.textContent = jobPointSummary(job);
     const id = document.createElement("code");
     id.textContent = job.experiment_id;
     const actions = document.createElement("div");
     actions.className = "job-actions";
     if (["queued", "running", "cancelling"].includes(job.status)) {
       actions.append(jobActionButton("Cancel", async () => {
-        trackedJobs.set(job.experiment_id, {...job, ...await mutateJob(job.experiment_id, "cancel")});
+        trackJob(job.experiment_id, await mutateJob(job.experiment_id, "cancel"));
         renderTrackedJobs();
         scheduleJobPoll(250);
-      }));
+      }, job.experiment_id));
     }
     if (job.status === "cancelled") {
       actions.append(jobActionButton("Resume unfinished", async () => {
-        trackedJobs.set(job.experiment_id, {...job, ...await mutateJob(job.experiment_id, "resume")});
+        trackJob(job.experiment_id, await mutateJob(job.experiment_id, "resume"));
         renderTrackedJobs();
         scheduleJobPoll(250);
-      }));
+      }, job.experiment_id));
     }
     if (job.report_url) actions.append(reportLink(job.report_url));
-    if (["completed", "failed", "cancelled"].includes(job.status)) {
+    if (["completed", "failed", "cancelled"].includes(job.status) && !jobAllErrored(job)) {
       actions.append(waveformButton(job.experiment_id));
     }
+    const actionError = jobActionError(job.experiment_id);
+    if (actionError) actions.append(actionError);
+    const errorNote = jobErrorNote(job);
+    if (errorNote) actions.append(errorNote);
     if (job.postprocess_error) {
       const error = document.createElement("span");
       error.className = "job-error";
@@ -2620,7 +3056,8 @@ function renderTrackedJobs() {
     card.append(heading, progress, detail, id, actions);
     return card;
   });
-  container.replaceChildren(title, ...cards);
+  const problem = jobPollProblem();
+  container.replaceChildren(title, ...(problem ? [problem] : []), ...cards);
   container.hidden = false;
 }
 
@@ -2639,18 +3076,34 @@ async function refreshTrackedJob(job) {
   trackedJobs.set(job.experiment_id, updated);
 }
 
+// Polls every second while a job is live. A failed read backs off (1s, 2s,
+// 4s ... capped at 30s) and after JOB_POLL_MAX_FAILURES in a row stops,
+// leaving an inline "Status unavailable -- Retry" instead of hammering a
+// server that is down or a job directory that is gone.
 async function pollTrackedJobs() {
   jobPollTimer = null;
-  try {
-    await Promise.all([...trackedJobs.values()].map(refreshTrackedJob));
-    renderTrackedJobs();
-    await loadHistory(false);
-  } catch (error) {
-    renderHistoryErrors([{path: "durable execution", message: error.message}]);
+  const outcomes = await Promise.allSettled([...trackedJobs.values()].map(refreshTrackedJob));
+  const failure = outcomes.find((outcome) => outcome.status === "rejected");
+  if (failure) {
+    jobPollFailures += 1;
+    jobPollError = failure.reason?.message || "the server did not answer";
+  } else {
+    jobPollFailures = 0;
+    jobPollError = "";
   }
-  if ([...trackedJobs.values()].some((job) => ["defined", "queued", "running", "cancelling"].includes(job.status) || job.finalizing)) {
-    scheduleJobPoll(1000);
-  }
+  renderTrackedJobs();
+  if (!failure) await loadHistory(false);
+  renderHistoryJobPollProblem();
+  if (![...trackedJobs.values()].some(isActiveJob)) return;
+  if (jobPollFailures >= JOB_POLL_MAX_FAILURES) return;
+  scheduleJobPoll(failure ? Math.min(30000, 1000 * 2 ** jobPollFailures) : 1000);
+}
+
+function renderHistoryJobPollProblem() {
+  const slot = byId("history-poll-problem");
+  const problem = jobPollProblem();
+  slot.replaceChildren(...(problem ? [problem] : []));
+  slot.hidden = !problem;
 }
 
 function scheduleJobPoll(delay = 1000) {
@@ -2670,6 +3123,13 @@ function renderHistory(result) {
   index.className = result.index.current ? "index-ready" : "index-missing";
   index.title = result.index.message;
 
+  const compare = byId("open-compare");
+  const completed = comparableJobs().length;
+  compare.disabled = completed < 2;
+  compare.title = completed < 2
+    ? `Needs two completed runs to compare (${completed} so far).`
+    : "Diff two finished runs";
+
   const jobs = result.jobs.filter(matchesHistoryFilter).map((job) => {
     const row = document.createElement("div");
     row.className = "history-item";
@@ -2678,12 +3138,14 @@ function renderHistory(result) {
     const identity = document.createElement("div");
     const title = document.createElement("strong");
     const meta = document.createElement("small");
-    title.textContent = job.statistical ? "Statistical experiment" : "Experiment";
-    meta.textContent = `${relativeTime(job.recorded_at)} · ${job.execution_mode} execution`;
+    const kind = job.statistical ? "Statistical experiment" : "Experiment";
+    title.textContent = job.study_title || job.experiment_name ? jobDisplayName(job) : kind;
+    meta.textContent = `${relativeTime(job.recorded_at)} · ${job.study_title || job.experiment_name ? `${kind.toLowerCase()} · ` : ""}${job.execution_mode} execution`;
     identity.append(title, meta);
     const status = document.createElement("span");
-    status.className = `job-status ${statusClass(job.status)}`;
-    status.textContent = job.status;
+    const [statusText, statusTone] = jobStatusLabel(job);
+    status.className = `job-status ${statusTone}`;
+    status.textContent = statusText;
     top.append(identity, status);
 
     const progress = document.createElement("div");
@@ -2696,44 +3158,50 @@ function renderHistory(result) {
     const bottom = document.createElement("div");
     bottom.className = "history-item-bottom";
     const details = document.createElement("span");
-    details.textContent = `${job.finished_points}/${job.point_count} points · ${job.passed_points} pass · ${job.failed_points} fail`;
+    details.textContent = jobPointSummary(job);
     bottom.append(details);
     if (job.report_url) bottom.append(reportLink(job.report_url));
-    bottom.append(waveformButton(job.experiment_id));
-    if (job.status === "completed" && job.statistical) {
+    if (!jobAllErrored(job)) bottom.append(waveformButton(job.experiment_id));
+    if (job.status === "completed" && job.statistical && !jobAllErrored(job)) {
       bottom.append(sensitivityButton(job.experiment_id), boundaryButton(job.experiment_id));
     }
     if (["queued", "running", "cancelling"].includes(job.status)) {
       bottom.append(jobActionButton("Cancel", async () => {
-        trackedJobs.set(job.experiment_id, {name: "recovered", ...job, ...await mutateJob(job.experiment_id, "cancel")});
+        trackJob(job.experiment_id, {name: "recovered", ...job, ...await mutateJob(job.experiment_id, "cancel")});
         renderTrackedJobs();
         scheduleJobPoll(250);
-      }));
+      }, job.experiment_id));
     } else if (job.status === "cancelled") {
       bottom.append(jobActionButton("Resume unfinished", async () => {
-        trackedJobs.set(job.experiment_id, {name: "resumed", ...job, ...await mutateJob(job.experiment_id, "resume")});
+        trackJob(job.experiment_id, {name: "resumed", ...job, ...await mutateJob(job.experiment_id, "resume")});
         renderTrackedJobs();
         scheduleJobPoll(250);
-      }));
+      }, job.experiment_id));
     } else if (job.status === "completed" && !job.report_url) {
       bottom.append(jobActionButton("Build report", async () => {
         await mutateJob(job.experiment_id, "finalize");
         await loadHistory();
-      }));
+      }, job.experiment_id));
     }
+    const actionError = jobActionError(job.experiment_id);
+    if (actionError) bottom.append(actionError);
 
     const id = document.createElement("code");
     id.textContent = job.experiment_id;
-    row.append(top, progress, bottom, id);
+    row.append(top, progress, bottom);
+    const errorNote = jobErrorNote(job);
+    if (errorNote) row.append(errorNote);
+    row.append(id);
     return row;
   });
   byId("job-history").replaceChildren(...(jobs.length ? jobs : [emptyHistory("No durable experiments found.")]));
   for (const job of result.jobs.filter((item) => ["queued", "running", "cancelling"].includes(item.status))) {
-    if (!trackedJobs.has(job.experiment_id)) trackedJobs.set(job.experiment_id, {name: "recovered", ...job});
+    if (!trackedJobs.has(job.experiment_id)) trackJob(job.experiment_id, {name: job.experiment_name || "recovered", ...job});
   }
+  adoptRecoveredJobs();
   if ([...trackedJobs.values()].some((job) => ["queued", "running", "cancelling"].includes(job.status))) {
     renderTrackedJobs();
-    scheduleJobPoll();
+    if (!jobPollTimer && jobPollFailures < JOB_POLL_MAX_FAILURES) scheduleJobPoll();
   }
 
   const studies = result.studies.map((study) => {
@@ -2833,6 +3301,8 @@ async function preview() {
 
 async function freezePlan() {
   if (!recipe || !latestPreview) return;
+  const sequence = ++freezeSequence;
+  const previewed = latestPreview;
   const button = byId("freeze-button");
   button.disabled = true;
   button.textContent = "Freezing…";
@@ -2845,11 +3315,12 @@ async function freezePlan() {
       },
       body: JSON.stringify({
         recipe,
-        expected_recipe_sha256: latestPreview.recipe.sha256,
-        expected_plan_id: latestPreview.plan.plan_id,
+        expected_recipe_sha256: previewed.recipe.sha256,
+        expected_plan_id: previewed.plan.plan_id,
       }),
     });
     const result = await response.json();
+    if (sequence !== freezeSequence) return;
     if (!response.ok) {
       if (result.valid === false) {
         renderPreview(result);
@@ -2857,7 +3328,7 @@ async function freezePlan() {
       }
       throw new Error(result.error?.message || "Plan could not be frozen");
     }
-    frozenLaunch = result;
+    frozenLaunch = {...result, recipe_sha256: previewed.recipe.sha256};
     byId("frozen-plan-id").textContent = result.plan.plan_id;
     byId("confirm-points").textContent = result.plan.point_count.toLocaleString();
     byId("confirm-experiments").textContent = result.execution.experiment_count.toLocaleString();
@@ -2866,6 +3337,7 @@ async function freezePlan() {
     byId("frozen-artifact").textContent = result.plan.artifact;
     byId("execution-acknowledgement").checked = false;
     byId("start-button").disabled = true;
+    byId("start-button").textContent = "Start local study";
     byId("execution-confirmation").hidden = false;
     byId("remote-preview-controls").hidden = false;
     byId("remote-preview-result").hidden = true;
@@ -2873,6 +3345,7 @@ async function freezePlan() {
     byId("launch-result").hidden = true;
     renderErrors([]);
   } catch (error) {
+    if (sequence !== freezeSequence) return;
     renderErrors([{path: "freeze", message: error.message}]);
     button.disabled = latestPreview === null;
   } finally {
@@ -3044,15 +3517,11 @@ function renderRemoteJobs() {
 }
 
 async function loadRemoteJobs() {
-  try {
-    const response = await fetch("/api/remote/jobs");
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error?.message || "Remote jobs could not be read");
-    remoteJobs = new Map((result.jobs || []).map((job) => [job.remote_job_id, job]));
-    renderRemoteJobs();
-  } catch (error) {
-    renderErrors([{path: "remote_jobs", message: error.message}]);
-  }
+  const response = await fetch("/api/remote/jobs");
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error?.message || "Remote jobs could not be read");
+  remoteJobs = new Map((result.jobs || []).map((job) => [job.remote_job_id, job]));
+  renderRemoteJobs();
 }
 
 async function mutateRemoteJob(remoteJobId, action, button) {
@@ -3120,14 +3589,18 @@ async function dispatchRemoteStudy() {
 
 function renderLaunchResult(result) {
   for (const experiment of result.experiments) {
-    trackedJobs.set(experiment.experiment_id, {
+    trackJob(experiment.experiment_id, {
       ...experiment,
+      study_title: studyTitle(),
+      experiment_name: experiment.name,
       finished_points: 0,
       passed_points: 0,
       failed_points: 0,
+      error_points: 0,
       report_available: false,
-    });
+    }, studyProjectKey());
   }
+  jobPollFailures = 0;
   renderTrackedJobs();
   scheduleJobPoll(250);
 }
@@ -3158,7 +3631,7 @@ async function startStudy() {
     await loadHistory();
   } catch (error) {
     renderErrors([{path: "execution", message: error.message}]);
-    button.disabled = false;
+    syncStartButton("start-button");
     button.textContent = "Start local study";
   }
 }
@@ -3175,8 +3648,8 @@ function renderProjectsError(message) {
 }
 
 async function openProject(project) {
-  const dirty = project.kind === "optimization" ? optimizationDirty : studyDirty;
-  const kind = project.kind === "optimization" ? "optimization recipe" : "study recipe";
+  const dirty = project.kind === "optimization" ? optimizationDirty : studyDirty || hasUnsavedNetlistEdits();
+  const kind = project.kind === "optimization" ? "optimization recipe" : "study recipe and netlists";
   if (!confirmDiscard(dirty, `Opening "${project.name}" will discard unsaved changes to the current ${kind}. Continue?`)) return;
   try {
     const response = await fetch(`/api/projects/${encodeURIComponent(project.slug)}/recipe`);
@@ -3192,12 +3665,17 @@ async function openProject(project) {
       frozenQualificationLaunch = null;
       byId("optimization-results").hidden = true;
       optimizationDisplayUnits = new WeakMap();
+      clearOptimizationJob();
       renderOptimizationEditors();
       await previewOptimization();
+      recoverOptimizationJob().catch(() => {});
       showView("optimization");
     } else {
       setCurrentStudyProject(project.slug, project.path);
       recipe = loaded;
+      netlistEdits.clear();
+      forgetFinishedJobs();
+      adoptRecoveredJobs();
       variableDisplayUnits = new WeakMap();
       cornerDisplayUnits = new WeakMap();
       invalidateFrozenPlan();
@@ -3210,6 +3688,26 @@ async function openProject(project) {
     }
   } catch (error) {
     renderProjectsError(`${project.name}: ${error.message}`);
+  }
+}
+
+// The editor keeps the deleted project's recipe open (it may be the only
+// copy left), but it is no longer attached to a folder: Save falls back to a
+// download instead of writing to a project that is gone.
+function detachDeletedProject(project) {
+  const warning = (statusId, dirtySetter) => {
+    markDirty(statusId, dirtySetter);
+    byId(statusId).textContent = `"${project.name}" was deleted. This recipe is only in the browser now; Save recipe downloads it.`;
+  };
+  if (project.slug === currentStudyProjectSlug) {
+    setCurrentStudyProject(null, null);
+    warning("save-status", (v) => { studyDirty = v; });
+    renderProjectsError(`"${project.name}" was open in Study setup. Its recipe stays in the editor, detached from the deleted folder.`);
+  }
+  if (project.slug === currentOptimizationProjectSlug) {
+    setCurrentOptimizationProject(null, null);
+    warning("optimization-save-status", (v) => { optimizationDirty = v; });
+    renderProjectsError(`"${project.name}" was open in Optimization. Its recipe stays in the editor, detached from the deleted folder.`);
   }
 }
 
@@ -3278,6 +3776,7 @@ function renderProjects(projects) {
             throw new Error(result.error?.message || "Project could not be deleted");
           }
           renderProjectsError(null);
+          detachDeletedProject(project);
           await loadProjects();
         } catch (error) {
           renderProjectsError(`${project.name}: ${error.message}`);
@@ -3321,18 +3820,115 @@ async function loadInitialState() {
   byId("workspace").textContent = session.workspace;
   byId("workspace").title = session.workspace;
   byId("projects-workspace").textContent = session.workspace;
-  await Promise.all([loadMetricSchema(), loadSchematicFiles(), loadNetlistFiles()]);
-  await Promise.all([loadHistory(), loadRemoteJobs(), loadProjects(), loadLtspiceStatus()]);
+  // Each loader reports its own failure; one failing (say the remote job
+  // list) must not stop the rest, and the message goes to a banner every
+  // view shows rather than into the Study setup panel.
+  const loaders = [
+    ["Metric definitions", loadMetricSchema],
+    ["Schematic files", loadSchematicFiles],
+    ["Netlist files", loadNetlistFiles],
+    ["Workspace history", loadHistory],
+    ["Remote jobs", loadRemoteJobs],
+    ["Projects", loadProjects],
+    ["LTspice status", loadLtspiceStatus],
+  ];
+  const outcomes = await Promise.allSettled(loaders.map(([, load]) => load()));
+  renderAppErrors(outcomes
+    .map((outcome, index) => [loaders[index][0], outcome])
+    .filter(([, outcome]) => outcome.status === "rejected")
+    .map(([label, outcome]) => `${label}: ${outcome.reason?.message || outcome.reason}`));
+}
+
+function renderAppErrors(messages) {
+  const container = byId("app-errors");
+  if (!messages.length) {
+    container.hidden = true;
+    container.replaceChildren();
+    return;
+  }
+  const title = document.createElement("strong");
+  title.textContent = "Some of this workspace could not be loaded";
+  const list = document.createElement("ul");
+  for (const message of messages) {
+    const item = document.createElement("li");
+    item.textContent = message;
+    list.append(item);
+  }
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "compact-button";
+  retry.textContent = "Reload";
+  retry.addEventListener("click", () => window.location.reload());
+  container.replaceChildren(title, list, retry);
+  container.hidden = false;
 }
 
 async function loadLtspiceStatus() {
-  const response = await fetch("/api/settings/ltspice");
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error?.message || "LTspice status could not be read");
-  renderLtspiceStatus(result);
+  try {
+    const response = await fetch("/api/settings/ltspice");
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "LTspice status could not be read");
+    renderLtspiceStatus(result);
+  } catch (error) {
+    const errorEl = byId("ltspice-settings-error");
+    errorEl.textContent = error.message;
+    errorEl.hidden = false;
+    throw error;
+  }
+}
+
+// Every control that launches LTspice (Simulate once, the three Start
+// buttons) carries data-needs-ltspice. While the executable is missing they
+// stay disabled with the reason shown beside them, instead of launching a
+// job whose every point errors with "LTspice executable not found".
+let ltspiceMissing = false;
+let ltspiceMissingReason = "";
+
+function ltspiceGateNote() {
+  const note = document.createElement("span");
+  note.className = "field-problem ltspice-gate-note";
+  note.hidden = !ltspiceMissing;
+  note.textContent = ltspiceMissingReason;
+  return note;
+}
+
+const START_GATES = [
+  ["start-button", "execution-acknowledgement"],
+  ["optimization-start", "optimization-acknowledgement"],
+  ["qualification-start", "qualification-acknowledgement"],
+];
+
+function syncStartButton(buttonId) {
+  const gate = START_GATES.find(([id]) => id === buttonId);
+  if (!gate) return;
+  const acknowledgement = byId(gate[1]);
+  byId(buttonId).disabled = ltspiceMissing || !acknowledgement.checked || acknowledgement.disabled;
+}
+
+function applyLtspiceGate() {
+  document.querySelectorAll("[data-needs-ltspice]").forEach((button) => {
+    if (START_GATES.some(([id]) => id === button.id)) {
+      syncStartButton(button.id);
+    } else if (ltspiceMissing) {
+      if (!button.disabled) button.dataset.ltspiceBlocked = "true";
+      button.disabled = true;
+    } else if (button.dataset.ltspiceBlocked) {
+      delete button.dataset.ltspiceBlocked;
+      button.disabled = false;
+    }
+  });
+  document.querySelectorAll(".ltspice-gate-note").forEach((note) => {
+    note.hidden = !ltspiceMissing;
+    note.textContent = ltspiceMissingReason;
+  });
 }
 
 function renderLtspiceStatus(status) {
+  ltspiceMissing = !status.exists;
+  ltspiceMissingReason = ltspiceMissing
+    ? `LTspice was not found (${status.executable}). Set its location on the Dashboard to simulate.`
+    : "";
+  applyLtspiceGate();
   byId("ltspice-path").textContent = status.executable;
   byId("ltspice-path").title = status.executable;
   byId("ltspice-path-input").value = "";
@@ -3388,7 +3984,7 @@ for (const id of ["remote-repository", "remote-ref"]) {
   });
 }
 byId("execution-acknowledgement").addEventListener("change", () => {
-  byId("start-button").disabled = !byId("execution-acknowledgement").checked;
+  syncStartButton("start-button");
 });
 byId("start-button").addEventListener("click", startStudy);
 byId("capture-schematic").addEventListener("click", captureSchematic);
@@ -3493,12 +4089,14 @@ byId("add-experiment").addEventListener("click", () => {
 byId("recipe-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!file) return;
-  if (!confirmDiscard(studyDirty, "Loading a different recipe will discard unsaved changes to this one. Continue?")) {
+  if (!confirmDiscard(studyDirty || hasUnsavedNetlistEdits(), "Loading a different recipe will discard unsaved changes to this one and its netlists. Continue?")) {
     event.target.value = "";
     return;
   }
   try {
     recipe = JSON.parse(await file.text());
+    netlistEdits.clear();
+    forgetFinishedJobs();
     // This file has nothing to do with whatever project (if any) was open
     // before -- without clearing this, Save would silently write the newly
     // loaded recipe into the previous project, and an unrelated netlist
@@ -3532,6 +4130,9 @@ byId("save-button").addEventListener("click", async () => {
     markClean("save-status", (v) => { studyDirty = v; });
     return;
   }
+  const button = byId("save-button");
+  button.disabled = true;
+  status.classList.remove("is-error");
   status.textContent = "Saving…";
   try {
     const response = await fetch(`/api/projects/${encodeURIComponent(currentStudyProjectSlug)}/recipe`, {
@@ -3549,7 +4150,11 @@ byId("save-button").addEventListener("click", async () => {
     status.textContent = "Saved.";
     loadProjects();
   } catch (error) {
-    status.textContent = error.message;
+    status.classList.remove("unsaved");
+    status.classList.add("is-error");
+    status.textContent = `Not saved: ${error.message}`;
+  } finally {
+    button.disabled = false;
   }
 });
 byId("refresh-history").addEventListener("click", loadHistory);
@@ -3559,7 +4164,7 @@ byId("refresh-netlists").addEventListener("click", async () => {
   button.disabled = true;
   try {
     await loadNetlistFiles();
-    schedulePreview();
+    requestPreview();
   } catch (error) {
     renderScopedErrors([{path: "experiments", message: error.message}]);
   } finally {
@@ -3642,5 +4247,5 @@ byId("theme-select").addEventListener("change", (event) => {
 });
 
 loadInitialState().catch((error) => {
-  renderPreview({valid: false, errors: [{path: "$", message: error.message}]});
+  renderAppErrors([error.message]);
 });

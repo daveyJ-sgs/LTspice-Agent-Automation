@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LTspice System Builder</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%23e08a4b%27/%3E%3Ctext x=%2716%27 y=%2721%27 font-family=%27monospace%27 font-size=%2713%27 font-weight=%27700%27 text-anchor=%27middle%27 fill=%27%231a1109%27%3ESB%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
@@ -13,6 +14,11 @@
         <span class="brand-mark" aria-hidden="true">SB</span>
         <span><strong>LTspice</strong> System Builder</span>
       </a>
+      <button type="button" id="nav-toggle" class="nav-toggle" aria-expanded="false" aria-controls="sidebar-drawer">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <span>Menu</span>
+      </button>
+      <div id="sidebar-drawer" class="sidebar-drawer">
       <nav class="tool-nav" aria-label="System Builder sections">
         <button type="button" class="nav-link" data-view="dashboard" aria-current="page">
           <svg class="nav-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="1.5" y="1.5" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"/><rect x="8.5" y="1.5" width="6" height="9" rx="1.2" stroke="currentColor" stroke-width="1.3"/><rect x="1.5" y="9.5" width="6" height="5" rx="1.2" stroke="currentColor" stroke-width="1.3"/></svg>
@@ -66,6 +72,7 @@
           </select>
         </div>
       </div>
+      </div>
     </aside>
 
     <div class="app-content">
@@ -74,6 +81,7 @@
       </header>
 
       <main>
+    <div id="app-errors" class="errors app-errors" role="alert" hidden></div>
     <section id="dashboard" class="dashboard-section">
       <section class="tool-intro">
         <div>
@@ -243,15 +251,15 @@
         <div class="field-grid">
           <label>
             <span>Samples</span>
-            <input id="sample-count" type="number" min="1" max="1000" step="1" value="12">
+            <input id="sample-count" data-path="plan.sample_count" type="number" min="1" max="1000" step="1" value="12">
           </label>
           <label>
             <span>Seed</span>
-            <input id="seed" type="number" step="1" value="20260825">
+            <input id="seed" data-path="plan.seed" type="number" step="1" value="20260825">
           </label>
           <label class="wide-field">
             <span>Sampling method</span>
-            <select id="sampling-method">
+            <select id="sampling-method" data-path="plan.sampling_method">
               <option value="halton">Digit-scrambled Halton</option>
               <option value="latin_hypercube">Latin hypercube</option>
               <option value="independent">Independent random</option>
@@ -259,7 +267,7 @@
           </label>
           <label>
             <span>Parallel LTspice runs</span>
-            <input id="max-concurrency" type="number" min="1" max="4" step="1" value="2">
+            <input id="max-concurrency" data-path="execution.max_concurrency" type="number" min="1" max="4" step="1" value="2">
             <span class="field-hint">Up to 4. Higher finishes sooner and loads the machine harder.</span>
           </label>
           <label class="checkbox-field">
@@ -271,8 +279,8 @@
 
         <div class="button-row">
           <button id="preview-button" class="primary-button" type="button">Preview resolved plan</button>
-          <label class="secondary-button" for="recipe-file">Load recipe</label>
-          <input id="recipe-file" class="visually-hidden" type="file" accept=".json,.ltstudy.json,application/json">
+          <button type="button" class="secondary-button" data-file-input="recipe-file">Load recipe</button>
+          <input id="recipe-file" class="visually-hidden" type="file" tabindex="-1" aria-hidden="true" accept=".json,.ltstudy.json,application/json">
           <button id="save-button" class="text-button" type="button">Save recipe</button>
           <span id="save-status" class="muted-copy save-status"></span>
         </div>
@@ -289,7 +297,7 @@
         </div>
         <div class="table-wrap">
           <table class="editor-table variable-table">
-            <thead><tr><th>Name</th><th>Distribution</th><th>Nominal</th><th>Tolerance</th><th>Minimum</th><th>Maximum</th><th>Unit</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Distribution</th><th>Unit</th><th>Nominal</th><th><abbr title="One standard deviation, in the variable's own unit">σ (1-sigma)</abbr></th><th>Minimum</th><th>Maximum</th><th><span class="visually-hidden">Remove</span></th></tr></thead>
             <tbody id="variables"></tbody>
           </table>
         </div>
@@ -323,8 +331,8 @@
           <div class="heading-actions">
             <span id="requirement-count" class="count-badge">—</span>
             <button id="refresh-netlists" class="compact-button" type="button" title="Rescan the workspace for netlist files, e.g. one you just exported from LTspice">↻ Netlists</button>
-            <label class="compact-button" for="netlist-import-input" title="Bring in a .cir/.net file from anywhere on your computer">⇧ Import netlist</label>
-            <input id="netlist-import-input" class="visually-hidden" type="file" accept=".cir,.net">
+            <button type="button" class="compact-button" data-file-input="netlist-import-input" title="Bring in a .cir/.net file from anywhere on your computer">⇧ Import netlist</button>
+            <input id="netlist-import-input" class="visually-hidden" type="file" tabindex="-1" aria-hidden="true" accept=".cir,.net">
             <button id="add-experiment" class="compact-button" type="button">+ Experiment</button>
           </div>
         </div>
@@ -391,7 +399,8 @@
               <input id="execution-acknowledgement" type="checkbox">
               <span>I understand this will launch LTspice locally and write durable evidence.</span>
             </label>
-            <button id="start-button" class="danger-button" type="button" disabled>Start local study</button>
+            <button id="start-button" class="danger-button" type="button" data-needs-ltspice="true" disabled>Start local study</button>
+            <p class="field-problem ltspice-gate-note" hidden></p>
           </section>
 
           <section id="remote-preview-controls" class="remote-preview" hidden>
@@ -496,8 +505,8 @@
           <p id="optimization-description" class="muted-copy">Edit and preview the design space, then explicitly publish and launch the exact content-addressed workload through the durable optimization engine.</p>
         </div>
         <div class="button-row section-actions">
-          <label class="secondary-button" for="optimization-file">Load .ltopt.json</label>
-          <input id="optimization-file" class="visually-hidden" type="file" accept=".json,.ltopt.json,application/json">
+          <button type="button" class="secondary-button" data-file-input="optimization-file">Load .ltopt.json</button>
+          <input id="optimization-file" class="visually-hidden" type="file" tabindex="-1" aria-hidden="true" accept=".json,.ltopt.json,application/json">
           <button id="optimization-save" class="text-button" type="button">Save recipe</button>
           <span id="optimization-save-status" class="muted-copy save-status"></span>
           <button id="optimization-preview" class="primary-button" type="button">Preview candidate plan</button>
@@ -578,7 +587,8 @@
               <input id="optimization-acknowledgement" type="checkbox">
               <span>I understand this will launch the paired AC and transient LTspice studies locally and write durable evidence.</span>
             </label>
-            <button id="optimization-start" class="danger-button" type="button" disabled>Start local optimization</button>
+            <button id="optimization-start" class="danger-button" type="button" data-needs-ltspice="true" disabled>Start local optimization</button>
+            <p class="field-problem ltspice-gate-note" hidden></p>
           </section>
           <section id="optimization-job" class="launch-result" aria-live="polite" hidden></section>
         </aside>
@@ -708,7 +718,8 @@
           <div class="subsection-heading"><div><p class="step">EXECUTION CONFIRMATION</p><h3>Paired local qualification</h3></div><span class="status-pill valid">Published</span></div>
           <code id="qualification-plan-id" class="artifact-path">—</code>
           <label class="execution-check"><input id="qualification-acknowledgement" type="checkbox"><span>I understand this launches the displayed AC and transient workload locally and writes durable evidence.</span></label>
-          <button id="qualification-start" class="danger-button" type="button" disabled>Start local qualification</button>
+          <button id="qualification-start" class="danger-button" type="button" data-needs-ltspice="true" disabled>Start local qualification</button>
+          <p class="field-problem ltspice-gate-note" hidden></p>
         </section>
         <section id="qualification-job" class="launch-result" hidden></section>
         <section id="qualification-results" class="qualification-results" hidden>
@@ -863,6 +874,7 @@
         </div>
       </section>
 
+      <div id="history-poll-problem" class="poll-slot" hidden></div>
       <div id="history-errors" class="errors" role="alert" hidden></div>
 
       <section id="waveform-panel" class="panel waveform-panel" hidden>
@@ -951,7 +963,7 @@
 
         <article class="editor-card guide-step">
           <div class="editor-card-heading"><strong>5. Declare your variables</strong></div>
-          <p class="muted-copy">In <strong>02 / Variables</strong>: a name (matching the placeholder you just inserted), a distribution, a nominal value, and either a tolerance (Gaussian) or a min/max range. This is the manufacturing-variation model -- what a real production run of this part would actually look like, not just its datasheet-typical value.</p>
+          <p class="muted-copy">In <strong>02 / Variables</strong>: a name (matching the placeholder you just inserted), a distribution, a nominal value, and a σ (one standard deviation, Gaussian only -- the hint beside it shows the ±% of nominal) and a min/max range. This is the manufacturing-variation model -- what a real production run of this part would actually look like, not just its datasheet-typical value.</p>
         </article>
 
         <article class="editor-card guide-step">

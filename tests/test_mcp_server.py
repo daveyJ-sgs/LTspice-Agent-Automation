@@ -3911,6 +3911,17 @@ class MCPServerTests(TemporaryRunsTestCase):
         self.assertEqual(finished["pending_points"], 4)
         self.assertEqual(sorted(calls), [0, 1])
 
+    def test_cancelled_points_are_counted_apart_from_errors(self) -> None:
+        points = [
+            {"simulation_status": "completed", "analyses": [], "all_passed": True},
+            {"simulation_status": "cancelled", "analyses": [], "all_passed": False},
+            {"simulation_status": "failed", "analyses": [], "all_passed": False},
+        ]
+        counts = experiment_engine._experiment_counts(points, 4)  # type: ignore[arg-type]
+        self.assertEqual(counts["failed_points"], 2)
+        self.assertEqual(counts["error_points"], 1)
+        self.assertEqual(counts["cancelled_points"], 1)
+
     def test_cancelled_independent_job_resumes_only_unfinished_points(self) -> None:
         manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
         started = threading.Event()

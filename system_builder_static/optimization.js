@@ -1285,15 +1285,20 @@ function renderQualificationJob(job) {
   for (const child of job.experiments) progress.append(optimizationProgressRow(`${child.name.toUpperCase()} · ${child.status}`, child.finished_points, child.point_count));
   const actions = document.createElement("div"); actions.className = "job-actions";
   if (["defined", "queued", "running", "cancelling"].includes(job.status)) {
-    const cancel = document.createElement("button"); cancel.className = "secondary-button"; cancel.textContent = "Cancel remaining runs"; cancel.addEventListener("click", () => mutateQualificationJob("cancel")); actions.append(cancel);
+    actions.append(parentJobActionButton("Cancel remaining runs", qualificationPoll, () => mutateQualificationJob("cancel")));
   } else if (job.resumable) {
-    const resume = document.createElement("button"); resume.className = "secondary-button"; resume.textContent = "Resume unfinished runs"; resume.addEventListener("click", () => mutateQualificationJob("resume")); actions.append(resume);
+    actions.append(parentJobActionButton("Resume unfinished runs", qualificationPoll, () => mutateQualificationJob("resume")));
   }
+  const actionError = actionErrorNote(qualificationPoll);
+  if (actionError) actions.append(actionError);
   if (job.error) { const error = document.createElement("p"); error.className = "job-error"; error.textContent = job.error; actions.append(error); }
-  box.replaceChildren(title, progress, actions); box.hidden = false;
+  const problem = pollProblemRow(qualificationPoll, pollQualificationJob);
+  box.replaceChildren(title, ...(problem ? [problem] : []), progress, actions); box.hidden = false;
   if (job.results_url) loadQualificationResults(job);
   window.clearTimeout(qualificationPollTimer);
-  if (["defined", "queued", "running", "cancelling"].includes(job.status)) qualificationPollTimer = window.setTimeout(pollQualificationJob, 750);
+  if (["defined", "queued", "running", "cancelling"].includes(job.status) && qualificationPoll.failures < POLL_MAX_FAILURES) {
+    qualificationPollTimer = window.setTimeout(pollQualificationJob, pollDelay(qualificationPoll, 750));
+  }
 }
 
 async function startQualification() {
@@ -1303,19 +1308,36 @@ async function startQualification() {
     const response = await fetch("/api/qualification/start", {method: "POST", headers: {"Content-Type": "application/json", "X-LTspice-System-Builder": "1"}, body: JSON.stringify({launch_token: frozenQualificationLaunch.launch_token, confirmed_total_run_count: frozenQualificationLaunch.execution.total_run_count, acknowledged: true})});
     const result = await response.json(); if (!response.ok) throw new Error(result.error?.message || "Qualification launch failed");
     button.textContent = "Qualification queued"; renderQualificationJob(result);
-  } catch (error) { qualificationErrors([error.message]); button.disabled = false; button.textContent = "Start local qualification"; }
+  } catch (error) { qualificationErrors([error.message]); syncStartButton("qualification-start"); button.textContent = "Start local qualification"; }
 }
 
 async function pollQualificationJob() {
   if (!trackedQualificationJob) return;
-  try { const response = await fetch(`/api/qualification/jobs/${trackedQualificationJob.qualification_job_id}`); const result = await response.json(); if (!response.ok) throw new Error(result.error?.message || "Qualification status is unavailable"); renderQualificationJob(result); }
-  catch (error) { qualificationErrors([error.message]); }
+  const polled = trackedQualificationJob.qualification_job_id;
+  try {
+    const response = await fetch(`/api/qualification/jobs/${encodeURIComponent(polled)}`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Qualification status is unavailable");
+    if (trackedQualificationJob?.qualification_job_id !== polled) return;
+    qualificationPoll.failures = 0;
+    qualificationPoll.error = "";
+    renderQualificationJob(result);
+  } catch (error) {
+    if (trackedQualificationJob?.qualification_job_id !== polled) return;
+    qualificationPoll.failures += 1;
+    qualificationPoll.error = error.message;
+    renderQualificationJob(trackedQualificationJob);
+  }
 }
 
 async function mutateQualificationJob(action) {
   if (!trackedQualificationJob) return;
-  try { const response = await fetch(`/api/qualification/jobs/${trackedQualificationJob.qualification_job_id}/${action}`, {method: "POST", headers: {"Content-Type": "application/json", "X-LTspice-System-Builder": "1"}, body: "{}"}); const result = await response.json(); if (!response.ok) throw new Error(result.error?.message || `Qualification ${action} failed`); renderQualificationJob(result); }
-  catch (error) { qualificationErrors([error.message]); }
+  const response = await fetch(`/api/qualification/jobs/${encodeURIComponent(trackedQualificationJob.qualification_job_id)}/${action}`, {method: "POST", headers: {"Content-Type": "application/json", "X-LTspice-System-Builder": "1"}, body: "{}"});
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error?.message || `Qualification ${action} failed`);
+  qualificationPoll.failures = 0;
+  qualificationPoll.error = "";
+  renderQualificationJob(result);
 }
 
 function qualificationRows(containerId, records, render) {
@@ -1365,6 +1387,77 @@ async function loadOptimizationResults(job) {
   }
 }
 
+// Shared by the optimization and qualification job polls: a failed status
+// read backs off (base, 2x, 4x ... capped at 30s) and after
+// POLL_MAX_FAILURES in a row stops, leaving an inline "Status unavailable --
+// Retry" rather than dying silently on the first network blip.
+const POLL_MAX_FAILURES = 6;
+const optimizationPoll = {failures: 0, error: "", actionError: ""};
+const qualificationPoll = {failures: 0, error: "", actionError: ""};
+
+function pollDelay(poll, base) {
+  return poll.failures ? Math.min(30000, base * 2 ** poll.failures) : base;
+}
+
+function pollProblemRow(poll, retry) {
+  if (!poll.error) return null;
+  const row = document.createElement("div");
+  row.className = "poll-problem";
+  row.setAttribute("role", "alert");
+  const text = document.createElement("span");
+  text.textContent = poll.failures >= POLL_MAX_FAILURES
+    ? `Status unavailable: ${poll.error}`
+    : `Status unavailable, retrying: ${poll.error}`;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "compact-button";
+  button.textContent = "Retry";
+  button.addEventListener("click", () => {
+    poll.failures = 0;
+    retry();
+  });
+  row.append(text, button);
+  return row;
+}
+
+// Cancel/Resume for a parent job: disabled while the request is in flight,
+// and a failure is shown beside the button rather than in the plan preview.
+function parentJobActionButton(label, poll, action) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary-button";
+  button.textContent = label;
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    poll.actionError = "";
+    button.parentElement?.querySelectorAll(".job-error[role=alert]").forEach((node) => node.remove());
+    try {
+      await action();
+    } catch (error) {
+      poll.actionError = `${label} failed: ${error.message}`;
+      const note = document.createElement("p");
+      note.className = "job-error";
+      note.setAttribute("role", "alert");
+      note.textContent = poll.actionError;
+      button.after(note);
+    } finally {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+    }
+  });
+  return button;
+}
+
+function actionErrorNote(poll) {
+  if (!poll.actionError) return null;
+  const note = document.createElement("p");
+  note.className = "job-error";
+  note.setAttribute("role", "alert");
+  note.textContent = poll.actionError;
+  return note;
+}
+
 function renderOptimizationJob(job) {
   trackedOptimizationJob = job;
   const container = optId("optimization-job");
@@ -1396,22 +1489,21 @@ function renderOptimizationJob(job) {
   evaluation.textContent = job.progress.evaluation === "complete"
     ? "Electrical analysis is complete. See the Pareto tradeoffs and winning candidate below."
     : `Optimization evaluation: ${job.progress.evaluation}.`;
+  const errored = Number(job.progress.error_points || 0);
   const actions = document.createElement("div");
   actions.className = "job-actions";
   if (["defined", "queued", "running", "cancelling"].includes(job.status)) {
-    const cancel = document.createElement("button");
-    cancel.className = "secondary-button";
-    cancel.type = "button";
-    cancel.textContent = "Cancel remaining runs";
-    cancel.addEventListener("click", () => mutateOptimizationJob("cancel"));
-    actions.append(cancel);
+    actions.append(parentJobActionButton("Cancel remaining runs", optimizationPoll, () => mutateOptimizationJob("cancel")));
   } else if (job.resumable) {
-    const resume = document.createElement("button");
-    resume.className = "secondary-button";
-    resume.type = "button";
-    resume.textContent = "Resume unfinished runs";
-    resume.addEventListener("click", () => mutateOptimizationJob("resume"));
-    actions.append(resume);
+    actions.append(parentJobActionButton("Resume unfinished runs", optimizationPoll, () => mutateOptimizationJob("resume")));
+  }
+  const actionError = actionErrorNote(optimizationPoll);
+  if (actionError) actions.append(actionError);
+  if (errored) {
+    const note = document.createElement("p");
+    note.className = "job-error";
+    note.textContent = `${errored} LTspice run${errored === 1 ? "" : "s"} did not simulate.`;
+    actions.append(note);
   }
   if (job.error) {
     const error = document.createElement("p");
@@ -1419,41 +1511,59 @@ function renderOptimizationJob(job) {
     error.textContent = job.error;
     actions.append(error);
   }
-  container.replaceChildren(heading, structure, progress, evaluation, actions);
+  const problem = pollProblemRow(optimizationPoll, pollOptimizationJob);
+  container.replaceChildren(heading, ...(problem ? [problem] : []), structure, progress, evaluation, actions);
   container.hidden = false;
   if (job.results_url) loadOptimizationResults(job);
   window.clearTimeout(optimizationPollTimer);
-  if (["defined", "queued", "running", "cancelling"].includes(job.status)) {
-    optimizationPollTimer = window.setTimeout(pollOptimizationJob, 750);
+  if (["defined", "queued", "running", "cancelling"].includes(job.status) && optimizationPoll.failures < POLL_MAX_FAILURES) {
+    optimizationPollTimer = window.setTimeout(pollOptimizationJob, pollDelay(optimizationPoll, 750));
   }
 }
 
 async function pollOptimizationJob() {
   if (!trackedOptimizationJob) return;
+  const polled = trackedOptimizationJob.optimization_job_id;
   try {
-    const response = await fetch(`/api/optimization/jobs/${trackedOptimizationJob.optimization_job_id}`);
+    const response = await fetch(`/api/optimization/jobs/${encodeURIComponent(polled)}`);
     const result = await response.json();
     if (!response.ok) throw new Error(result.error?.message || "Optimization status is unavailable");
+    if (trackedOptimizationJob?.optimization_job_id !== polled) return;
+    optimizationPoll.failures = 0;
+    optimizationPoll.error = "";
     renderOptimizationJob(result);
   } catch (error) {
-    renderOptimizationErrors([{path: "optimization job", message: error.message}]);
+    if (trackedOptimizationJob?.optimization_job_id !== polled) return;
+    optimizationPoll.failures += 1;
+    optimizationPoll.error = error.message;
+    renderOptimizationJob(trackedOptimizationJob);
   }
 }
 
 async function mutateOptimizationJob(action) {
   if (!trackedOptimizationJob) return;
-  try {
-    const response = await fetch(`/api/optimization/jobs/${trackedOptimizationJob.optimization_job_id}/${action}`, {
-      method: "POST",
-      headers: {"Content-Type": "application/json", "X-LTspice-System-Builder": "1"},
-      body: "{}",
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error?.message || `Optimization ${action} failed`);
-    renderOptimizationJob(result);
-  } catch (error) {
-    renderOptimizationErrors([{path: `optimization ${action}`, message: error.message}]);
-  }
+  const response = await fetch(`/api/optimization/jobs/${encodeURIComponent(trackedOptimizationJob.optimization_job_id)}/${action}`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json", "X-LTspice-System-Builder": "1"},
+    body: "{}",
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error?.message || `Optimization ${action} failed`);
+  optimizationPoll.failures = 0;
+  optimizationPoll.error = "";
+  renderOptimizationJob(result);
+}
+
+// Forget the job card when a different optimization recipe is opened, so one
+// project's run never shows (or keeps polling) under another's editor.
+function clearOptimizationJob() {
+  window.clearTimeout(optimizationPollTimer);
+  trackedOptimizationJob = null;
+  optimizationPoll.failures = 0;
+  optimizationPoll.error = "";
+  optimizationPoll.actionError = "";
+  optId("optimization-job").hidden = true;
+  optId("optimization-job").replaceChildren();
 }
 
 async function startOptimization() {
@@ -1479,19 +1589,29 @@ async function startOptimization() {
     if (!response.ok) throw new Error(result.error?.message || "Optimization could not be started");
     optId("optimization-acknowledgement").disabled = true;
     button.textContent = "Optimization queued";
+    optimizationPoll.failures = 0;
+    optimizationPoll.error = "";
     renderOptimizationJob(result);
   } catch (error) {
     renderOptimizationErrors([{path: "execution", message: error.message}]);
-    button.disabled = false;
+    syncStartButton("optimization-start");
     button.textContent = "Start local optimization";
   }
 }
 
+// Re-attaches the most recent job for the recipe that is open now, matched by
+// the plan it resolves to -- not simply the newest job in the workspace,
+// which may belong to another project entirely. Called after a recipe is
+// opened or loaded and previewed, so a reload mid-run finds its job again.
 async function recoverOptimizationJob() {
-  const response = await fetch("/api/optimization/jobs?limit=1");
+  const planId = latestOptimizationPreview?.plan?.plan_id;
+  if (!planId || trackedOptimizationJob) return;
+  const response = await fetch("/api/optimization/jobs?limit=32");
   if (!response.ok) return;
   const result = await response.json();
-  if (result.jobs.length) renderOptimizationJob(result.jobs[0]);
+  if (latestOptimizationPreview?.plan?.plan_id !== planId || trackedOptimizationJob) return;
+  const job = (result.jobs || []).find((item) => item.plan_id === planId);
+  if (job) renderOptimizationJob(job);
 }
 
 async function previewOptimization() {
@@ -1526,7 +1646,7 @@ async function previewOptimization() {
 optId("optimization-preview").addEventListener("click", previewOptimization);
 optId("optimization-freeze").addEventListener("click", freezeOptimizationPlan);
 optId("optimization-acknowledgement").addEventListener("change", () => {
-  optId("optimization-start").disabled = !optId("optimization-acknowledgement").checked;
+  syncStartButton("optimization-start");
 });
 optId("optimization-start").addEventListener("click", startOptimization);
 optId("optimization-file").addEventListener("change", async (event) => {
@@ -1542,9 +1662,11 @@ optId("optimization-file").addEventListener("change", async (event) => {
     optId("optimization-save-status").textContent = "";
     optimizationDisplayUnits = new WeakMap();
     displayedOptimizationStudy = null;
+    clearOptimizationJob();
     optId("optimization-results").hidden = true;
     renderOptimizationEditors();
     await previewOptimization();
+    recoverOptimizationJob().catch(() => {});
   } catch (error) {
     renderOptimizationPreview({
       valid: false,
@@ -1571,6 +1693,9 @@ optId("optimization-save").addEventListener("click", async () => {
     markClean("optimization-save-status", (v) => { optimizationDirty = v; });
     return;
   }
+  const button = optId("optimization-save");
+  button.disabled = true;
+  status.classList.remove("is-error");
   status.textContent = "Saving…";
   try {
     const response = await fetch(`/api/projects/${encodeURIComponent(currentOptimizationProjectSlug)}/recipe`, {
@@ -1588,13 +1713,17 @@ optId("optimization-save").addEventListener("click", async () => {
     status.textContent = "Saved.";
     loadProjects();
   } catch (error) {
-    status.textContent = error.message;
+    status.classList.remove("unsaved");
+    status.classList.add("is-error");
+    status.textContent = `Not saved: ${error.message}`;
+  } finally {
+    button.disabled = false;
   }
 });
 optId("qualification-preview").addEventListener("click", previewQualification);
 optId("qualification-freeze").addEventListener("click", freezeQualification);
 optId("qualification-acknowledgement").addEventListener("change", () => {
-  optId("qualification-start").disabled = !optId("qualification-acknowledgement").checked;
+  syncStartButton("qualification-start");
 });
 optId("qualification-start").addEventListener("click", startQualification);
 
