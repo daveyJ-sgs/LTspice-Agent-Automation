@@ -141,7 +141,7 @@ function routeFromHash() {
 
 window.addEventListener("hashchange", routeFromHash);
 window.addEventListener("beforeunload", (event) => {
-  if (!studyDirty && !optimizationDirty) return;
+  if (!studyDirty && !optimizationDirty && !hasUnsavedNetlistEdits()) return;
   event.preventDefault();
   event.returnValue = "";
 });
@@ -285,7 +285,7 @@ function invalidateFrozenPlan() {
   byId("remote-auth-button").disabled = false;
   byId("remote-dispatch-button").disabled = true;
   byId("remote-auth-status").textContent = "GitHub access has not been checked.";
-  if (trackedJobs.size === 0) byId("launch-result").hidden = true;
+  renderTrackedJobs();
   byId("execution-acknowledgement").checked = false;
   byId("execution-acknowledgement").disabled = false;
   byId("start-button").disabled = true;
@@ -455,10 +455,27 @@ async function loadSchematicFiles() {
   populate("schematic-image-files", result.images || []);
 }
 
-// Unsaved edits, keyed by workspace-relative netlist path, so a structural
-// re-render elsewhere (e.g. adding a requirement) doesn't clobber text the
-// user hasn't saved yet. Cleared on an explicit "Refresh netlists" click.
-const netlistEditorBuffers = new Map();
+// Netlist text, keyed by workspace-relative path, in two separate maps: what
+// is on disk (a cache, dropped whenever the file list is rescanned) and what
+// the user has typed but not saved. Keeping them apart means a rescan,
+// import, or structural re-render never throws away an unsaved edit, and the
+// page can tell when the editor and the file Simulate once runs disagree.
+const netlistDiskText = new Map();
+const netlistEdits = new Map();
+
+function netlistText(path) {
+  return netlistEdits.has(path) ? netlistEdits.get(path) : netlistDiskText.get(path);
+}
+
+function hasUnsavedNetlistEdits() {
+  return netlistEdits.size > 0;
+}
+
+function recordNetlistEdit(path, text) {
+  if (!path) return;
+  if (netlistDiskText.has(path) && netlistDiskText.get(path) === text) netlistEdits.delete(path);
+  else netlistEdits.set(path, text);
+}
 
 // Served from the measurement registries by /api/metrics, so the requirement
 // form offers exactly the parameters each metric actually reads instead of a
@@ -539,7 +556,8 @@ const netlistTextRequests = new Set();
 function experimentNetlistText(experiment) {
   const path = experiment?.netlist_path;
   if (!path) return null;
-  if (netlistEditorBuffers.has(path)) return netlistEditorBuffers.get(path);
+  const known = netlistText(path);
+  if (known !== undefined) return known;
   requestNetlistText(path);
   return null;
 }
@@ -551,7 +569,7 @@ async function requestNetlistText(path) {
     const response = await fetch(`/api/recipe/netlist?path=${encodeURIComponent(path)}`);
     const result = await response.json();
     if (!response.ok) return;
-    netlistEditorBuffers.set(path, result.content);
+    netlistDiskText.set(path, result.content);
     if (recipe) populateExperiments();
   } catch (_) {
     // The hint is an aid; the backend still range-checks every frequency.
@@ -565,13 +583,16 @@ async function loadNetlistFiles() {
   const result = await response.json();
   if (!response.ok) throw new Error(result.error?.message || "Netlist files could not be listed");
   netlistFiles = result.files || [];
-  netlistEditorBuffers.clear();
+  // Only the disk cache: a file may have changed on disk (re-exported from
+  // LTspice), but text typed into an editor stays until it is saved.
+  netlistDiskText.clear();
   if (recipe) populateExperiments();
 }
 
 function buildNetlistEditor(experiment) {
   const container = document.createElement("div");
   container.className = "netlist-editor";
+  const path = experiment.netlist_path;
 
   const toolbar = document.createElement("div");
   toolbar.className = "netlist-editor-toolbar";
@@ -586,6 +607,33 @@ function buildNetlistEditor(experiment) {
   textarea.rows = 14;
   textarea.disabled = true;
   textarea.placeholder = "Pick a netlist above to view and edit its text here.";
+  textarea.setAttribute(
+    "aria-label",
+    path ? `Netlist text for ${path.split("/").pop()}` : "Netlist text",
+  );
+
+  const status = document.createElement("span");
+  status.className = "muted-copy netlist-editor-status";
+  status.setAttribute("aria-live", "polite");
+
+  function setStatus(message, tone = "") {
+    status.textContent = message;
+    status.classList.toggle("unsaved", tone === "unsaved");
+    status.classList.toggle("is-error", tone === "error");
+  }
+
+  function showDirtyState() {
+    if (netlistEdits.has(path)) {
+      setStatus("Unsaved edits — save the netlist before simulating or starting a study.", "unsaved");
+    } else if (status.classList.contains("unsaved")) {
+      setStatus("");
+    }
+  }
+
+  function edited() {
+    recordNetlistEdit(path, textarea.value);
+    showDirtyState();
+  }
 
   for (const variable of (recipe.plan.variables || [])) {
     if (!variable.name) continue;
@@ -599,7 +647,7 @@ function buildNetlistEditor(experiment) {
       const start = textarea.selectionStart ?? textarea.value.length;
       const end = textarea.selectionEnd ?? textarea.value.length;
       textarea.value = textarea.value.slice(0, start) + insertText + textarea.value.slice(end);
-      netlistEditorBuffers.set(experiment.netlist_path, textarea.value);
+      edited();
       const cursor = start + insertText.length;
       textarea.focus();
       textarea.setSelectionRange(cursor, cursor);
@@ -607,12 +655,45 @@ function buildNetlistEditor(experiment) {
     toolbar.append(button);
   }
 
-  textarea.addEventListener("input", () => {
-    netlistEditorBuffers.set(experiment.netlist_path, textarea.value);
-  });
+  textarea.addEventListener("input", edited);
 
-  const status = document.createElement("span");
-  status.className = "muted-copy netlist-editor-status";
+  const saveButton = document.createElement("button");
+  saveButton.type = "button";
+  saveButton.className = "primary-button";
+  saveButton.textContent = "Save netlist";
+  saveButton.disabled = true;
+
+  async function saveNetlist() {
+    const text = textarea.value;
+    const response = await fetch(`/api/recipe/netlist?path=${encodeURIComponent(path)}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LTspice-System-Builder": "1",
+      },
+      body: JSON.stringify({content: text}),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "Netlist could not be saved");
+    netlistDiskText.set(path, text);
+    recordNetlistEdit(path, textarea.value);
+  }
+
+  saveButton.addEventListener("click", async () => {
+    if (!path) return;
+    saveButton.disabled = true;
+    setStatus("Saving…");
+    try {
+      await saveNetlist();
+      setStatus("Saved.");
+      showDirtyState();
+      requestPreview();
+    } catch (error) {
+      setStatus(error.message, "error");
+    } finally {
+      saveButton.disabled = false;
+    }
+  });
 
   const runButton = document.createElement("button");
   runButton.type = "button";
@@ -620,11 +701,26 @@ function buildNetlistEditor(experiment) {
   runButton.textContent = "Simulate once";
   runButton.title = "Run this deck through LTspice now, without defining a study";
   runButton.disabled = true;
+  runButton.dataset.needsLtspice = "true";
   runButton.addEventListener("click", async () => {
-    const path = experiment.netlist_path;
     if (!path) return;
+    // Simulate once runs the file on disk, so an unsaved edit would silently
+    // not be what gets simulated.
+    if (netlistEdits.has(path)) {
+      if (!window.confirm("This netlist has unsaved edits, and Simulate once runs the saved file. Save your edits and simulate?")) return;
+      runButton.disabled = true;
+      setStatus("Saving…");
+      try {
+        await saveNetlist();
+        requestPreview();
+      } catch (error) {
+        setStatus(error.message, "error");
+        runButton.disabled = false;
+        return;
+      }
+    }
     runButton.disabled = true;
-    status.textContent = "Simulating\u2026";
+    setStatus("Simulating…");
     try {
       const response = await fetch("/api/netlist/run", {
         method: "POST",
@@ -637,78 +733,51 @@ function buildNetlistEditor(experiment) {
       const result = await response.json();
       if (!response.ok) throw new Error(result.error?.message || "Simulation failed");
       const captures = result.captures || [];
-      status.textContent = `${result.status} \u00b7 ${captures.length} capture${captures.length === 1 ? "" : "s"}`;
+      setStatus(`${result.status} · ${captures.length} capture${captures.length === 1 ? "" : "s"}`);
       if (captures.length) {
         showView("history");
         openWaveforms(result.run_id);
       }
     } catch (error) {
-      status.textContent = error.message;
+      setStatus(error.message, "error");
     } finally {
       runButton.disabled = false;
-    }
-  });
-
-  const saveButton = document.createElement("button");
-  saveButton.type = "button";
-  saveButton.className = "primary-button";
-  saveButton.textContent = "Save netlist";
-  saveButton.disabled = true;
-  saveButton.addEventListener("click", async () => {
-    const path = experiment.netlist_path;
-    if (!path) return;
-    saveButton.disabled = true;
-    status.textContent = "Saving…";
-    try {
-      const response = await fetch(`/api/recipe/netlist?path=${encodeURIComponent(path)}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "X-LTspice-System-Builder": "1",
-        },
-        body: JSON.stringify({content: textarea.value}),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error?.message || "Netlist could not be saved");
-      netlistEditorBuffers.set(path, textarea.value);
-      status.textContent = "Saved.";
-      requestPreview();
-    } catch (error) {
-      status.textContent = error.message;
-    } finally {
-      saveButton.disabled = false;
+      applyLtspiceGate();
     }
   });
 
   const buttonRow = document.createElement("div");
   buttonRow.className = "button-row";
-  buttonRow.append(saveButton, runButton, status);
+  buttonRow.append(saveButton, runButton, status, ltspiceGateNote());
 
   container.append(toolbar, textarea, buttonRow);
 
+  const enable = (text) => {
+    textarea.value = text;
+    textarea.disabled = false;
+    saveButton.disabled = false;
+    runButton.disabled = false;
+    applyLtspiceGate();
+    showDirtyState();
+  };
+
   (async () => {
-    const path = experiment.netlist_path;
     if (!path) return;
-    if (netlistEditorBuffers.has(path)) {
-      textarea.value = netlistEditorBuffers.get(path);
-      textarea.disabled = false;
-      saveButton.disabled = false;
-      runButton.disabled = false;
+    const known = netlistText(path);
+    if (known !== undefined) {
+      enable(known);
       return;
     }
-    status.textContent = "Loading…";
+    setStatus("Loading…");
     try {
       const response = await fetch(`/api/recipe/netlist?path=${encodeURIComponent(path)}`);
       const result = await response.json();
       if (!response.ok) throw new Error(result.error?.message || "Netlist could not be loaded");
-      textarea.value = result.content;
-      netlistEditorBuffers.set(path, result.content);
-      textarea.disabled = false;
-      saveButton.disabled = false;
-      runButton.disabled = false;
-      status.textContent = "";
+      netlistDiskText.set(path, result.content);
+      setStatus("");
+      enable(netlistText(path));
     } catch (error) {
-      status.textContent = error.message;
+      setStatus(error.message, "error");
     }
   })();
 
@@ -1783,7 +1852,12 @@ async function openWaveforms(experimentId) {
     byId("waveform-plot").replaceChildren();
     byId("waveform-traces").replaceChildren();
     byId("waveform-meta").textContent = "";
-    waveformError("This run wrote no .raw captures. Compressed or cleaned runs keep only their report.");
+    const job = trackedJobs.get(experimentId)
+      || (latestHistory?.jobs || []).find((item) => item.experiment_id === experimentId);
+    const errored = Number(job?.error_points || 0);
+    waveformError(errored
+      ? `This run wrote no .raw captures: ${errored} point${errored === 1 ? "" : "s"} did not simulate${job.point_error ? ` (${job.point_error})` : ""}.`
+      : "This run wrote no .raw captures. Compressed or cleaned runs keep only their report.");
     return;
   }
   select.replaceChildren(...waveformCaptures.map((capture) => {
@@ -2034,7 +2108,7 @@ async function advanceBoundary() {
     if (!response.ok) throw new Error(result.error?.message || "Boundary advance failed");
     renderBoundary(result);
     if (result.active_experiment_id) {
-      trackedJobs.set(result.active_experiment_id, {
+      trackJob(result.active_experiment_id, {
         name: "boundary batch",
         experiment_id: result.active_experiment_id,
         status: "running",
@@ -2142,7 +2216,7 @@ async function runSensitivity() {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error?.message || "Sensitivity study failed");
-    trackedJobs.set(result.experiment_id, {name: "sensitivity", ...result});
+    trackJob(result.experiment_id, {name: "sensitivity", ...result});
     renderTrackedJobs();
     scheduleJobPoll(250);
     sensitivityError("");
@@ -2608,19 +2682,40 @@ function reportLink(url, label = "Open report ↗") {
   return link;
 }
 
-function jobActionButton(label, action, className = "compact-button") {
+// Errors from Cancel/Resume/Build report, keyed by experiment id, so they
+// render next to the button that failed -- in whichever view it lives -- and
+// survive the re-render the next status poll does.
+const jobActionErrors = new Map();
+
+function jobActionError(experimentId) {
+  const message = jobActionErrors.get(experimentId);
+  if (!message) return null;
+  const error = document.createElement("span");
+  error.className = "job-error";
+  error.setAttribute("role", "alert");
+  error.textContent = message;
+  return error;
+}
+
+function jobActionButton(label, action, experimentId, className = "compact-button") {
   const button = document.createElement("button");
   button.type = "button";
   button.className = className;
   button.textContent = label;
   button.addEventListener("click", async () => {
     button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    jobActionErrors.delete(experimentId);
+    button.parentElement?.querySelectorAll(".job-error[role=alert]").forEach((node) => node.remove());
     try {
       await action();
     } catch (error) {
-      renderHistoryErrors([{path: "job action", message: error.message}]);
+      const message = `${label} failed: ${error.message}`;
+      jobActionErrors.set(experimentId, message);
+      button.after(jobActionError(experimentId));
     } finally {
       button.disabled = false;
+      button.removeAttribute("aria-busy");
     }
   });
   return button;
@@ -2636,24 +2731,137 @@ async function mutateJob(experimentId, action) {
   return result;
 }
 
+// Tracked jobs belong to the study that launched them. The Study setup panel
+// shows only the open study's jobs, so opening another project never shows
+// the previous one's cards; polling still covers every tracked job.
+function studyProjectKey() {
+  if (currentStudyProjectSlug) return `project:${currentStudyProjectSlug}`;
+  return recipe ? `recipe:${recipe.name || ""}` : null;
+}
+
+function studyTitle() {
+  return recipe ? (recipe.report_context?.title || recipe.name || "") : "";
+}
+
+function trackJob(experimentId, data, project = null) {
+  const previous = trackedJobs.get(experimentId);
+  trackedJobs.set(experimentId, {...previous, ...data, project: previous?.project ?? project});
+}
+
+// Jobs recovered from history (a reload mid-run) carry no project; claim the
+// ones whose report title is the open study's.
+function adoptRecoveredJobs() {
+  const key = studyProjectKey();
+  const title = studyTitle();
+  if (!key || !title) return;
+  for (const job of trackedJobs.values()) {
+    if (job.project == null && job.study_title === title) job.project = key;
+  }
+}
+
+function forgetFinishedJobs() {
+  for (const [id, job] of trackedJobs) {
+    if (!isActiveJob(job)) trackedJobs.delete(id);
+  }
+}
+
+function isActiveJob(job) {
+  return ["defined", "queued", "running", "cancelling"].includes(job.status) || Boolean(job.finalizing);
+}
+
+function visibleTrackedJobs() {
+  const key = studyProjectKey();
+  return key ? [...trackedJobs.values()].filter((job) => job.project === key) : [];
+}
+
+// Errored points count as failed in the engine; split them out so a run
+// where LTspice never produced output does not read as "0 pass · 8 fail".
+function jobPointSummary(job) {
+  const finished = Number(job.finished_points || 0);
+  const total = Number(job.point_count || 0);
+  const errored = Number(job.error_points || 0);
+  const failed = Math.max(0, Number(job.failed_points || 0) - errored);
+  const parts = [`${finished}/${total} points`, `${job.passed_points || 0} pass`, `${failed} fail`];
+  if (errored) parts.push(`${errored} error`);
+  return parts.join(" · ");
+}
+
+function jobAllErrored(job) {
+  const finished = Number(job.finished_points || 0);
+  return finished > 0 && Number(job.error_points || 0) >= finished;
+}
+
+function jobStatusLabel(job) {
+  if (job.finalizing) return ["building report", "active"];
+  if (job.status === "completed" && jobAllErrored(job)) return ["no results", "failed"];
+  if (job.status === "completed" && Number(job.error_points || 0) > 0) return ["completed with errors", "defined"];
+  return [job.status, statusClass(job.status)];
+}
+
+function jobErrorNote(job) {
+  const errored = Number(job.error_points || 0);
+  const reason = job.point_error || job.error;
+  if (!errored && !job.error) return null;
+  const note = document.createElement("span");
+  note.className = "job-error";
+  note.textContent = errored
+    ? `${errored} point${errored === 1 ? "" : "s"} did not simulate${reason ? `: ${reason}` : "."}`
+    : reason;
+  return note;
+}
+
+function jobDisplayName(job) {
+  const title = job.study_title || "";
+  const name = job.experiment_name || job.name || "";
+  if (title && name) return `${title} · ${name}`;
+  return title || name || "Experiment";
+}
+
+let jobPollFailures = 0;
+let jobPollError = "";
+const JOB_POLL_MAX_FAILURES = 6;
+
+function jobPollProblem() {
+  if (!jobPollError) return null;
+  const row = document.createElement("div");
+  row.className = "poll-problem";
+  row.setAttribute("role", "alert");
+  const text = document.createElement("span");
+  text.textContent = jobPollFailures >= JOB_POLL_MAX_FAILURES
+    ? `Status unavailable: ${jobPollError}`
+    : `Status unavailable, retrying: ${jobPollError}`;
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "compact-button";
+  retry.textContent = "Retry";
+  retry.addEventListener("click", () => {
+    jobPollFailures = 0;
+    scheduleJobPoll(0);
+  });
+  row.append(text, retry);
+  return row;
+}
+
 function renderTrackedJobs() {
   const container = byId("launch-result");
-  if (trackedJobs.size === 0) {
+  const jobs = visibleTrackedJobs();
+  if (jobs.length === 0) {
     container.hidden = true;
     container.replaceChildren();
     return;
   }
   const title = document.createElement("h3");
   title.textContent = "Durable local execution";
-  const cards = [...trackedJobs.values()].map((job) => {
+  const cards = jobs.map((job) => {
     const card = document.createElement("div");
     card.className = "tracked-job";
     const heading = document.createElement("div");
     const identity = document.createElement("strong");
     identity.textContent = String(job.name || "experiment").toUpperCase();
     const status = document.createElement("span");
-    status.className = `job-status ${statusClass(job.status)}`;
-    status.textContent = job.finalizing ? "building report" : job.status;
+    const [statusText, statusTone] = jobStatusLabel(job);
+    status.className = `job-status ${statusTone}`;
+    status.textContent = statusText;
     heading.append(identity, status);
     const progress = document.createElement("div");
     progress.className = "progress-track";
@@ -2663,29 +2871,33 @@ function renderTrackedJobs() {
     bar.style.width = `${total ? Math.min(100, finished / total * 100) : 0}%`;
     progress.append(bar);
     const detail = document.createElement("small");
-    detail.textContent = `${finished}/${total} points · ${job.passed_points || 0} pass · ${job.failed_points || 0} fail`;
+    detail.textContent = jobPointSummary(job);
     const id = document.createElement("code");
     id.textContent = job.experiment_id;
     const actions = document.createElement("div");
     actions.className = "job-actions";
     if (["queued", "running", "cancelling"].includes(job.status)) {
       actions.append(jobActionButton("Cancel", async () => {
-        trackedJobs.set(job.experiment_id, {...job, ...await mutateJob(job.experiment_id, "cancel")});
+        trackJob(job.experiment_id, await mutateJob(job.experiment_id, "cancel"));
         renderTrackedJobs();
         scheduleJobPoll(250);
-      }));
+      }, job.experiment_id));
     }
     if (job.status === "cancelled") {
       actions.append(jobActionButton("Resume unfinished", async () => {
-        trackedJobs.set(job.experiment_id, {...job, ...await mutateJob(job.experiment_id, "resume")});
+        trackJob(job.experiment_id, await mutateJob(job.experiment_id, "resume"));
         renderTrackedJobs();
         scheduleJobPoll(250);
-      }));
+      }, job.experiment_id));
     }
     if (job.report_url) actions.append(reportLink(job.report_url));
-    if (["completed", "failed", "cancelled"].includes(job.status)) {
+    if (["completed", "failed", "cancelled"].includes(job.status) && !jobAllErrored(job)) {
       actions.append(waveformButton(job.experiment_id));
     }
+    const actionError = jobActionError(job.experiment_id);
+    if (actionError) actions.append(actionError);
+    const errorNote = jobErrorNote(job);
+    if (errorNote) actions.append(errorNote);
     if (job.postprocess_error) {
       const error = document.createElement("span");
       error.className = "job-error";
@@ -2695,7 +2907,8 @@ function renderTrackedJobs() {
     card.append(heading, progress, detail, id, actions);
     return card;
   });
-  container.replaceChildren(title, ...cards);
+  const problem = jobPollProblem();
+  container.replaceChildren(title, ...(problem ? [problem] : []), ...cards);
   container.hidden = false;
 }
 
@@ -2714,18 +2927,34 @@ async function refreshTrackedJob(job) {
   trackedJobs.set(job.experiment_id, updated);
 }
 
+// Polls every second while a job is live. A failed read backs off (1s, 2s,
+// 4s ... capped at 30s) and after JOB_POLL_MAX_FAILURES in a row stops,
+// leaving an inline "Status unavailable -- Retry" instead of hammering a
+// server that is down or a job directory that is gone.
 async function pollTrackedJobs() {
   jobPollTimer = null;
-  try {
-    await Promise.all([...trackedJobs.values()].map(refreshTrackedJob));
-    renderTrackedJobs();
-    await loadHistory(false);
-  } catch (error) {
-    renderHistoryErrors([{path: "durable execution", message: error.message}]);
+  const outcomes = await Promise.allSettled([...trackedJobs.values()].map(refreshTrackedJob));
+  const failure = outcomes.find((outcome) => outcome.status === "rejected");
+  if (failure) {
+    jobPollFailures += 1;
+    jobPollError = failure.reason?.message || "the server did not answer";
+  } else {
+    jobPollFailures = 0;
+    jobPollError = "";
   }
-  if ([...trackedJobs.values()].some((job) => ["defined", "queued", "running", "cancelling"].includes(job.status) || job.finalizing)) {
-    scheduleJobPoll(1000);
-  }
+  renderTrackedJobs();
+  if (!failure) await loadHistory(false);
+  renderHistoryJobPollProblem();
+  if (![...trackedJobs.values()].some(isActiveJob)) return;
+  if (jobPollFailures >= JOB_POLL_MAX_FAILURES) return;
+  scheduleJobPoll(failure ? Math.min(30000, 1000 * 2 ** jobPollFailures) : 1000);
+}
+
+function renderHistoryJobPollProblem() {
+  const slot = byId("history-poll-problem");
+  const problem = jobPollProblem();
+  slot.replaceChildren(...(problem ? [problem] : []));
+  slot.hidden = !problem;
 }
 
 function scheduleJobPoll(delay = 1000) {
@@ -2753,12 +2982,14 @@ function renderHistory(result) {
     const identity = document.createElement("div");
     const title = document.createElement("strong");
     const meta = document.createElement("small");
-    title.textContent = job.statistical ? "Statistical experiment" : "Experiment";
-    meta.textContent = `${relativeTime(job.recorded_at)} · ${job.execution_mode} execution`;
+    const kind = job.statistical ? "Statistical experiment" : "Experiment";
+    title.textContent = job.study_title || job.experiment_name ? jobDisplayName(job) : kind;
+    meta.textContent = `${relativeTime(job.recorded_at)} · ${job.study_title || job.experiment_name ? `${kind.toLowerCase()} · ` : ""}${job.execution_mode} execution`;
     identity.append(title, meta);
     const status = document.createElement("span");
-    status.className = `job-status ${statusClass(job.status)}`;
-    status.textContent = job.status;
+    const [statusText, statusTone] = jobStatusLabel(job);
+    status.className = `job-status ${statusTone}`;
+    status.textContent = statusText;
     top.append(identity, status);
 
     const progress = document.createElement("div");
@@ -2771,44 +3002,50 @@ function renderHistory(result) {
     const bottom = document.createElement("div");
     bottom.className = "history-item-bottom";
     const details = document.createElement("span");
-    details.textContent = `${job.finished_points}/${job.point_count} points · ${job.passed_points} pass · ${job.failed_points} fail`;
+    details.textContent = jobPointSummary(job);
     bottom.append(details);
     if (job.report_url) bottom.append(reportLink(job.report_url));
-    bottom.append(waveformButton(job.experiment_id));
-    if (job.status === "completed" && job.statistical) {
+    if (!jobAllErrored(job)) bottom.append(waveformButton(job.experiment_id));
+    if (job.status === "completed" && job.statistical && !jobAllErrored(job)) {
       bottom.append(sensitivityButton(job.experiment_id), boundaryButton(job.experiment_id));
     }
     if (["queued", "running", "cancelling"].includes(job.status)) {
       bottom.append(jobActionButton("Cancel", async () => {
-        trackedJobs.set(job.experiment_id, {name: "recovered", ...job, ...await mutateJob(job.experiment_id, "cancel")});
+        trackJob(job.experiment_id, {name: "recovered", ...job, ...await mutateJob(job.experiment_id, "cancel")});
         renderTrackedJobs();
         scheduleJobPoll(250);
-      }));
+      }, job.experiment_id));
     } else if (job.status === "cancelled") {
       bottom.append(jobActionButton("Resume unfinished", async () => {
-        trackedJobs.set(job.experiment_id, {name: "resumed", ...job, ...await mutateJob(job.experiment_id, "resume")});
+        trackJob(job.experiment_id, {name: "resumed", ...job, ...await mutateJob(job.experiment_id, "resume")});
         renderTrackedJobs();
         scheduleJobPoll(250);
-      }));
+      }, job.experiment_id));
     } else if (job.status === "completed" && !job.report_url) {
       bottom.append(jobActionButton("Build report", async () => {
         await mutateJob(job.experiment_id, "finalize");
         await loadHistory();
-      }));
+      }, job.experiment_id));
     }
+    const actionError = jobActionError(job.experiment_id);
+    if (actionError) bottom.append(actionError);
 
     const id = document.createElement("code");
     id.textContent = job.experiment_id;
-    row.append(top, progress, bottom, id);
+    row.append(top, progress, bottom);
+    const errorNote = jobErrorNote(job);
+    if (errorNote) row.append(errorNote);
+    row.append(id);
     return row;
   });
   byId("job-history").replaceChildren(...(jobs.length ? jobs : [emptyHistory("No durable experiments found.")]));
   for (const job of result.jobs.filter((item) => ["queued", "running", "cancelling"].includes(item.status))) {
-    if (!trackedJobs.has(job.experiment_id)) trackedJobs.set(job.experiment_id, {name: "recovered", ...job});
+    if (!trackedJobs.has(job.experiment_id)) trackJob(job.experiment_id, {name: job.experiment_name || "recovered", ...job});
   }
+  adoptRecoveredJobs();
   if ([...trackedJobs.values()].some((job) => ["queued", "running", "cancelling"].includes(job.status))) {
     renderTrackedJobs();
-    scheduleJobPoll();
+    if (!jobPollTimer && jobPollFailures < JOB_POLL_MAX_FAILURES) scheduleJobPoll();
   }
 
   const studies = result.studies.map((study) => {
@@ -3199,14 +3436,18 @@ async function dispatchRemoteStudy() {
 
 function renderLaunchResult(result) {
   for (const experiment of result.experiments) {
-    trackedJobs.set(experiment.experiment_id, {
+    trackJob(experiment.experiment_id, {
       ...experiment,
+      study_title: studyTitle(),
+      experiment_name: experiment.name,
       finished_points: 0,
       passed_points: 0,
       failed_points: 0,
+      error_points: 0,
       report_available: false,
-    });
+    }, studyProjectKey());
   }
+  jobPollFailures = 0;
   renderTrackedJobs();
   scheduleJobPoll(250);
 }
@@ -3237,7 +3478,7 @@ async function startStudy() {
     await loadHistory();
   } catch (error) {
     renderErrors([{path: "execution", message: error.message}]);
-    button.disabled = false;
+    syncStartButton("start-button");
     button.textContent = "Start local study";
   }
 }
@@ -3254,8 +3495,8 @@ function renderProjectsError(message) {
 }
 
 async function openProject(project) {
-  const dirty = project.kind === "optimization" ? optimizationDirty : studyDirty;
-  const kind = project.kind === "optimization" ? "optimization recipe" : "study recipe";
+  const dirty = project.kind === "optimization" ? optimizationDirty : studyDirty || hasUnsavedNetlistEdits();
+  const kind = project.kind === "optimization" ? "optimization recipe" : "study recipe and netlists";
   if (!confirmDiscard(dirty, `Opening "${project.name}" will discard unsaved changes to the current ${kind}. Continue?`)) return;
   try {
     const response = await fetch(`/api/projects/${encodeURIComponent(project.slug)}/recipe`);
@@ -3277,6 +3518,9 @@ async function openProject(project) {
     } else {
       setCurrentStudyProject(project.slug, project.path);
       recipe = loaded;
+      netlistEdits.clear();
+      forgetFinishedJobs();
+      adoptRecoveredJobs();
       variableDisplayUnits = new WeakMap();
       cornerDisplayUnits = new WeakMap();
       invalidateFrozenPlan();
@@ -3411,7 +3655,58 @@ async function loadLtspiceStatus() {
   renderLtspiceStatus(result);
 }
 
+// Every control that launches LTspice (Simulate once, the three Start
+// buttons) carries data-needs-ltspice. While the executable is missing they
+// stay disabled with the reason shown beside them, instead of launching a
+// job whose every point errors with "LTspice executable not found".
+let ltspiceMissing = false;
+let ltspiceMissingReason = "";
+
+function ltspiceGateNote() {
+  const note = document.createElement("span");
+  note.className = "field-problem ltspice-gate-note";
+  note.hidden = !ltspiceMissing;
+  note.textContent = ltspiceMissingReason;
+  return note;
+}
+
+const START_GATES = [
+  ["start-button", "execution-acknowledgement"],
+  ["optimization-start", "optimization-acknowledgement"],
+  ["qualification-start", "qualification-acknowledgement"],
+];
+
+function syncStartButton(buttonId) {
+  const gate = START_GATES.find(([id]) => id === buttonId);
+  if (!gate) return;
+  const acknowledgement = byId(gate[1]);
+  byId(buttonId).disabled = ltspiceMissing || !acknowledgement.checked || acknowledgement.disabled;
+}
+
+function applyLtspiceGate() {
+  document.querySelectorAll("[data-needs-ltspice]").forEach((button) => {
+    if (START_GATES.some(([id]) => id === button.id)) {
+      syncStartButton(button.id);
+    } else if (ltspiceMissing) {
+      if (!button.disabled) button.dataset.ltspiceBlocked = "true";
+      button.disabled = true;
+    } else if (button.dataset.ltspiceBlocked) {
+      delete button.dataset.ltspiceBlocked;
+      button.disabled = false;
+    }
+  });
+  document.querySelectorAll(".ltspice-gate-note").forEach((note) => {
+    note.hidden = !ltspiceMissing;
+    note.textContent = ltspiceMissingReason;
+  });
+}
+
 function renderLtspiceStatus(status) {
+  ltspiceMissing = !status.exists;
+  ltspiceMissingReason = ltspiceMissing
+    ? `LTspice was not found (${status.executable}). Set its location on the Dashboard to simulate.`
+    : "";
+  applyLtspiceGate();
   byId("ltspice-path").textContent = status.executable;
   byId("ltspice-path").title = status.executable;
   byId("ltspice-path-input").value = "";
@@ -3467,7 +3762,7 @@ for (const id of ["remote-repository", "remote-ref"]) {
   });
 }
 byId("execution-acknowledgement").addEventListener("change", () => {
-  byId("start-button").disabled = !byId("execution-acknowledgement").checked;
+  syncStartButton("start-button");
 });
 byId("start-button").addEventListener("click", startStudy);
 byId("capture-schematic").addEventListener("click", captureSchematic);
@@ -3572,12 +3867,14 @@ byId("add-experiment").addEventListener("click", () => {
 byId("recipe-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!file) return;
-  if (!confirmDiscard(studyDirty, "Loading a different recipe will discard unsaved changes to this one. Continue?")) {
+  if (!confirmDiscard(studyDirty || hasUnsavedNetlistEdits(), "Loading a different recipe will discard unsaved changes to this one and its netlists. Continue?")) {
     event.target.value = "";
     return;
   }
   try {
     recipe = JSON.parse(await file.text());
+    netlistEdits.clear();
+    forgetFinishedJobs();
     // This file has nothing to do with whatever project (if any) was open
     // before -- without clearing this, Save would silently write the newly
     // loaded recipe into the previous project, and an unrelated netlist

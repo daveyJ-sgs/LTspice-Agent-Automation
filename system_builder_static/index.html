@@ -397,7 +397,8 @@
               <input id="execution-acknowledgement" type="checkbox">
               <span>I understand this will launch LTspice locally and write durable evidence.</span>
             </label>
-            <button id="start-button" class="danger-button" type="button" disabled>Start local study</button>
+            <button id="start-button" class="danger-button" type="button" data-needs-ltspice="true" disabled>Start local study</button>
+            <p class="field-problem ltspice-gate-note" hidden></p>
           </section>
 
           <section id="remote-preview-controls" class="remote-preview" hidden>
@@ -584,7 +585,8 @@
               <input id="optimization-acknowledgement" type="checkbox">
               <span>I understand this will launch the paired AC and transient LTspice studies locally and write durable evidence.</span>
             </label>
-            <button id="optimization-start" class="danger-button" type="button" disabled>Start local optimization</button>
+            <button id="optimization-start" class="danger-button" type="button" data-needs-ltspice="true" disabled>Start local optimization</button>
+            <p class="field-problem ltspice-gate-note" hidden></p>
           </section>
           <section id="optimization-job" class="launch-result" aria-live="polite" hidden></section>
         </aside>
@@ -714,7 +716,8 @@
           <div class="subsection-heading"><div><p class="step">EXECUTION CONFIRMATION</p><h3>Paired local qualification</h3></div><span class="status-pill valid">Published</span></div>
           <code id="qualification-plan-id" class="artifact-path">—</code>
           <label class="execution-check"><input id="qualification-acknowledgement" type="checkbox"><span>I understand this launches the displayed AC and transient workload locally and writes durable evidence.</span></label>
-          <button id="qualification-start" class="danger-button" type="button" disabled>Start local qualification</button>
+          <button id="qualification-start" class="danger-button" type="button" data-needs-ltspice="true" disabled>Start local qualification</button>
+          <p class="field-problem ltspice-gate-note" hidden></p>
         </section>
         <section id="qualification-job" class="launch-result" hidden></section>
         <section id="qualification-results" class="qualification-results" hidden>
@@ -869,6 +872,7 @@
         </div>
       </section>
 
+      <div id="history-poll-problem" class="poll-slot" hidden></div>
       <div id="history-errors" class="errors" role="alert" hidden></div>
 
       <section id="waveform-panel" class="panel waveform-panel" hidden>

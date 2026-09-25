@@ -1303,7 +1303,7 @@ async function startQualification() {
     const response = await fetch("/api/qualification/start", {method: "POST", headers: {"Content-Type": "application/json", "X-LTspice-System-Builder": "1"}, body: JSON.stringify({launch_token: frozenQualificationLaunch.launch_token, confirmed_total_run_count: frozenQualificationLaunch.execution.total_run_count, acknowledged: true})});
     const result = await response.json(); if (!response.ok) throw new Error(result.error?.message || "Qualification launch failed");
     button.textContent = "Qualification queued"; renderQualificationJob(result);
-  } catch (error) { qualificationErrors([error.message]); button.disabled = false; button.textContent = "Start local qualification"; }
+  } catch (error) { qualificationErrors([error.message]); syncStartButton("qualification-start"); button.textContent = "Start local qualification"; }
 }
 
 async function pollQualificationJob() {
@@ -1482,7 +1482,7 @@ async function startOptimization() {
     renderOptimizationJob(result);
   } catch (error) {
     renderOptimizationErrors([{path: "execution", message: error.message}]);
-    button.disabled = false;
+    syncStartButton("optimization-start");
     button.textContent = "Start local optimization";
   }
 }
@@ -1526,7 +1526,7 @@ async function previewOptimization() {
 optId("optimization-preview").addEventListener("click", previewOptimization);
 optId("optimization-freeze").addEventListener("click", freezeOptimizationPlan);
 optId("optimization-acknowledgement").addEventListener("change", () => {
-  optId("optimization-start").disabled = !optId("optimization-acknowledgement").checked;
+  syncStartButton("optimization-start");
 });
 optId("optimization-start").addEventListener("click", startOptimization);
 optId("optimization-file").addEventListener("change", async (event) => {
@@ -1594,7 +1594,7 @@ optId("optimization-save").addEventListener("click", async () => {
 optId("qualification-preview").addEventListener("click", previewQualification);
 optId("qualification-freeze").addEventListener("click", freezeQualification);
 optId("qualification-acknowledgement").addEventListener("change", () => {
-  optId("qualification-start").disabled = !optId("qualification-acknowledgement").checked;
+  syncStartButton("qualification-start");
 });
 optId("qualification-start").addEventListener("click", startQualification);
 

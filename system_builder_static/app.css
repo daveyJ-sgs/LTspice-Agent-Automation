@@ -670,3 +670,14 @@ td:first-child { color: var(--text); font-weight: 600; }
   .distribution-editor-heading { flex-wrap: wrap; }
   .distribution-editor-heading select { min-width: 0; width: 100%; }
 }
+
+/* Inline status and failure messages that sit beside the control that
+   produced them. */
+.save-status.is-error, .netlist-editor-status.is-error, .muted-copy.is-error { color: var(--danger); font-weight: 600; }
+.netlist-editor-status.unsaved { color: var(--warning); font-weight: 600; }
+.ltspice-gate-note { display: block; margin-top: 8px; }
+.button-row .ltspice-gate-note { flex: 1 1 100%; margin-top: 0; }
+.history-item > .job-error { display: block; margin-top: 8px; overflow-wrap: anywhere; }
+.job-actions .job-error { flex: 1 1 100%; overflow-wrap: anywhere; }
+.poll-problem { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin: 8px 0; padding: 9px 11px; border-left: 3px solid var(--warning); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--warning-soft); color: var(--text); font-size: 12px; }
+.poll-slot { margin-bottom: 14px; }
