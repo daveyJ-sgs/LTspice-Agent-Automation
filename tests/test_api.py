@@ -69,7 +69,8 @@ class ApiTests(TemporaryRunsTestCase):
         with patch.object(api_server, "run_netlist", side_effect=fake_run):
             api_server._execute_simulation({"netlist": netlist}, "run-utf8")
         written = self.runs / "api-inputs" / "run-utf8-request.cir"
-        self.assertEqual(written.read_bytes(), netlist.encode("utf-8"))
+        # Windows writes native CRLF line endings, which LTspice accepts.
+        self.assertEqual(written.read_text(encoding="utf-8"), netlist)
 
     def test_second_server_cannot_share_a_listening_port(self) -> None:
         # Windows SO_REUSEADDR would let the second bind succeed.
