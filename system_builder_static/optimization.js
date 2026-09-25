@@ -1693,6 +1693,9 @@ optId("optimization-save").addEventListener("click", async () => {
     markClean("optimization-save-status", (v) => { optimizationDirty = v; });
     return;
   }
+  const button = optId("optimization-save");
+  button.disabled = true;
+  status.classList.remove("is-error");
   status.textContent = "Saving…";
   try {
     const response = await fetch(`/api/projects/${encodeURIComponent(currentOptimizationProjectSlug)}/recipe`, {
@@ -1710,7 +1713,11 @@ optId("optimization-save").addEventListener("click", async () => {
     status.textContent = "Saved.";
     loadProjects();
   } catch (error) {
-    status.textContent = error.message;
+    status.classList.remove("unsaved");
+    status.classList.add("is-error");
+    status.textContent = `Not saved: ${error.message}`;
+  } finally {
+    button.disabled = false;
   }
 });
 optId("qualification-preview").addEventListener("click", previewQualification);

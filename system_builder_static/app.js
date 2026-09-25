@@ -26,6 +26,7 @@ function markDirty(statusId, flagSetter) {
   flagSetter(true);
   const status = byId(statusId);
   status.textContent = "Unsaved changes";
+  status.classList.remove("is-error");
   status.classList.add("unsaved");
 }
 
@@ -33,7 +34,7 @@ function markClean(statusId, flagSetter) {
   flagSetter(false);
   const status = byId(statusId);
   status.textContent = "";
-  status.classList.remove("unsaved");
+  status.classList.remove("unsaved", "is-error");
 }
 
 // Study and Optimization are independent documents -- each project is only
@@ -3360,15 +3361,11 @@ function renderRemoteJobs() {
 }
 
 async function loadRemoteJobs() {
-  try {
-    const response = await fetch("/api/remote/jobs");
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error?.message || "Remote jobs could not be read");
-    remoteJobs = new Map((result.jobs || []).map((job) => [job.remote_job_id, job]));
-    renderRemoteJobs();
-  } catch (error) {
-    renderErrors([{path: "remote_jobs", message: error.message}]);
-  }
+  const response = await fetch("/api/remote/jobs");
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error?.message || "Remote jobs could not be read");
+  remoteJobs = new Map((result.jobs || []).map((job) => [job.remote_job_id, job]));
+  renderRemoteJobs();
 }
 
 async function mutateRemoteJob(remoteJobId, action, button) {
@@ -3538,6 +3535,26 @@ async function openProject(project) {
   }
 }
 
+// The editor keeps the deleted project's recipe open (it may be the only
+// copy left), but it is no longer attached to a folder: Save falls back to a
+// download instead of writing to a project that is gone.
+function detachDeletedProject(project) {
+  const warning = (statusId, dirtySetter) => {
+    markDirty(statusId, dirtySetter);
+    byId(statusId).textContent = `"${project.name}" was deleted. This recipe is only in the browser now; Save recipe downloads it.`;
+  };
+  if (project.slug === currentStudyProjectSlug) {
+    setCurrentStudyProject(null, null);
+    warning("save-status", (v) => { studyDirty = v; });
+    renderProjectsError(`"${project.name}" was open in Study setup. Its recipe stays in the editor, detached from the deleted folder.`);
+  }
+  if (project.slug === currentOptimizationProjectSlug) {
+    setCurrentOptimizationProject(null, null);
+    warning("optimization-save-status", (v) => { optimizationDirty = v; });
+    renderProjectsError(`"${project.name}" was open in Optimization. Its recipe stays in the editor, detached from the deleted folder.`);
+  }
+}
+
 function renderProjects(projects) {
   const grid = byId("projects-grid");
   byId("projects-empty").hidden = projects.length > 0;
@@ -3603,6 +3620,7 @@ function renderProjects(projects) {
             throw new Error(result.error?.message || "Project could not be deleted");
           }
           renderProjectsError(null);
+          detachDeletedProject(project);
           await loadProjects();
         } catch (error) {
           renderProjectsError(`${project.name}: ${error.message}`);
@@ -3646,15 +3664,61 @@ async function loadInitialState() {
   byId("workspace").textContent = session.workspace;
   byId("workspace").title = session.workspace;
   byId("projects-workspace").textContent = session.workspace;
-  await Promise.all([loadMetricSchema(), loadSchematicFiles(), loadNetlistFiles()]);
-  await Promise.all([loadHistory(), loadRemoteJobs(), loadProjects(), loadLtspiceStatus()]);
+  // Each loader reports its own failure; one failing (say the remote job
+  // list) must not stop the rest, and the message goes to a banner every
+  // view shows rather than into the Study setup panel.
+  const loaders = [
+    ["Metric definitions", loadMetricSchema],
+    ["Schematic files", loadSchematicFiles],
+    ["Netlist files", loadNetlistFiles],
+    ["Workspace history", loadHistory],
+    ["Remote jobs", loadRemoteJobs],
+    ["Projects", loadProjects],
+    ["LTspice status", loadLtspiceStatus],
+  ];
+  const outcomes = await Promise.allSettled(loaders.map(([, load]) => load()));
+  renderAppErrors(outcomes
+    .map((outcome, index) => [loaders[index][0], outcome])
+    .filter(([, outcome]) => outcome.status === "rejected")
+    .map(([label, outcome]) => `${label}: ${outcome.reason?.message || outcome.reason}`));
+}
+
+function renderAppErrors(messages) {
+  const container = byId("app-errors");
+  if (!messages.length) {
+    container.hidden = true;
+    container.replaceChildren();
+    return;
+  }
+  const title = document.createElement("strong");
+  title.textContent = "Some of this workspace could not be loaded";
+  const list = document.createElement("ul");
+  for (const message of messages) {
+    const item = document.createElement("li");
+    item.textContent = message;
+    list.append(item);
+  }
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "compact-button";
+  retry.textContent = "Reload";
+  retry.addEventListener("click", () => window.location.reload());
+  container.replaceChildren(title, list, retry);
+  container.hidden = false;
 }
 
 async function loadLtspiceStatus() {
-  const response = await fetch("/api/settings/ltspice");
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error?.message || "LTspice status could not be read");
-  renderLtspiceStatus(result);
+  try {
+    const response = await fetch("/api/settings/ltspice");
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "LTspice status could not be read");
+    renderLtspiceStatus(result);
+  } catch (error) {
+    const errorEl = byId("ltspice-settings-error");
+    errorEl.textContent = error.message;
+    errorEl.hidden = false;
+    throw error;
+  }
 }
 
 // Every control that launches LTspice (Simulate once, the three Start
@@ -3910,6 +3974,9 @@ byId("save-button").addEventListener("click", async () => {
     markClean("save-status", (v) => { studyDirty = v; });
     return;
   }
+  const button = byId("save-button");
+  button.disabled = true;
+  status.classList.remove("is-error");
   status.textContent = "Saving…";
   try {
     const response = await fetch(`/api/projects/${encodeURIComponent(currentStudyProjectSlug)}/recipe`, {
@@ -3927,7 +3994,11 @@ byId("save-button").addEventListener("click", async () => {
     status.textContent = "Saved.";
     loadProjects();
   } catch (error) {
-    status.textContent = error.message;
+    status.classList.remove("unsaved");
+    status.classList.add("is-error");
+    status.textContent = `Not saved: ${error.message}`;
+  } finally {
+    button.disabled = false;
   }
 });
 byId("refresh-history").addEventListener("click", loadHistory);
@@ -4020,5 +4091,5 @@ byId("theme-select").addEventListener("change", (event) => {
 });
 
 loadInitialState().catch((error) => {
-  renderPreview({valid: false, errors: [{path: "$", message: error.message}]});
+  renderAppErrors([error.message]);
 });

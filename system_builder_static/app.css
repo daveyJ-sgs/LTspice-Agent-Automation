@@ -681,3 +681,5 @@ td:first-child { color: var(--text); font-weight: 600; }
 .job-actions .job-error { flex: 1 1 100%; overflow-wrap: anywhere; }
 .poll-problem { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin: 8px 0; padding: 9px 11px; border-left: 3px solid var(--warning); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--warning-soft); color: var(--text); font-size: 12px; }
 .poll-slot { margin-bottom: 14px; }
+.app-errors { margin: 16px 0 0; } .app-errors .compact-button { margin-top: 10px; }
+.text-button:disabled, .secondary-button:disabled, .compact-button:disabled { cursor: not-allowed; opacity: .55; }
