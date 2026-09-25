@@ -296,7 +296,7 @@
         </div>
         <div class="table-wrap">
           <table class="editor-table variable-table">
-            <thead><tr><th>Name</th><th>Distribution</th><th>Nominal</th><th>Tolerance</th><th>Minimum</th><th>Maximum</th><th>Unit</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Distribution</th><th>Unit</th><th>Nominal</th><th><abbr title="One standard deviation, in the variable's own unit">σ (1-sigma)</abbr></th><th>Minimum</th><th>Maximum</th><th><span class="visually-hidden">Remove</span></th></tr></thead>
             <tbody id="variables"></tbody>
           </table>
         </div>
@@ -962,7 +962,7 @@
 
         <article class="editor-card guide-step">
           <div class="editor-card-heading"><strong>5. Declare your variables</strong></div>
-          <p class="muted-copy">In <strong>02 / Variables</strong>: a name (matching the placeholder you just inserted), a distribution, a nominal value, and either a tolerance (Gaussian) or a min/max range. This is the manufacturing-variation model -- what a real production run of this part would actually look like, not just its datasheet-typical value.</p>
+          <p class="muted-copy">In <strong>02 / Variables</strong>: a name (matching the placeholder you just inserted), a distribution, a nominal value, and a σ (one standard deviation, Gaussian only -- the hint beside it shows the ±% of nominal) and a min/max range. This is the manufacturing-variation model -- what a real production run of this part would actually look like, not just its datasheet-typical value.</p>
         </article>
 
         <article class="editor-card guide-step">

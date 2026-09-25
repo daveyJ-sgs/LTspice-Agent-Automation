@@ -298,7 +298,7 @@ td { color: var(--muted); font: 400 13px "IBM Plex Mono", monospace; }
 td:first-child { color: var(--text); font-weight: 600; }
 .editor-table { min-width: 900px; }
 .editor-table th, .editor-table td { padding: 9px 6px; }
-.editor-table input, .editor-table select { min-width: 108px; padding: 9px 10px; font-size: 13px; }
+.editor-table input, .editor-table select { min-width: 84px; padding: 9px 10px; font-size: 13px; }
 .editor-table .variable-name { min-width: 112px; }
 .editor-table .distribution { min-width: 125px; }
 .editor-table .unit { min-width: 76px; }
@@ -683,3 +683,6 @@ td:first-child { color: var(--text); font-weight: 600; }
 .poll-slot { margin-bottom: 14px; }
 .app-errors { margin: 16px 0 0; } .app-errors .compact-button { margin-top: 10px; }
 .text-button:disabled, .secondary-button:disabled, .compact-button:disabled { cursor: not-allowed; opacity: .55; }
+.variable-table { min-width: 760px; }
+.variable-table th abbr { text-decoration: none; text-transform: none; cursor: help; }
+.sigma-hint { display: block; margin-top: 4px; white-space: nowrap; }

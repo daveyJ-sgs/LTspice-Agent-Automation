@@ -1035,6 +1035,7 @@ function populateVariables() {
     let minimum;
     let maximum;
     let unit;
+    let sigmaHint = null;
     if (continuous) {
       const selectedUnit = variableDisplayUnits.get(variable) || defaultDisplayUnit(variable);
       const factor = studyUnitFactor(variable.unit, selectedUnit);
@@ -1043,7 +1044,25 @@ function populateVariables() {
       tolerance = scaledFieldInput(variable.sigma, factor, `${base}.sigma`);
       tolerance.placeholder = distribution.value === "gaussian" ? "σ" : "n/a";
       tolerance.disabled = distribution.value !== "gaussian";
-      if (!tolerance.disabled) setScaledRecipeField(tolerance, variable, "sigma", factor);
+      if (!tolerance.disabled) {
+        setScaledRecipeField(tolerance, variable, "sigma", factor);
+        // σ is one standard deviation in the variable's own unit; show it as
+        // the ±% of nominal most datasheets quote, and the 3σ spread.
+        sigmaHint = document.createElement("span");
+        sigmaHint.className = "field-hint sigma-hint";
+        const updateSigmaHint = () => {
+          const sigma = Number(variable.sigma);
+          const center = Math.abs(Number(variable.nominal));
+          const percent = Number.isFinite(sigma) && center > 0 ? 100 * sigma / center : null;
+          sigmaHint.textContent = percent === null ? "" : `±${Number(percent.toPrecision(3))}% 1σ`;
+          sigmaHint.title = percent === null
+            ? ""
+            : `One standard deviation is ±${Number(percent.toPrecision(3))}% of nominal; about 99.7% of parts fall within ±${Number((3 * percent).toPrecision(3))}% (3σ).`;
+        };
+        updateSigmaHint();
+        tolerance.addEventListener("input", updateSigmaHint);
+        nominal.addEventListener("input", updateSigmaHint);
+      }
       minimum = scaledFieldInput(variable.minimum, factor, `${base}.minimum`);
       setScaledRecipeField(minimum, variable, "minimum", factor);
       maximum = scaledFieldInput(variable.maximum, factor, `${base}.maximum`);
@@ -1064,7 +1083,9 @@ function populateVariables() {
       unit = fieldInput(variable.unit, `${base}.unit`, "unit");
       setRecipeField(unit, variable, "unit");
     }
-    for (const control of [name, distribution]) {
+    // Unit sits right after Distribution, beside the values it scales, so it
+    // is on screen without scrolling the table sideways.
+    for (const control of [name, distribution, unit]) {
       const cell = document.createElement("td");
       cell.append(control);
       row.append(cell);
@@ -1073,14 +1094,12 @@ function populateVariables() {
       if (control) {
         const cell = document.createElement("td");
         cell.append(control);
+        if (control === tolerance && sigmaHint) cell.append(sigmaHint);
         row.append(cell);
       } else {
         row.append(textCell());
       }
     }
-    const unitCell = document.createElement("td");
-    unitCell.append(unit);
-    row.append(unitCell);
     const remove = document.createElement("td");
     remove.className = "remove-cell";
     remove.append(removeButton(`Remove variable ${variable.name || index + 1}`, () => {
