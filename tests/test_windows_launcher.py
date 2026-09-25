@@ -28,3 +28,18 @@ class WindowsLauncherTests(unittest.TestCase):
         self.assertNotIn("$env:LTSPICE_EXECUTABLE =", powershell)
         self.assertIn("powershell.exe -NoLogo -NoProfile", command)
         self.assertIn('"%~dp0Start-SystemBuilder.ps1" %*', command)
+
+    def test_native_probes_cannot_trip_windows_powershell_stop_preference(self) -> None:
+        # Under Windows PowerShell 5.1, `2>$null` on a native command with
+        # $ErrorActionPreference = "Stop" is a terminating error, so every
+        # stderr-silenced probe must run in Test-Python313's "Continue" scope.
+        powershell = (ROOT / "Start-SystemBuilder.ps1").read_text(encoding="utf-8")
+        probe = powershell[
+            powershell.index("function Test-Python313")
+            : powershell.index("function Find-CompatiblePython")
+        ]
+        self.assertIn('$ErrorActionPreference = "Continue"', probe)
+        self.assertIn("2>$null", probe)
+        self.assertEqual(powershell.count("2>$null"), 1)
+        self.assertIn("Test-Python313 -Command $venvPython", powershell)
+        self.assertIn('-like "*\\WindowsApps\\python.exe"', powershell)

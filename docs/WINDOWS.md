@@ -63,7 +63,8 @@ output or an error. See
 For source development, clone or download this repository and double-click
 [`Start-SystemBuilder.cmd`](../Start-SystemBuilder.cmd). The launcher:
 
-1. Finds Python 3.13 or newer, or prints the exact `winget` installation command.
+1. Finds Python 3.13 or newer (skipping the Microsoft Store `python.exe`
+   stub in `WindowsApps`), or prints the exact `winget` installation command.
 2. Creates a private `.venv` inside the repository when needed.
 3. Installs the declared System Builder dependencies into that environment.
 4. Reports whether LTspice is in a standard per-user or machine-wide location.

@@ -13,6 +13,23 @@ if (-not (Test-Path -LiteralPath $workspacePath -PathType Container)) {
     throw "System Builder workspace is not a directory: $workspacePath"
 }
 
+function Test-Python313 {
+    param([string]$Command, [string[]]$Arguments = @())
+    # Windows PowerShell 5.1 turns anything a native command writes to a
+    # redirected stderr into an ErrorRecord, which "Stop" makes terminating.
+    # Probe with "Continue" in this function's scope only; the caller's
+    # preference is untouched.
+    $ErrorActionPreference = "Continue"
+    try {
+        & $Command @Arguments -c `
+            "import sys; raise SystemExit(0 if sys.version_info >= (3, 13) else 1)" `
+            2>$null | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
 function Find-CompatiblePython {
     $candidates = @(
         @{ Command = "py"; Arguments = @("-3") },
@@ -21,14 +38,18 @@ function Find-CompatiblePython {
     foreach ($candidate in $candidates) {
         $command = [string]$candidate.Command
         $prefixArguments = [string[]]$candidate.Arguments
-        if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
+        $resolved = Get-Command $command -CommandType Application -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if (-not $resolved) {
             continue
         }
-        & $command @prefixArguments -c `
-            "import sys; raise SystemExit(0 if sys.version_info >= (3, 13) else 1)" `
-            2>$null
-        if ($LASTEXITCODE -eq 0) {
-            return $candidate
+        # Skip the Microsoft Store "App Installer" stub. It is not an
+        # interpreter; run without arguments it opens the Store.
+        if ($resolved.Source -like "*\WindowsApps\python.exe") {
+            continue
+        }
+        if (Test-Python313 -Command $resolved.Source -Arguments $prefixArguments) {
+            return @{ Command = $resolved.Source; Arguments = $prefixArguments }
         }
     }
     throw @"
@@ -83,10 +104,7 @@ if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
     }
 }
 
-& $venvPython -c `
-    "import sys; raise SystemExit(0 if sys.version_info >= (3, 13) else 1)" `
-    2>$null
-if ($LASTEXITCODE -ne 0) {
+if (-not (Test-Python313 -Command $venvPython)) {
     throw @"
 The existing .venv uses an unsupported Python version. Remove this directory,
 then run the launcher again so it can create a Python 3.13+ environment:
