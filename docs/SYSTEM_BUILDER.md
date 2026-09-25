@@ -76,13 +76,19 @@ worked example without overwriting an existing folder:
 **New project** creates an intentionally incomplete recipe shell rather than a
 fake circuit. Select an existing `.cir` or `.net` file from the netlist picker,
 use **Import netlist** to copy one into the open project, or edit the selected
-netlist in the built-in editor. Opening a project attaches its recipe to the
-editor, so **Save to project** writes changes back atomically; loading an
-unrelated recipe detaches that association. Project deletion uses an explicit
-two-step confirmation.
+netlist in the built-in editor. Editor text is kept until it is saved:
+rescanning netlists, importing, or restructuring the recipe does not discard
+it, leaving the page or opening another project asks first, and
+**Simulate once** (which runs the file on disk) offers to save pending edits.
+Opening a project attaches its recipe to the editor, so **Save to project**
+writes changes back atomically; loading an unrelated recipe detaches that
+association. Project deletion uses an explicit two-step confirmation; deleting
+the project that is open keeps its recipe in the editor, detached, with a
+warning, so Save downloads it instead of writing to the missing folder.
 
 The sidebar separates Projects, Study, Optimization, Qualification, Workspace,
-Guide, and FAQ. Browser Back and Forward follow that navigation, and the app
+Guide, and FAQ; below about 900px wide it collapses into a top bar with a
+Menu drawer. Browser Back and Forward follow that navigation, and the app
 warns before an action would discard unsaved Study or Optimization edits. The
 theme control offers the dark **Solder Mask**, light **Copper Print**, and
 schematic-inspired **Wire & Grid** themes; the selection is stored only in the
@@ -99,10 +105,17 @@ the existing engine, with field-scoped errors.
 Preview is pure: it does not publish a plan, create a run directory, or start
 LTspice. After a valid preview, **Create immutable plan** publishes the
 content-addressed plan but still does not run LTspice. A separate acknowledgement
-exposes **Start local qualification**, which launches the recipe's paired
-analyses through the same durable experiment manager used by MCP. Editing the
-recipe invalidates the confirmation, and repeated Start requests cannot
-duplicate the launch.
+exposes **Start local study**, which launches the recipe's paired analyses
+through the same durable experiment manager used by MCP. Editing the recipe
+invalidates the confirmation, a freeze response that arrives after an edit is
+discarded, and repeated Start requests cannot duplicate the launch. While the
+LTspice executable is not found, **Start local study** and **Simulate once**
+stay disabled with the reason shown beside them.
+
+Job cards on the Study page belong to the project that launched them. Points
+that did not simulate (for example, LTspice exited with an error) are counted
+separately from points that simulated and missed a requirement, and the card
+shows the first recorded point error.
 
 ### Requirement metrics and their parameters
 
@@ -113,6 +126,10 @@ the browser. Parameters are written as flat sibling keys of
 `metric`/`operator`/`target` inside the requirement, which is the `.ltstudy`
 shape; the nested `metric_parameters` object is the separate `.ltopt`
 optimization-goal shape and is not interchangeable with it.
+
+The target shows the unit the metric is measured in (dB, Hz, deg, %, or the
+analysis signal/axis unit). Changing to a metric measured in a different unit
+clears the old target with a note rather than reinterpreting it.
 
 Parameters a metric cannot use are dropped when the metric changes, and a
 required one -- `frequency_value` for `ac_gain_db`, `reference_frequency` for
@@ -128,10 +145,14 @@ snapped to the nearest one, which the field's help text states. Entries may use
 SPICE magnitude suffixes (`50k`, `1Meg`); the recipe stores the resolved number
 and the field reports what it resolved to.
 
-Engineering-unit selectors are available for capacitance (`pF`, `nF`, `µF`)
-and resistance (`Ω`, `kΩ`, `MΩ`). These are display and entry choices only: the
+Engineering-unit selectors are available for variables and corner axes whose
+unit is capacitance (`F`: `pF`, `nF`, `µF`) or resistance (`ohm`: `Ω`, `kΩ`,
+`MΩ`); other units are edited as free text. In the variable table the unit
+sits beside the values it scales. These are display and entry choices only: the
 portable recipe and immutable plan retain canonical SI values, so changing a
-selector without changing the physical value preserves the plan identity.
+selector without changing the physical value preserves the plan identity. The
+Gaussian spread column is σ, one standard deviation in the variable's unit,
+with its ±% of nominal shown beneath it.
 
 Dedicated editors support weighted discrete choices and empirical populations.
 Empirical data may be entered inline or loaded from a named column in a
@@ -296,8 +317,11 @@ optimization plan used by MCP. A separate acknowledgement then defines and
 launches the paired DAQ AC/transient work through `OptimizationStudyManager`.
 The interface reports candidate and corner structure, per-analysis progress,
 aggregate LTspice progress, evaluation state, cooperative cancellation, and
-resume controls. Refreshing the page rediscovers the durable optimization job
-but never launches or resumes it automatically.
+resume controls. Opening or reloading an optimization recipe rediscovers the
+most recent durable job for the plan that recipe resolves to -- never another
+project's job -- but never launches or resumes it automatically. If a status
+read fails, the job card backs off, and after repeated failures shows
+"Status unavailable" with a Retry button.
 
 A completed job becomes an engineering decision view without re-evaluating the
 study. It shows selected component values, worst-corner objective values, every
