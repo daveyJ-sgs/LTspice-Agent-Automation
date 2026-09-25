@@ -6,6 +6,7 @@ import csv
 import json
 import math
 import os
+import struct
 import threading
 import time
 import unittest
@@ -741,6 +742,97 @@ class MCPServerTests(TemporaryRunsTestCase):
         self.assertEqual(result["analyses"][0]["status"], "completed")
         self.assertTrue(result["analyses"][0]["analysis"]["all_passed"])
 
+    def test_native_batch_parses_and_hashes_its_raw_once(self) -> None:
+        steps, per_step = 4, 3
+        header = (
+            "Title: t\nPlotname: Transient Analysis\nFlags: real forward stepped\n"
+            f"No. Variables: 2\nNo. Points: {steps * per_step}\nVariables:\n"
+            "\t0\ttime\ttime\n\t1\tV(out)\tvoltage\nBinary:\n"
+        )
+        payload = b"".join(
+            struct.pack("<df", point * 1e-3, step + point * 0.25)
+            for step in range(steps)
+            for point in range(per_step)
+        )
+
+        def execute(
+            netlist: str, filename: str, ascii_raw: bool, timeout: int, dest: Path
+        ) -> Path:
+            dest.mkdir(parents=True)
+            (dest / "circuit.log").write_text(
+                "\n".join(f".step __mcp_step_index={index}" for index in range(steps)),
+                encoding="utf-16le",
+            )
+            (dest / "circuit.raw").write_bytes(header.encode("utf-16le") + payload)
+            return dest
+
+        analyses = [
+            {
+                "name": "ceiling",
+                "variable": "V(out)",
+                "requirements": [{"metric": "maximum", "operator": "<=", "target": 2.9}],
+            },
+            {
+                "name": "floor",
+                "variable": "V(out)",
+                "requirements": [{"metric": "minimum", "operator": ">=", "target": 0.0}],
+            },
+        ]
+        parse = Mock(wraps=mcp_server.raw_parser.parse_raw)
+        digest = Mock(wraps=mcp_server.wrapper._sha256_file)
+        with (
+            patch.object(mcp_server, "_run_netlist_text", side_effect=execute),
+            patch.object(
+                mcp_server,
+                "_summarize_run",
+                return_value={"status": "completed", "measurements": {}},
+            ),
+            patch.object(mcp_server.raw_parser, "parse_raw", parse),
+            patch.object(mcp_server.wrapper, "_sha256_file", digest),
+        ):
+            result = mcp_server.run_experiment(
+                "R1 in out {R}\n.end\n",
+                [{"name": "R", "values": ["1k", "2k", "3k", "4k"]}],
+                analyses,
+                execution_mode="native",
+            )
+
+        self.assertEqual(parse.call_count, 1)
+        self.assertEqual(digest.call_count, 1)
+        run_dir = Path(result["native_batch"]["run_dir"])
+        self.assertEqual(
+            [point["all_passed"] for point in result["points"]], [True, True, True, False]
+        )
+        for point in result["points"]:
+            for analysis, recorded in zip(analyses, point["analyses"], strict=True):
+                # Evidence matches an independent, uncached analysis of the step.
+                self.assertEqual(
+                    recorded["analysis"],
+                    mcp_server._analyze_waveform_impl(
+                        run_dir,
+                        analysis["variable"],
+                        analysis["requirements"],
+                        step_index=point["native_step_index"],
+                    ),
+                )
+
+    def test_raw_parse_cache_reparses_a_rewritten_raw(self) -> None:
+        header = (
+            "Title: t\nFlags: real forward\nNo. Variables: 2\nNo. Points: 1\n"
+            "Variables:\n\t0\ttime\ttime\n\t1\tV(out)\tvoltage\nBinary:\n"
+        ).encode("utf-16le")
+        path = self.runs / "cached.raw"
+        path.write_bytes(header + struct.pack("<df", 0.0, 1.0))
+        cache = mcp_server._RawParseCache()
+        first = cache.get(path)
+        self.assertIs(cache.get(path), first)
+        path.write_bytes(header + struct.pack("<dd", 0.0, 2.0))
+        second = cache.get(path)
+        self.assertIsNot(second, first)
+        self.assertEqual(second.data.values["V(out)"], [2.0])
+        self.assertEqual(second.size_bytes, path.stat().st_size)
+        self.assertEqual(second.sha256(), mcp_server.wrapper._sha256_file(path))
+
     def test_run_experiment_expands_cartesian_points_and_reuses_requirements(self) -> None:
         rendered_netlists: list[str] = []
 
@@ -775,6 +867,7 @@ class MCPServerTests(TemporaryRunsTestCase):
         ) -> dict[str, object]:
             index = int(Path(run_dir).name.rsplit("-", 1)[1])
             self.assertIs(point_requirements, requirements)
+            self.assertIsInstance(options.pop("raw_cache"), mcp_server._RawParseCache)
             self.assertEqual(options, {"signal_unit": "V"})
             return {"all_passed": index != 2, "results": [{"index": index}]}
 

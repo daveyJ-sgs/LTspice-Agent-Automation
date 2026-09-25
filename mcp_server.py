@@ -25,6 +25,7 @@ import tempfile
 import threading
 import uuid
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -252,12 +253,59 @@ def _run_netlist_text(
         )
 
 
+@dataclass
+class _ParsedRaw:
+    """One parsed RAW file plus the evidence derived from it on demand."""
+
+    path: Path
+    data: raw_parser.RawData
+    size_bytes: int
+    _sha256: str | None = field(default=None, repr=False)
+    _step_slices: list[slice] | None = field(default=None, repr=False)
+
+    def sha256(self) -> str:
+        if self._sha256 is None:
+            self._sha256 = wrapper._sha256_file(self.path)
+        return self._sha256
+
+    def step_slices(self) -> list[slice]:
+        if self._step_slices is None:
+            self._step_slices = raw_parser.step_slices(self.data)
+        return self._step_slices
+
+
+class _RawParseCache:
+    """Parse and hash each RAW once per experiment point or native batch.
+
+    Every analysis of a native stepped batch reads the same RAW file, so
+    without this each step re-parsed and re-hashed the whole batch. Entries
+    are keyed by resolved path, size and mtime so a rewritten file is parsed
+    afresh. Callers create one per point/batch and drop it afterwards, which
+    bounds how long parsed samples stay in memory.
+    """
+
+    def __init__(self) -> None:
+        self._entries: dict[tuple[Path, int, int], _ParsedRaw] = {}
+
+    def get(self, raw_path: Path) -> _ParsedRaw:
+        stat = raw_path.stat()
+        key = (raw_path.resolve(), stat.st_size, stat.st_mtime_ns)
+        entry = self._entries.get(key)
+        if entry is None:
+            entry = _ParsedRaw(raw_path, raw_parser.parse_raw(raw_path), stat.st_size)
+            self._entries[key] = entry
+        return entry
+
+
 def _analyze_experiment_point(
     point: ExperimentPointResult,
     output_dir: Path,
     analyses: list[ExperimentWaveformAnalysis],
     step_index: int | None = None,
+    raw_cache: _RawParseCache | None = None,
 ) -> ExperimentPointResult:
+    if raw_cache is None:
+        raw_cache = _RawParseCache()
     for analysis in analyses:
         analysis_name = analysis["name"]
         options: dict[str, object] = {
@@ -278,6 +326,7 @@ def _analyze_experiment_point(
                 output_dir,
                 analysis["variable"],
                 analysis["requirements"],
+                raw_cache=raw_cache,
                 **options,
             )
         except (FileNotFoundError, IndexError, KeyError, ValueError) as exc:
@@ -407,6 +456,7 @@ def _execute_native_experiment(
     """Run one stepped deck and map its validated slices back to experiment points."""
     output_dir: Path | None = None
     summary: dict[str, object] | None = None
+    raw_cache = _RawParseCache()
     try:
         arguments = (netlist, filename, ascii_raw, timeout_seconds, batch_dir)
         output_dir = (
@@ -425,7 +475,7 @@ def _execute_native_experiment(
         if not step_values:
             # Stepped .op logs can omit .step lines; the RAW axis carries
             # the generated step identity instead of time or frequency.
-            raw_data = raw_parser.parse_raw(_find_raw(output_dir, None))
+            raw_data = raw_cache.get(_find_raw(output_dir, None)).data
             if (
                 raw_data.variables[0].casefold() == experiment_engine._NATIVE_STEP_PARAMETER
                 and raw_data.points_per_step == 1
@@ -453,8 +503,9 @@ def _execute_native_experiment(
                 if raw_path not in raw_paths:
                     raw_paths.append(raw_path)
             for raw_path in raw_paths:
-                raw_data = raw_parser.parse_raw(raw_path)
-                slices = raw_parser.step_slices(raw_data)
+                parsed = raw_cache.get(raw_path)
+                raw_data = parsed.data
+                slices = parsed.step_slices()
                 if (
                     raw_data.step_count != len(combinations)
                     or len(slices) != len(combinations)
@@ -539,7 +590,9 @@ def _execute_native_experiment(
             point["error"] = "experiment cancelled before waveform analysis"
             points.append(point)
         else:
-            points.append(_analyze_experiment_point(point, output_dir, analyses, index))
+            points.append(
+                _analyze_experiment_point(point, output_dir, analyses, index, raw_cache)
+            )
     return points, batch
 
 
@@ -771,6 +824,7 @@ def _analyze_waveform_impl(
     axis_unit: str | None = None,
     raw_filename: str | None = None,
     secondary_variable: str | None = None,
+    raw_cache: _RawParseCache | None = None,
 ) -> WaveformAnalysisResult:
     """Shared implementation behind the analyze_waveform tool.
 
@@ -780,12 +834,16 @@ def _analyze_waveform_impl(
     supplied by a caller) can reuse this logic without being incorrectly
     re-confined to this module's fixed single-workspace RUNS_DIR. The public
     analyze_waveform tool above still resolves and confines external input
-    before calling in.
+    before calling in. `raw_cache` lets a point or batch that analyzes the
+    same RAW repeatedly parse and hash it once.
     """
     if not requirements:
         raise ValueError("requirements must be a non-empty list")
     raw_path = _find_raw(resolved, raw_filename)
-    data = raw_parser.parse_raw(raw_path)
+    if raw_cache is None:
+        raw_cache = _RawParseCache()
+    parsed = raw_cache.get(raw_path)
+    data = parsed.data
     axis_name = axis_variable or data.variables[0]
     requested_variables = {variable, axis_name}
     if secondary_variable is not None:
@@ -797,7 +855,7 @@ def _analyze_waveform_impl(
     if data.step_count > 1:
         if step_index is None:
             raise ValueError("step_index is required for stepped waveform data")
-        slices = raw_parser.step_slices(data)
+        slices = parsed.step_slices()
         if (
             not isinstance(step_index, int)
             or isinstance(step_index, bool)
@@ -852,8 +910,8 @@ def _analyze_waveform_impl(
 
     response: WaveformAnalysisResult = {
         "raw_file": str(raw_path),
-        "raw_sha256": wrapper._sha256_file(raw_path),
-        "raw_size_bytes": raw_path.stat().st_size,
+        "raw_sha256": parsed.sha256(),
+        "raw_size_bytes": parsed.size_bytes,
         "variable": variable,
         "axis_variable": axis_name,
         "step_index": 0 if step_index is None else step_index,

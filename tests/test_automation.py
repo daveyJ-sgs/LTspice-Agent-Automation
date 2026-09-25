@@ -1022,6 +1022,85 @@ Binary:
         self.assertEqual(data.values["time"], [0.0, 0.1])
         self.assertEqual(data.values["V(out)"], [1.5, 2.5])
 
+    def test_binary_decoders_match_per_value_reference_for_every_layout(self) -> None:
+        def reference(data: bytes, points: int, count: int, is_complex: bool, double: bool,
+                      fast_access: bool) -> list[list[float | complex]]:
+            # Straightforward per-value decoder the vectorized paths replace.
+            columns: list[list[float | complex]] = [[] for _ in range(count)]
+            row_bytes = count * 16 if is_complex else count * 8 if double else 8 + (count - 1) * 4
+            for point in range(points):
+                for index in range(count):
+                    if fast_access:
+                        offset = sum(points * (16 if is_complex else 8 if double or prior == 0 else 4)
+                                     for prior in range(index))
+                        offset += point * (16 if is_complex else 8 if double or index == 0 else 4)
+                    else:
+                        offset = point * row_bytes + (index * 16 if is_complex else index * 8 if double
+                                                      else 0 if index == 0 else 8 + (index - 1) * 4)
+                    if is_complex:
+                        columns[index].append(complex(*struct.unpack_from("<dd", data, offset)))
+                    elif double or index == 0:
+                        columns[index].append(struct.unpack_from("<d", data, offset)[0])
+                    else:
+                        columns[index].append(struct.unpack_from("<f", data, offset)[0])
+            return columns
+
+        def bits(value: float | complex) -> tuple[type, bytes]:
+            parts = (value.real, value.imag) if isinstance(value, complex) else (value,)
+            return type(value), struct.pack(f"<{len(parts)}d", *parts)
+
+        specials = [0.0, -0.0, 1.5, -2.25, 5e-324, -1e-310, 1e300, float("inf"), float("-inf"),
+                    3.4028234663852886e38, 1.401298464324817e-45, 0.1, -123456.789]
+        points = 2 * 4096 + 37  # crosses the point-major chunk boundary
+        layouts = [
+            ("real forward", 1, False, False),
+            ("real forward", 5, False, False),
+            ("real forward", 4, False, True),
+            ("complex forward", 3, True, True),
+            ("real forward FastAccess", 5, False, False),
+            ("real forward FastAccess", 4, False, True),
+            ("complex forward FastAccess", 3, True, True),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "layout.raw"
+            for flags, count, is_complex, double in layouts:
+                with self.subTest(flags=flags, count=count, double=double):
+                    fast_access = "FastAccess" in flags
+                    axis = "frequency" if is_complex else "time"
+                    names = [axis, *[f"V(n{index})" for index in range(1, count)]]
+                    header = (f"Title: layout\nFlags: {flags}\nNo. Variables: {count}\n"
+                              f"No. Points: {points}\nVariables:\n"
+                              + "".join(f"\t{index}\t{name}\tvoltage\n" for index, name in enumerate(names))
+                              + "Binary:\n")
+                    width = 2 if is_complex else 1
+
+                    def sample(point: int, index: int, part: int) -> float:
+                        value = specials[(point * 7 + index * 3 + part) % len(specials)]
+                        return value * (1 + point * 1e-7) if point % 5 else value
+
+                    def pack(point: int, index: int) -> bytes:
+                        if is_complex:
+                            return struct.pack("<dd", *(sample(point, index, part) for part in range(width)))
+                        if double or index == 0:
+                            return struct.pack("<d", sample(point, index, 0))
+                        # Round to float32 range; LTspice traces are single precision.
+                        return struct.pack("<f", max(-3.0e38, min(3.0e38, sample(point, index, 0))))
+
+                    if fast_access:
+                        payload = b"".join(pack(point, index) for index in range(count) for point in range(points))
+                    else:
+                        payload = b"".join(pack(point, index) for point in range(points) for index in range(count))
+                    path.write_bytes(header.encode("utf-16le") + payload)
+                    data = parse_raw(path)
+                    expected = reference(payload, points, count, is_complex, double, fast_access)
+                    if axis == "time":  # binary transient-axis sign-bit rule
+                        expected[0] = [abs(value) for value in expected[0]]
+                    self.assertEqual(data.variables, names)
+                    for name, column in zip(names, expected):
+                        actual = data.values[name]
+                        self.assertIs(type(actual), list)
+                        self.assertEqual([bits(value) for value in actual], [bits(value) for value in column])
+
     def test_checks(self) -> None:
         assert_close("gain", -35.0, -35.0, 0.1)
         assert_between("peak", 5.0, 4.9, 5.1)
