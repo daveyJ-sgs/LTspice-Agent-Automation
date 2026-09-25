@@ -33,7 +33,7 @@ from study_recipe import (
     load_recipe_experiments,
     load_study_recipe,
 )
-from system_builder_history import evidence_file
+from system_builder_history import evidence_file, first_point_error
 from system_builder_routes import (
     create_core_router,
     create_optimization_router,
@@ -307,6 +307,7 @@ def create_app(
         pending_points = snapshot.get("pending_points", 0)
         passed_points = snapshot.get("passed_points", 0)
         failed_points = snapshot.get("failed_points", 0)
+        error_points = snapshot.get("error_points", 0)
         return {
             # "kind" and "job_id" are a normalized envelope, added alongside
             # (not instead of) the pre-existing fields below: study jobs are
@@ -327,6 +328,13 @@ def create_app(
             "pending_points": pending_points,
             "passed_points": passed_points,
             "failed_points": failed_points,
+            # failed_points includes errored points; these let a client show
+            # "did not simulate" separately, with the recorded reason.
+            "error_points": error_points,
+            "point_error": first_point_error(workspace / "runs" / experiment_id)
+            if error_points
+            else None,
+            "error": snapshot.get("error"),
             "progress": {
                 "total_runs": point_count,
                 "finished_points": finished_points,

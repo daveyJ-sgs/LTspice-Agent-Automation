@@ -52,6 +52,38 @@ def _timestamp(manifest: dict[str, object], experiment_id: str) -> str:
     )
 
 
+def first_point_error(experiment_dir: Path, limit: int = 64) -> str | None:
+    """Return the first point-level simulation error recorded for a job.
+
+    A job whose points all errored (LTspice missing, a netlist that does not
+    parse) still reaches "completed"; the reason lives only in each point's
+    point_result.json. Reads at most ``limit`` small files, in point order.
+    """
+    try:
+        candidates = sorted(experiment_dir.glob("point-*/point_result.json"))[:limit]
+    except OSError:
+        return None
+    for path in candidates:
+        try:
+            if path.is_symlink() or path.stat().st_size > 1024 * 1024:
+                continue
+            point = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        error = point.get("error") if isinstance(point, dict) else None
+        if isinstance(error, str) and error:
+            return error[:500]
+    return None
+
+
+def _system_builder_source(manifest: dict[str, object]) -> dict[str, object]:
+    definition = manifest.get("definition")
+    point_plan = definition.get("point_plan") if isinstance(definition, dict) else None
+    source = point_plan.get("source") if isinstance(point_plan, dict) else None
+    builder = source.get("system_builder") if isinstance(source, dict) else None
+    return builder if isinstance(builder, dict) else {}
+
+
 def _read_manifest(path: Path) -> dict[str, object]:
     if (
         path.is_symlink()
@@ -151,6 +183,14 @@ def workspace_history(workspace: Path, *, limit: int = 12) -> dict[str, object]:
             source = point_plan.get("source") if isinstance(point_plan, dict) else None
             report_path = experiment_dir / "report.html"
             report_available = report_path.is_file() and not report_path.is_symlink()
+            builder = _system_builder_source(manifest)
+            report_context = builder.get("report_context")
+            study_title = (
+                report_context.get("title")
+                if isinstance(report_context, dict)
+                else None
+            )
+            experiment_name = builder.get("experiment_name")
             jobs.append(
                 {
                     "experiment_id": experiment_id,
@@ -164,6 +204,18 @@ def workspace_history(workspace: Path, *, limit: int = 12) -> dict[str, object]:
                     ),
                     "passed_points": _integer(manifest.get("passed_points")),
                     "failed_points": _integer(manifest.get("failed_points")),
+                    # failed_points counts errored points too; error_points
+                    # lets the UI tell "did not simulate" from "missed spec".
+                    "error_points": error_points,
+                    "point_error": first_point_error(experiment_dir)
+                    if error_points
+                    else None,
+                    "study_title": study_title
+                    if isinstance(study_title, str)
+                    else None,
+                    "experiment_name": experiment_name
+                    if isinstance(experiment_name, str)
+                    else None,
                     "all_passed": manifest.get("all_passed")
                     if isinstance(manifest.get("all_passed"), bool)
                     else None,
