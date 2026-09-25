@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
 import os
@@ -381,6 +382,14 @@ try {
 '''
 
 
+def _powershell_output_encoding() -> str:
+    try:
+        codecs.lookup("oem")  # Only registered on Windows.
+    except LookupError:
+        return "utf-8"
+    return "oem"
+
+
 def _capture_windows(source: Path, output: Path, executable: Path) -> str:
     if not executable.is_file():
         raise FileNotFoundError(f"LTspice executable not found: {executable}")
@@ -407,7 +416,11 @@ def _capture_windows(source: Path, output: Path, executable: Path) -> str:
                 str(output),
             ],
             capture_output=True,
-            text=True,
+            # Windows PowerShell writes redirected output in the console's
+            # OEM code page; never let an undecodable byte turn a capture
+            # diagnostic into a UnicodeDecodeError.
+            encoding=_powershell_output_encoding(),
+            errors="replace",
             timeout=30,
             check=False,
         )

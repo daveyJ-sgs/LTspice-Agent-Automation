@@ -114,6 +114,28 @@ class GitHubRemoteTests(unittest.TestCase):
             "encoded_bytes": 13,
         }
 
+    def test_gh_output_is_decoded_as_utf8_with_replacement(self) -> None:
+        recorded: dict[str, object] = {}
+
+        def runner(
+            command: list[str], **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            recorded.update(kwargs)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as temporary, patch(
+            "github_remote.shutil.which", return_value="/usr/local/bin/gh"
+        ):
+            client = github_remote.GitHubRemote(
+                Path(temporary) / "runs", command_runner=runner
+            )
+            client.auth_status()
+
+        # Never the locale default (cp1252 on Windows), never strict.
+        self.assertEqual(recorded["encoding"], "utf-8")
+        self.assertEqual(recorded["errors"], "replace")
+        self.assertNotIn("text", recorded)
+
     def test_empty_job_listing_is_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             runs_dir = Path(temporary) / "runs"

@@ -85,7 +85,10 @@ class GitHubRemote:
             completed = self.command_runner(
                 [executable, *arguments],
                 input=stdin,
-                text=True,
+                # gh writes UTF-8 on every platform; the locale default would
+                # be cp1252 on Windows and fail on non-ASCII output.
+                encoding="utf-8",
+                errors="replace",
                 capture_output=True,
                 timeout=45,
                 check=False,
