@@ -58,6 +58,18 @@ class ApiTests(TemporaryRunsTestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+    def test_submitted_netlist_is_written_as_utf8_regardless_of_locale(self) -> None:
+        netlist = "* 1µF ±5%\nC1 in 0 1u\n.end\n"
+
+        def fake_run(input_path: object, *, output_dir: object, **_: object) -> None:
+            assert isinstance(output_dir, type(self.runs))
+            output_dir.mkdir(parents=True)
+
+        with patch.object(api_server, "run_netlist", side_effect=fake_run):
+            api_server._execute_simulation({"netlist": netlist}, "run-utf8")
+        written = self.runs / "api-inputs" / "run-utf8-request.cir"
+        self.assertEqual(written.read_bytes(), netlist.encode("utf-8"))
+
     def test_rejects_non_loopback_binding(self) -> None:
         for host in ("0.0.0.0", "::1", "localhost"):
             with self.subTest(host=host), self.assertRaisesRegex(ValueError, "127.0.0.1"):

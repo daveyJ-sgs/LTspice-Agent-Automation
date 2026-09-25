@@ -47,7 +47,7 @@ def _execute_simulation(payload: dict[str, object], run_id: str) -> dict[str, ob
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     input_path = INPUT_DIR / f"{run_id}-{filename}"
     output_dir = RUNS_DIR / run_id
-    input_path.write_text(netlist)
+    input_path.write_text(netlist, encoding="utf-8")
     run_netlist(input_path, output_dir=output_dir, timeout_seconds=timeout, ascii_raw=ascii_raw)
     log_path = output_dir / f"{input_path.stem}.log"
     measurements = parse_measurements(log_path) if log_path.is_file() else {}
