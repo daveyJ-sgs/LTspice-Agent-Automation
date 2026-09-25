@@ -249,15 +249,15 @@
         <div class="field-grid">
           <label>
             <span>Samples</span>
-            <input id="sample-count" type="number" min="1" max="1000" step="1" value="12">
+            <input id="sample-count" data-path="plan.sample_count" type="number" min="1" max="1000" step="1" value="12">
           </label>
           <label>
             <span>Seed</span>
-            <input id="seed" type="number" step="1" value="20260825">
+            <input id="seed" data-path="plan.seed" type="number" step="1" value="20260825">
           </label>
           <label class="wide-field">
             <span>Sampling method</span>
-            <select id="sampling-method">
+            <select id="sampling-method" data-path="plan.sampling_method">
               <option value="halton">Digit-scrambled Halton</option>
               <option value="latin_hypercube">Latin hypercube</option>
               <option value="independent">Independent random</option>
@@ -265,7 +265,7 @@
           </label>
           <label>
             <span>Parallel LTspice runs</span>
-            <input id="max-concurrency" type="number" min="1" max="4" step="1" value="2">
+            <input id="max-concurrency" data-path="execution.max_concurrency" type="number" min="1" max="4" step="1" value="2">
             <span class="field-hint">Up to 4. Higher finishes sooner and loads the machine harder.</span>
           </label>
           <label class="checkbox-field">

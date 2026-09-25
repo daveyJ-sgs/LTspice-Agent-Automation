@@ -2425,6 +2425,37 @@ function renderErrors(errors) {
   container.hidden = false;
 }
 
+// True when `path` is `ancestor` itself or lies beneath it on a segment
+// boundary, so experiments[1] never claims experiments[10]'s errors and
+// plan.variables does not match plan.variables_extra.
+function isPathWithin(path, ancestor) {
+  if (path === ancestor) return true;
+  if (!path.startsWith(ancestor)) return false;
+  const next = path.charAt(ancestor.length);
+  return next === "." || next === "[";
+}
+
+// Flags only the most specific element an error points at: the field whose
+// path matches exactly, or failing that the closest enclosing element (a
+// requirement card, a variable row). Controls get aria-invalid; containers
+// get an outline, since aria-invalid means nothing on a <section> or <tr>.
+function markErrorPath(errorPath) {
+  const elements = [...document.querySelectorAll("[data-path]")];
+  let targets = elements.filter((element) => element.dataset.path === errorPath);
+  if (targets.length === 0) {
+    const ancestors = elements.filter((element) => isPathWithin(errorPath, element.dataset.path));
+    const longest = Math.max(...ancestors.map((element) => element.dataset.path.length), -1);
+    targets = ancestors.filter((element) => element.dataset.path.length === longest);
+  }
+  for (const element of targets) {
+    if (["INPUT", "SELECT", "TEXTAREA"].includes(element.tagName)) {
+      element.setAttribute("aria-invalid", "true");
+    } else {
+      element.classList.add("scope-invalid");
+    }
+  }
+}
+
 function renderScopedErrors(errors) {
   const scopes = [
     ["variable-errors", ["plan.variables"]],
@@ -2435,9 +2466,10 @@ function renderScopedErrors(errors) {
   ];
   document.querySelectorAll("[data-path]").forEach((element) => {
     element.removeAttribute("aria-invalid");
+    element.classList.remove("scope-invalid");
   });
   for (const [id, prefixes] of scopes) {
-    const matched = (errors || []).filter((error) => prefixes.some((prefix) => error.path.startsWith(prefix)));
+    const matched = (errors || []).filter((error) => prefixes.some((prefix) => isPathWithin(error.path, prefix)));
     const container = byId(id);
     if (matched.length === 0) {
       container.hidden = true;
@@ -2449,15 +2481,17 @@ function renderScopedErrors(errors) {
       const item = document.createElement("li");
       item.textContent = `${error.path}: ${error.message}`;
       list.append(item);
-      document.querySelectorAll("[data-path]").forEach((element) => {
-        const path = element.dataset.path;
-        if (error.path.startsWith(path) || path.startsWith(error.path)) {
-          element.setAttribute("aria-invalid", "true");
-        }
-      });
+      markErrorPath(error.path);
     }
     container.replaceChildren(list);
     container.hidden = false;
+  }
+  // Errors outside every scoped list (plan.sample_count, execution.*) are
+  // still listed in the preview panel; flag their field in place as well.
+  for (const error of errors || []) {
+    if (!scopes.some(([, prefixes]) => prefixes.some((prefix) => isPathWithin(error.path, prefix)))) {
+      markErrorPath(error.path);
+    }
   }
 }
 
