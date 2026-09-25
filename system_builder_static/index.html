@@ -278,8 +278,8 @@
 
         <div class="button-row">
           <button id="preview-button" class="primary-button" type="button">Preview resolved plan</button>
-          <label class="secondary-button" for="recipe-file">Load recipe</label>
-          <input id="recipe-file" class="visually-hidden" type="file" accept=".json,.ltstudy.json,application/json">
+          <button type="button" class="secondary-button" data-file-input="recipe-file">Load recipe</button>
+          <input id="recipe-file" class="visually-hidden" type="file" tabindex="-1" aria-hidden="true" accept=".json,.ltstudy.json,application/json">
           <button id="save-button" class="text-button" type="button">Save recipe</button>
           <span id="save-status" class="muted-copy save-status"></span>
         </div>
@@ -330,8 +330,8 @@
           <div class="heading-actions">
             <span id="requirement-count" class="count-badge">—</span>
             <button id="refresh-netlists" class="compact-button" type="button" title="Rescan the workspace for netlist files, e.g. one you just exported from LTspice">↻ Netlists</button>
-            <label class="compact-button" for="netlist-import-input" title="Bring in a .cir/.net file from anywhere on your computer">⇧ Import netlist</label>
-            <input id="netlist-import-input" class="visually-hidden" type="file" accept=".cir,.net">
+            <button type="button" class="compact-button" data-file-input="netlist-import-input" title="Bring in a .cir/.net file from anywhere on your computer">⇧ Import netlist</button>
+            <input id="netlist-import-input" class="visually-hidden" type="file" tabindex="-1" aria-hidden="true" accept=".cir,.net">
             <button id="add-experiment" class="compact-button" type="button">+ Experiment</button>
           </div>
         </div>
@@ -504,8 +504,8 @@
           <p id="optimization-description" class="muted-copy">Edit and preview the design space, then explicitly publish and launch the exact content-addressed workload through the durable optimization engine.</p>
         </div>
         <div class="button-row section-actions">
-          <label class="secondary-button" for="optimization-file">Load .ltopt.json</label>
-          <input id="optimization-file" class="visually-hidden" type="file" accept=".json,.ltopt.json,application/json">
+          <button type="button" class="secondary-button" data-file-input="optimization-file">Load .ltopt.json</button>
+          <input id="optimization-file" class="visually-hidden" type="file" tabindex="-1" aria-hidden="true" accept=".json,.ltopt.json,application/json">
           <button id="optimization-save" class="text-button" type="button">Save recipe</button>
           <span id="optimization-save-status" class="muted-copy save-status"></span>
           <button id="optimization-preview" class="primary-button" type="button">Preview candidate plan</button>

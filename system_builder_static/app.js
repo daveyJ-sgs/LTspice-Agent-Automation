@@ -146,6 +146,12 @@ window.addEventListener("beforeunload", (event) => {
   event.preventDefault();
   event.returnValue = "";
 });
+// "Load recipe", "Import netlist" and "Load .ltopt.json" are real buttons
+// (focusable, announced as buttons) that open their hidden file input.
+document.addEventListener("click", (event) => {
+  const opener = event.target.closest("[data-file-input]");
+  if (opener) byId(opener.dataset.fileInput)?.click();
+});
 document.addEventListener("click", (event) => {
   const trigger = event.target.closest("[data-view]");
   if (!trigger) return;
@@ -229,12 +235,56 @@ function unitSelect(item, displayUnits, path, onChange) {
   return select;
 }
 
+// Accessible names for generated controls. data-path stays the machine key
+// (validation errors are matched against it); screen readers get a phrase
+// like "Experiment 1, analysis 1, requirement 2: target" instead.
+const PATH_COLLECTIONS = {
+  variables: "Variable",
+  correlations: "Correlation group",
+  corner_axes: "Corner axis",
+  values: "Value",
+  weights: "Weight",
+  experiments: "Experiment",
+  waveform_analyses: "Analysis",
+  requirements: "Requirement",
+  matrix: "Row",
+};
+
+function humanizeKey(key) {
+  const words = String(key).replaceAll("_", " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function readableLabel(path) {
+  const parts = [];
+  let field = "";
+  for (const segment of String(path).split(".")) {
+    const match = /^([A-Za-z_]+)((?:\[\d+\])*)$/.exec(segment);
+    if (!match) { field = segment; continue; }
+    const [, key, indexes] = match;
+    const numbers = [...indexes.matchAll(/\[(\d+)\]/g)].map((item) => Number(item[1]) + 1);
+    if (key === "plan" || key === "execution" || key === "report_context") continue;
+    if (numbers.length) {
+      const noun = PATH_COLLECTIONS[key] || humanizeKey(key);
+      parts.push(key === "matrix" && numbers.length === 2
+        ? `row ${numbers[0]}, column ${numbers[1]}`
+        : `${noun} ${numbers.join(".")}`);
+    } else {
+      field = key;
+    }
+  }
+  const scope = parts.join(", ");
+  const name = field ? humanizeKey(field).toLowerCase() : "";
+  if (!scope) return humanizeKey(field || path);
+  return name ? `${scope}: ${name}` : scope;
+}
+
 function fieldInput(value, path, className = "") {
   const input = document.createElement("input");
   input.type = "text";
   input.value = value ?? "";
   input.dataset.path = path;
-  input.setAttribute("aria-label", path);
+  input.setAttribute("aria-label", readableLabel(path));
   input.className = className;
   return input;
 }
@@ -242,7 +292,7 @@ function fieldInput(value, path, className = "") {
 function selectInput(value, choices, path, className = "") {
   const select = document.createElement("select");
   select.dataset.path = path;
-  select.setAttribute("aria-label", path);
+  select.setAttribute("aria-label", readableLabel(path));
   select.className = className;
   for (const [choice, label] of choices) {
     const option = document.createElement("option");
@@ -981,7 +1031,7 @@ function empiricalEditor(variable, base) {
     caption.textContent = "Observations (comma or line separated)";
     const values = document.createElement("textarea");
     values.dataset.path = `${base}.values`;
-    values.setAttribute("aria-label", `${base}.values`);
+    values.setAttribute("aria-label", `${variable.name || readableLabel(base)} observations`);
     values.value = (variable.values || []).join("\n");
     values.addEventListener("input", () => {
       variable.values = values.value
@@ -1542,7 +1592,7 @@ function metricOptionGroups() {
 function metricSelect(value, path) {
   const select = document.createElement("select");
   select.dataset.path = path;
-  select.setAttribute("aria-label", path);
+  select.setAttribute("aria-label", readableLabel(path));
   let matched = false;
   for (const [label, names] of metricOptionGroups()) {
     const group = document.createElement("optgroup");
@@ -1569,6 +1619,37 @@ function metricSelect(value, path) {
 // Parameters are flat sibling keys of metric/operator/target, so the ones the
 // previous metric used have to go when the metric changes -- otherwise they
 // linger as fields the new metric cannot accept.
+// The unit each metric's measured value comes out in, which is the unit its
+// target is compared in. Mirrors the units the waveform_metrics and
+// frequency_domain_metrics handlers return; "signal" and "axis" resolve
+// against the analysis (signal_unit / axis_unit).
+const METRIC_RESULT_UNITS = {
+  minimum: "signal", maximum: "signal", mean: "signal", rms: "signal",
+  peak_to_peak: "signal", ripple: "signal", monotonicity: "signal", spectral_peak: "signal",
+  rise_time: "axis", fall_time: "axis", settling_time: "axis", pulse_width: "axis",
+  propagation_delay: "axis", slew_rate: "signal/axis",
+  overshoot: "%", undershoot: "%", duty_cycle: "%", thd: "%",
+  forbidden_region_samples: "points",
+  frequency: "Hz", cutoff_frequency: "Hz", gain_crossover_frequency: "Hz",
+  ac_gain_db: "dB", peaking_db: "dB", gain_margin: "dB", phase_margin: "deg",
+};
+
+function requirementTargetUnit(metric, analysis) {
+  const kind = METRIC_RESULT_UNITS[metric];
+  if (!kind) return "";
+  const frequencyDomain = metricDefinition(metric)?.domain === "frequency";
+  const axis = analysis?.axis_unit || (frequencyDomain ? "Hz" : "s");
+  const signal = analysis?.signal_unit || "";
+  if (kind === "signal") return signal;
+  if (kind === "axis") return axis;
+  if (kind === "signal/axis") return signal ? `${signal}/${axis}` : `per ${axis}`;
+  return kind;
+}
+
+// Notes left on a requirement whose target was cleared by a metric change,
+// shown once on the re-rendered row.
+const requirementTargetNotes = new WeakMap();
+
 function setRequirementMetric(requirement, metric) {
   // Only prune against a metric the schema actually describes: a recipe written
   // against a newer build can name one this page has never heard of, and
@@ -1594,23 +1675,58 @@ function buildRequirement(analysis, requirement, index, base, experiment) {
 
   const metric = metricSelect(requirement.metric, `${base}.metric`);
   metric.addEventListener("change", () => {
+    const previousUnit = requirementTargetUnit(requirement.metric, analysis);
+    const previousTarget = requirement.target;
     setRequirementMetric(requirement, metric.value);
+    const nextUnit = requirementTargetUnit(requirement.metric, analysis);
+    // A number typed as dB means nothing in Hz: clear it rather than let the
+    // old target silently carry over into the new metric's unit.
+    if (previousUnit !== nextUnit && previousTarget !== "" && previousTarget !== undefined) {
+      requirement.target = "";
+      requirementTargetNotes.set(
+        requirement,
+        `Target cleared: ${previousTarget}${previousUnit ? ` ${previousUnit}` : ""} does not carry over to ${nextUnit || "this metric"}.`,
+      );
+    }
     populateExperiments();
     schedulePreview();
+    if (requirementTargetNotes.has(requirement)) {
+      document.querySelector(`[data-path="${base}.target"]`)?.focus();
+    }
   });
   const operator = selectInput(requirement.operator, [["<", "<"], ["<=", "\u2264"], [">", ">"], [">=", "\u2265"]], `${base}.operator`);
   setRecipeField(operator, requirement, "operator");
   operator.addEventListener("change", schedulePreview);
   const target = fieldInput(requirement.target, `${base}.target`);
+  const targetUnit = requirementTargetUnit(requirement.metric, analysis);
   target.placeholder = "Target";
+  target.setAttribute("aria-label", `${readableLabel(`${base}.target`)}${targetUnit ? ` in ${targetUnit}` : ""}`);
   setRecipeField(target, requirement, "target", true);
+  target.addEventListener("input", () => {
+    requirementTargetNotes.delete(requirement);
+    targetNote.hidden = true;
+  });
+  const targetField = document.createElement("span");
+  targetField.className = "target-field";
+  targetField.append(target);
+  if (targetUnit) {
+    const unit = document.createElement("span");
+    unit.className = "target-unit";
+    unit.textContent = targetUnit;
+    unit.setAttribute("aria-hidden", "true");
+    targetField.append(unit);
+  }
+  const targetNote = document.createElement("span");
+  targetNote.className = "field-problem target-note";
+  targetNote.textContent = requirementTargetNotes.get(requirement) || "";
+  targetNote.hidden = !targetNote.textContent;
 
-  row.append(metric, operator, target, removeButton(`Remove ${requirement.metric} requirement`, () => {
+  row.append(metric, operator, targetField, removeButton(`Remove ${requirement.metric} requirement`, () => {
     analysis.requirements.splice(index, 1);
     populateExperiments();
     schedulePreview();
   }));
-  container.append(row);
+  container.append(row, targetNote);
 
   const parameters = metricParameters(requirement.metric);
   const sweep = acSweepRange(experimentNetlistText(experiment));
@@ -1680,9 +1796,15 @@ function buildRequirementParameter(requirement, parameter, base, sweep) {
   const path = `${base}.${parameter.name}`;
 
   const caption = document.createElement("span");
-  caption.textContent = parameter.unit
-    ? `${parameter.name} (${parameter.unit})`
+  // "cutoff_drop_db" with unit dB reads as "Cutoff drop (dB)".
+  const unitSuffix = parameter.unit ? `_${parameter.unit.toLowerCase()}` : "";
+  const baseName = unitSuffix && parameter.name.toLowerCase().endsWith(unitSuffix)
+    ? parameter.name.slice(0, -unitSuffix.length)
     : parameter.name;
+  caption.textContent = parameter.unit
+    ? `${humanizeKey(baseName)} (${parameter.unit})`
+    : humanizeKey(baseName);
+  caption.title = parameter.name;
   if (parameter.required) {
     const mark = document.createElement("abbr");
     mark.className = "required-mark";
@@ -1698,7 +1820,7 @@ function buildRequirementParameter(requirement, parameter, base, sweep) {
   if (parameter.kind === "choice") {
     control = document.createElement("select");
     control.dataset.path = path;
-    control.setAttribute("aria-label", path);
+    control.setAttribute("aria-label", readableLabel(path));
     const fallback = formatDefault(parameter.default);
     const blank = document.createElement("option");
     blank.value = "";

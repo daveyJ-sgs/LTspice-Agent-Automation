@@ -327,7 +327,7 @@ td:first-child { color: var(--text); font-weight: 600; }
 .requirement { display: grid; gap: 8px; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
 .requirement-parameters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 12px; padding-top: 2px; border-top: 1px dashed var(--border); }
 .requirement-parameter { display: grid; gap: 4px; align-content: start; }
-.requirement-parameter > span:first-child { color: var(--subtle); font: 600 10px "IBM Plex Mono", monospace; text-transform: uppercase; }
+.requirement-parameter > span:first-child { color: var(--subtle); font: 600 11.5px "IBM Plex Sans", system-ui, sans-serif; }
 .requirement-parameter input, .requirement-parameter select { padding: 8px 10px; font-size: 12.5px; }
 .required-parameter > span:first-child { color: var(--muted); }
 .required-mark { color: var(--danger); text-decoration: none; font-weight: 700; }
@@ -686,3 +686,7 @@ td:first-child { color: var(--text); font-weight: 600; }
 .variable-table { min-width: 760px; }
 .variable-table th abbr { text-decoration: none; text-transform: none; cursor: help; }
 .sigma-hint { display: block; margin-top: 4px; white-space: nowrap; }
+.target-field { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.target-field input { min-width: 0; }
+.target-unit { color: var(--muted); font: 600 11px "IBM Plex Mono", monospace; white-space: nowrap; }
+.target-note { display: block; }
