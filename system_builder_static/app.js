@@ -5,6 +5,10 @@ let previewTimer = null;
 let previewSequence = 0;
 let latestPreview = null;
 let frozenLaunch = null;
+// Bumped by every invalidation, so a /api/freeze response that arrives after
+// the recipe changed is dropped instead of re-arming Start for a plan that no
+// longer matches the screen.
+let freezeSequence = 0;
 let latestRemotePreview = null;
 let remoteAuthReady = false;
 let remoteJobs = new Map();
@@ -267,6 +271,7 @@ function removeButton(label, handler) {
 }
 
 function invalidateFrozenPlan() {
+  freezeSequence += 1;
   latestPreview = null;
   frozenLaunch = null;
   latestRemotePreview = null;
@@ -286,10 +291,20 @@ function invalidateFrozenPlan() {
   byId("start-button").disabled = true;
 }
 
+// A recipe edit: the saved file is now out of date and any frozen plan no
+// longer describes what is on screen.
 function schedulePreview() {
   if (!recipe) return;
   markDirty("save-status", (v) => { studyDirty = v; });
   invalidateFrozenPlan();
+  requestPreview();
+}
+
+// Re-resolve without touching the recipe -- after a netlist rescan or save.
+// The recipe stays clean, and a frozen plan survives unless the fresh
+// preview resolves to a different plan (renderPreview checks that).
+function requestPreview() {
+  if (!recipe) return;
   window.clearTimeout(previewTimer);
   const status = byId("preview-status");
   status.className = "status-pill idle preview-pending";
@@ -657,7 +672,7 @@ function buildNetlistEditor(experiment) {
       if (!response.ok) throw new Error(result.error?.message || "Netlist could not be saved");
       netlistEditorBuffers.set(path, textarea.value);
       status.textContent = "Saved.";
-      schedulePreview();
+      requestPreview();
     } catch (error) {
       status.textContent = error.message;
     } finally {
@@ -2505,6 +2520,15 @@ function clearPreviewMetrics() {
 
 function renderPreview(result) {
   const status = byId("preview-status");
+  // A re-preview that did not come from a recipe edit (netlist rescan or
+  // save) keeps the frozen plan only while it still resolves to that plan.
+  if (frozenLaunch && (
+    !result.valid
+    || result.plan?.plan_id !== frozenLaunch.plan.plan_id
+    || result.recipe?.sha256 !== frozenLaunch.recipe_sha256
+  )) {
+    invalidateFrozenPlan();
+  }
   if (!result.valid) {
     latestPreview = null;
     byId("freeze-button").disabled = true;
@@ -2525,7 +2549,7 @@ function renderPreview(result) {
   byId("metric-runs").textContent = result.execution.total_run_count.toLocaleString();
   byId("plan-id").textContent = result.plan.plan_id;
   latestPreview = result;
-  byId("freeze-button").disabled = false;
+  byId("freeze-button").disabled = Boolean(frozenLaunch);
   renderErrors([]);
   renderScopedErrors([]);
   byId("experiments").replaceChildren(...result.experiments.map((experiment) => {
@@ -2884,6 +2908,8 @@ async function preview() {
 
 async function freezePlan() {
   if (!recipe || !latestPreview) return;
+  const sequence = ++freezeSequence;
+  const previewed = latestPreview;
   const button = byId("freeze-button");
   button.disabled = true;
   button.textContent = "Freezing…";
@@ -2896,11 +2922,12 @@ async function freezePlan() {
       },
       body: JSON.stringify({
         recipe,
-        expected_recipe_sha256: latestPreview.recipe.sha256,
-        expected_plan_id: latestPreview.plan.plan_id,
+        expected_recipe_sha256: previewed.recipe.sha256,
+        expected_plan_id: previewed.plan.plan_id,
       }),
     });
     const result = await response.json();
+    if (sequence !== freezeSequence) return;
     if (!response.ok) {
       if (result.valid === false) {
         renderPreview(result);
@@ -2908,7 +2935,7 @@ async function freezePlan() {
       }
       throw new Error(result.error?.message || "Plan could not be frozen");
     }
-    frozenLaunch = result;
+    frozenLaunch = {...result, recipe_sha256: previewed.recipe.sha256};
     byId("frozen-plan-id").textContent = result.plan.plan_id;
     byId("confirm-points").textContent = result.plan.point_count.toLocaleString();
     byId("confirm-experiments").textContent = result.execution.experiment_count.toLocaleString();
@@ -2924,6 +2951,7 @@ async function freezePlan() {
     byId("launch-result").hidden = true;
     renderErrors([]);
   } catch (error) {
+    if (sequence !== freezeSequence) return;
     renderErrors([{path: "freeze", message: error.message}]);
     button.disabled = latestPreview === null;
   } finally {
@@ -3610,7 +3638,7 @@ byId("refresh-netlists").addEventListener("click", async () => {
   button.disabled = true;
   try {
     await loadNetlistFiles();
-    schedulePreview();
+    requestPreview();
   } catch (error) {
     renderScopedErrors([{path: "experiments", message: error.message}]);
   } finally {
