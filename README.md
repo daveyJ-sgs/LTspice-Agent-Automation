@@ -97,10 +97,11 @@ then run the baseline RC example from the repository root:
 python3 ltspice_wrapper.py
 ```
 
-On macOS, the wrapper discovers:
+On macOS, the wrapper discovers (machine-wide first, then per-user):
 
 ```text
 /Applications/LTspice.app/Contents/MacOS/LTspice
+~/Applications/LTspice.app/Contents/MacOS/LTspice
 ```
 
 Override executable discovery when necessary:

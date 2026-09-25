@@ -120,7 +120,13 @@ def _default_ltspice() -> Path:
         return Path(override).expanduser()
 
     candidates = {
-        "darwin": [Path("/Applications/LTspice.app/Contents/MacOS/LTspice")],
+        # A drag-install without admin rights lands in ~/Applications; the
+        # machine-wide /Applications stays first so existing setups resolve
+        # exactly as before.
+        "darwin": [
+            Path("/Applications/LTspice.app/Contents/MacOS/LTspice"),
+            Path.home() / "Applications/LTspice.app/Contents/MacOS/LTspice",
+        ],
         # Windows installs land in several places. winget's default for
         # AnalogDevices.LTspice is a PER-USER install under LOCALAPPDATA, not
         # Program Files, so a Program-Files-only search misses the most common
