@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import statistical_engine
+import experiment_engine
 import study_recipe
 from examples import mixed_signal_daq_study
 
@@ -283,6 +284,30 @@ class StudyRecipeTests(unittest.TestCase):
 
         self.assertTrue(preview["valid"], preview.get("errors"))
         self.assertEqual(experiments[0]["netlist_template"], netlist_text)
+
+    def test_execution_timeout_is_configurable_and_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "plain.cir").write_text(
+                "V1 in 0 AC 1\nR1 in out {R_VAL}\nC1 out 0 1u\n"
+                ".ac dec 10 10 10k\n.end\n"
+            )
+            recipe = self._minimal_recipe("plain.cir")
+            recipe["execution"]["timeout_seconds"] = 900
+            preview = study_recipe.preview_study_recipe(recipe, root)
+            self.assertTrue(preview["valid"], preview.get("errors"))
+            self.assertEqual(preview["execution"]["timeout_seconds"], 900)
+            for value in (0, True, "60", 3601):
+                recipe["execution"]["timeout_seconds"] = value
+                preview = study_recipe.preview_study_recipe(recipe, root)
+                self.assertFalse(preview["valid"])
+                self.assertIn(
+                    "execution.timeout_seconds",
+                    [error["path"] for error in preview["errors"]],
+                )
+
+    def test_every_valid_recipe_concurrency_is_accepted_at_launch(self) -> None:
+        self.assertEqual(experiment_engine.MAX_EXPERIMENT_WORKERS, 8)
 
     def _preview_with_requirement(
         self, requirement: dict[str, object]

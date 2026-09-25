@@ -94,11 +94,15 @@ def validate_remote_document(document: object) -> dict[str, object]:
         raise ValueError("remote recipe and resolved experiments differ")
     max_concurrency = execution.get("max_concurrency", 2)
     reuse_cache = execution.get("reuse_cache", False)
+    timeout_seconds = execution.get("timeout_seconds", 120)
     if (
         isinstance(max_concurrency, bool)
         or not isinstance(max_concurrency, int)
-        or not 1 <= max_concurrency <= 8
+        or not 1 <= max_concurrency <= experiment_engine.MAX_EXPERIMENT_WORKERS
         or not isinstance(reuse_cache, bool)
+        or isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, int)
+        or not 1 <= timeout_seconds <= experiment_engine.MAX_TIMEOUT_SECONDS
     ):
         raise ValueError("remote execution settings are invalid")
 
@@ -201,6 +205,7 @@ def run_remote_study(document: object, evidence_dir: Path) -> dict[str, object]:
             str(experiment["netlist_template"]),
             experiment["waveform_analyses"],  # type: ignore[arg-type]
             filename=str(experiment["filename"]),
+            timeout_seconds=int(execution.get("timeout_seconds", 120)),
             reuse_cache=bool(execution.get("reuse_cache", False)),
         )
         experiment_id = result["experiment_id"]

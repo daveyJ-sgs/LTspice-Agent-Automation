@@ -4068,6 +4068,128 @@ class MCPServerTests(TemporaryRunsTestCase):
         self.assertEqual(finished["status"], "completed")
         self.assertEqual(calls, [0, 1, 2])
 
+    def test_point_cancelled_after_simulation_is_rerun_on_resume(self) -> None:
+        output_dir = self.make_run()
+        cancel = threading.Event()
+
+        def simulate(*args: object) -> Path:
+            cancel.set()
+            return output_dir
+
+        with (
+            patch.object(mcp_server, "_run_netlist_text", side_effect=simulate),
+            patch.object(mcp_server, "_summarize_run", return_value={"status": "completed"}),
+        ):
+            point = mcp_server._execute_experiment_point(
+                0,
+                {"R": "1k"},
+                self.runs / "point-0000",
+                "R1 in out {R}\n.end\n",
+                "circuit.cir",
+                False,
+                30,
+                [],
+                cancel,
+            )
+
+        # Unanalysed evidence must not read as a failed requirement.
+        self.assertEqual(point["simulation_status"], "cancelled")
+        self.assertFalse(point["all_passed"])
+
+    def test_point_cancelled_during_simulation_is_marked_cancelled(self) -> None:
+        with patch.object(
+            mcp_server,
+            "_run_netlist_text",
+            side_effect=mcp_server.wrapper.SimulationCancelled("LTspice run cancelled"),
+        ):
+            point = mcp_server._execute_experiment_point(
+                0,
+                {"R": "1k"},
+                self.runs / "point-0000",
+                "R1 in out {R}\n.end\n",
+                "circuit.cir",
+                False,
+                30,
+                [],
+                threading.Event(),
+            )
+        self.assertEqual(point["simulation_status"], "cancelled")
+
+    def test_shutdown_stops_running_points_and_recovery_reruns_them(self) -> None:
+        manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
+        started = threading.Event()
+        calls: list[int] = []
+
+        def interrupted(
+            index: int,
+            combination: dict[str, str],
+            point_dir: Path,
+            *args: object,
+        ) -> dict[str, object]:
+            signal = args[-1]
+            assert isinstance(signal, threading.Event)
+            calls.append(index)
+            started.set()
+            deadline = time.monotonic() + 30
+            while not signal.is_set() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            return {
+                "index": index,
+                "parameters": combination,
+                "run_dir": str(point_dir),
+                "simulation_status": "cancelled",
+                "duration_seconds": None,
+                "measurements": {},
+                "analyses": [],
+                "all_passed": False,
+                "error": "experiment cancelled during simulation",
+            }
+
+        with patch.object(
+            mcp_server, "_execute_experiment_point", side_effect=interrupted
+        ):
+            defined = manager.define(
+                "R1 in out {R}\n.end\n",
+                [{"name": "R", "values": ["1k"]}],
+                max_concurrency=1,
+            )
+            manager.start(defined["experiment_id"])
+            self.assertTrue(started.wait(2))
+            began = time.monotonic()
+            manager.shutdown()
+        self.assertLess(time.monotonic() - began, 10)
+        experiment_dir = Path(defined["experiment_dir"])
+        self.assertFalse((experiment_dir / "point-0000" / "point_result.json").exists())
+
+        def completes(
+            index: int,
+            combination: dict[str, str],
+            point_dir: Path,
+            *args: object,
+        ) -> dict[str, object]:
+            calls.append(index)
+            return {
+                "index": index,
+                "parameters": combination,
+                "run_dir": str(point_dir),
+                "simulation_status": "completed",
+                "duration_seconds": 0.01,
+                "measurements": {},
+                "analyses": [],
+                "all_passed": True,
+                "error": None,
+            }
+
+        with patch.object(mcp_server, "_execute_experiment_point", side_effect=completes):
+            recovered = mcp_server.ExperimentJobManager(self.runs, workers=1)
+            try:
+                finished = recovered.wait(defined["experiment_id"])
+            finally:
+                recovered.shutdown()
+        self.assertEqual(finished["status"], "completed")
+        self.assertEqual(finished["passed_points"], 1)
+        self.assertEqual(calls, [0, 0])
+
     def test_cancel_after_queue_claim_cannot_be_lost(self) -> None:
         manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
         claimed = threading.Event()

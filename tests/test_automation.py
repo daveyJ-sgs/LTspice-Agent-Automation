@@ -9,6 +9,7 @@ import platform
 import subprocess
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
@@ -119,6 +120,69 @@ class AutomationTests(unittest.TestCase):
                     self.assertIn("µ", result)
                     self.assertIn(str((root / "model.inc").resolve()), result)
 
+    def _slow_simulator(self, root: Path) -> Path:
+        executable = root / "slow-ltspice"
+        executable.write_text(
+            f"#!{sys.executable}\nimport time\ntime.sleep(30)\n", encoding="utf-8"
+        )
+        executable.chmod(0o755)
+        return executable
+
+    @unittest.skipIf(sys.platform == "win32", "uses a POSIX script as the simulator")
+    def test_cancel_stops_a_running_simulator_promptly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "circuit.cir"
+            source.write_text("* Test\nR1 in 0 1k\n.end\n", encoding="utf-8")
+            cancel = threading.Event()
+            timer = threading.Timer(0.3, cancel.set)
+            timer.start()
+            started = time.monotonic()
+            try:
+                with (
+                    patch.object(ltspice_wrapper, "LTSPICE", self._slow_simulator(root)),
+                    self.assertRaises(ltspice_wrapper.SimulationCancelled),
+                ):
+                    run_netlist(source, root / "run", cancel_event=cancel)
+            finally:
+                timer.cancel()
+            self.assertLess(time.monotonic() - started, 10)
+            manifest = json.loads((root / "run" / "run_manifest.json").read_text())
+            self.assertEqual(manifest["status"], "cancelled")
+            self.assertIn("finished_at", manifest)
+
+    @unittest.skipIf(sys.platform == "win32", "uses a POSIX script as the simulator")
+    def test_timeout_kills_the_simulator_instead_of_waiting_for_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "circuit.cir"
+            source.write_text("* Test\nR1 in 0 1k\n.end\n", encoding="utf-8")
+            started = time.monotonic()
+            with (
+                patch.object(ltspice_wrapper, "LTSPICE", self._slow_simulator(root)),
+                self.assertRaisesRegex(RuntimeError, "exceeded 1 seconds"),
+            ):
+                run_netlist(source, root / "run", timeout_seconds=1)
+            self.assertLess(time.monotonic() - started, 10)
+            manifest = json.loads((root / "run" / "run_manifest.json").read_text())
+            self.assertEqual(manifest["status"], "timeout")
+
+    def test_json_publication_retries_a_briefly_locked_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "experiment_manifest.json"
+            real_replace = experiment_engine.os.replace
+            failures = [PermissionError("locked"), PermissionError("locked")]
+
+            def flaky_replace(source: object, destination: object) -> None:
+                if failures:
+                    raise failures.pop()
+                real_replace(source, destination)
+
+            with patch.object(experiment_engine.os, "replace", side_effect=flaky_replace):
+                experiment_engine._write_json(target, {"status": "running"})
+            self.assertEqual(json.loads(target.read_text())["status"], "running")
+            self.assertEqual(list(Path(tmp).iterdir()), [target])
+
     def test_process_launch_os_errors_write_terminal_manifests(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -127,7 +191,7 @@ class AutomationTests(unittest.TestCase):
             for index, error in enumerate((PermissionError("denied"), FileNotFoundError("removed"))):
                 output = root / f"run-{index}"
                 with patch.object(ltspice_wrapper, "LTSPICE", Path(sys.executable)), patch.object(
-                    ltspice_wrapper.subprocess, "run", side_effect=error
+                    ltspice_wrapper, "_run_simulator", side_effect=error
                 ), self.assertRaisesRegex(RuntimeError, "could not be launched"):
                     run_netlist(source, output)
                 manifest = json.loads((output / "run_manifest.json").read_text())
@@ -188,7 +252,7 @@ class AutomationTests(unittest.TestCase):
             ltspice_wrapper._simulator_metadata_cached.cache_clear()
             with (
                 patch.object(ltspice_wrapper, "LTSPICE", executable),
-                patch.object(ltspice_wrapper.subprocess, "run", side_effect=simulate),
+                patch.object(ltspice_wrapper, "_run_simulator", side_effect=simulate),
             ):
                 first = run_netlist(source, root / "first", cache_dir=cache)
                 run_netlist(source, root / "second", cache_dir=cache)
@@ -240,7 +304,7 @@ class AutomationTests(unittest.TestCase):
             with (
                 patch.object(ltspice_wrapper, "LTSPICE", executable),
                 patch.object(ltspice_wrapper, "MAX_RUN_OUTPUT_BYTES", 8),
-                patch.object(ltspice_wrapper.subprocess, "run", side_effect=simulate),
+                patch.object(ltspice_wrapper, "_run_simulator", side_effect=simulate),
                 patch.object(
                     ltspice_wrapper,
                     "_result_artifacts",
@@ -324,7 +388,7 @@ class AutomationTests(unittest.TestCase):
                     return subprocess.CompletedProcess(command, 0, "", "")
 
                 with patch.object(ltspice_wrapper, "LTSPICE", executable), patch.object(
-                    ltspice_wrapper.subprocess, "run", side_effect=simulate
+                    ltspice_wrapper, "_run_simulator", side_effect=simulate
                 ):
                     run_netlist(source, output, disable_compression=True)
                 self.assertEqual(source.read_bytes(), original)
@@ -356,7 +420,7 @@ class AutomationTests(unittest.TestCase):
             ltspice_wrapper._simulator_metadata_cached.cache_clear()
             with (
                 patch.object(ltspice_wrapper, "LTSPICE", executable),
-                patch.object(ltspice_wrapper.subprocess, "run", side_effect=simulate),
+                patch.object(ltspice_wrapper, "_run_simulator", side_effect=simulate),
             ):
                 first = run_netlist(
                     source,
@@ -425,7 +489,7 @@ class AutomationTests(unittest.TestCase):
             ltspice_wrapper._simulator_metadata_cached.cache_clear()
             with (
                 patch.object(ltspice_wrapper, "LTSPICE", executable),
-                patch.object(ltspice_wrapper.subprocess, "run", side_effect=simulate),
+                patch.object(ltspice_wrapper, "_run_simulator", side_effect=simulate),
             ):
                 run_netlist(source, root / "one", reuse_cache=True, cache_dir=cache)
                 model.write_text(".param RV=2k\n", encoding="utf-8")
@@ -468,7 +532,7 @@ class AutomationTests(unittest.TestCase):
             ltspice_wrapper._simulator_metadata_cached.cache_clear()
             with (
                 patch.object(ltspice_wrapper, "LTSPICE", executable),
-                patch.object(ltspice_wrapper.subprocess, "run", side_effect=simulate),
+                patch.object(ltspice_wrapper, "_run_simulator", side_effect=simulate),
             ):
                 source.write_text('.include "missing.lib"\n.end\n', encoding="utf-8")
                 unresolved = run_netlist(
@@ -542,7 +606,7 @@ class AutomationTests(unittest.TestCase):
             ltspice_wrapper._simulator_metadata_cached.cache_clear()
             with (
                 patch.object(ltspice_wrapper, "LTSPICE", executable),
-                patch.object(ltspice_wrapper.subprocess, "run", side_effect=simulate),
+                patch.object(ltspice_wrapper, "_run_simulator", side_effect=simulate),
             ):
                 run_netlist(source, root / "first", reuse_cache=True, cache_dir=cache)
                 original_copy = ltspice_wrapper.shutil.copy2
@@ -881,7 +945,7 @@ Values:
 
             with (
                 patch.object(ltspice_wrapper, "LTSPICE", executable),
-                patch.object(ltspice_wrapper.subprocess, "run") as simulate,
+                patch.object(ltspice_wrapper, "_run_simulator") as simulate,
                 self.assertRaisesRegex(ValueError, "must not already exist"),
             ):
                 run_netlist(source, output_dir=output)
@@ -918,7 +982,7 @@ Values:
 
             with (
                 patch.object(ltspice_wrapper, "LTSPICE", executable),
-                patch.object(ltspice_wrapper.subprocess, "run", side_effect=simulate),
+                patch.object(ltspice_wrapper, "_run_simulator", side_effect=simulate),
                 ThreadPoolExecutor(max_workers=2) as executor,
             ):
                 outcomes = sorted(executor.map(lambda _: invoke(), range(2)))
@@ -958,7 +1022,7 @@ Values:
 
             with (
                 patch.object(ltspice_wrapper, "LTSPICE", executable),
-                patch.object(ltspice_wrapper.subprocess, "run", side_effect=simulate),
+                patch.object(ltspice_wrapper, "_run_simulator", side_effect=simulate),
             ):
                 result = run_netlist(source, output_dir=root / "run")
 

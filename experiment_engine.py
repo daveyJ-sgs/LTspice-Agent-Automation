@@ -25,7 +25,9 @@ import frequency_domain_metrics
 import waveform_metrics
 
 MAX_EXPERIMENT_POINTS = 1000
-MAX_EXPERIMENT_WORKERS = 4
+# Matches the recipe schema's max_concurrency bound, so a valid recipe never
+# fails only at launch. Recipes still default to two concurrent simulations.
+MAX_EXPERIMENT_WORKERS = 8
 MAX_WAVEFORM_ANALYSES = 32
 MAX_REQUIREMENTS_PER_EXPERIMENT = 256
 MAX_TIMEOUT_SECONDS = 3_600
@@ -218,13 +220,50 @@ class ExperimentComparisonResult(TypedDict):
 
 
 # --- internal helpers -------------------------------------------------
+def _replace_file(source: Path, target: Path) -> None:
+    """``os.replace`` that tolerates a reader briefly holding ``target`` open.
+
+    Windows refuses to replace a file another handle has open (a history or
+    report read, antivirus, the search indexer). Those holds are brief, so a
+    short retry keeps a progress write from failing the whole job.
+    """
+    for delay in (0.01, 0.02, 0.05, 0.1, 0.2, 0.4, 0.8):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            time.sleep(delay)
+    try:
+        os.replace(source, target)
+    except BaseException:
+        source.unlink(missing_ok=True)
+        raise
+
+
+class _RunSignal(threading.Event):
+    """Stop signal for simulations: set by a cancel request or by shutdown.
+
+    Only a cancel request cancels the experiment. A shutdown stops LTspice so
+    the process can exit promptly, and the interrupted points run again when
+    the experiment is recovered. Executors only poll ``is_set``.
+    """
+
+    def __init__(self, cancel: threading.Event, stopping: threading.Event) -> None:
+        super().__init__()
+        self._cancel = cancel
+        self._stopping = stopping
+
+    def is_set(self) -> bool:
+        return self._cancel.is_set() or self._stopping.is_set()
+
+
 def _write_json(path: Path, value: object) -> None:
     temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     temporary_path.write_text(
         json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
-    os.replace(temporary_path, path)
+    _replace_file(temporary_path, path)
 
 
 def metric_parameters(metric: str) -> tuple[waveform_metrics.MetricParameter, ...]:
@@ -2144,62 +2183,60 @@ class ExperimentJobManager:
             )
             pending = [index for index in range(len(combinations)) if index not in checkpoints]
             active: dict[Future[ExperimentPointResult], tuple[int, Path]] = {}
-            next_pending = 0
             concurrency = int(definition["max_concurrency"])
-            while next_pending < len(pending) or active:
-                while (
-                    not event.is_set()
-                    and not self._stopping.is_set()
-                    and len(active) < concurrency
-                    and next_pending < len(pending)
+            run_signal = _RunSignal(event, self._stopping)
+
+            def record(future: Future[ExperimentPointResult]) -> None:
+                index, point_root = active.pop(future)
+                try:
+                    point = future.result()
+                except Exception as exc:
+                    point = {
+                        "index": index,
+                        "parameters": combinations[index],
+                        "run_dir": str(point_root),
+                        "simulation_status": "error",
+                        "duration_seconds": None,
+                        "measurements": {},
+                        "analyses": [],
+                        "all_passed": False,
+                        "error": str(exc),
+                    }
+                if (
+                    point.get("simulation_status") == "cancelled"
+                    and not event.is_set()
                 ):
-                    index = pending[next_pending]
-                    next_pending += 1
-                    point_root = experiment_dir / f"point-{index:04d}"
-                    attempt_dir = self._next_attempt_dir(point_root)
-                    arguments = (
-                        index,
-                        combinations[index],
-                        attempt_dir,
-                        str(definition["netlist_template"]),
-                        str(definition["filename"]),
-                        bool(definition["ascii_raw"]),
-                        int(definition["timeout_seconds"]),
-                        analyses,
-                        event,
-                    )
-                    if bool(definition.get("reuse_cache", False)):
-                        arguments = (*arguments, True)
-                    future = self._executor.submit(self._execute_point, *arguments)
-                    active[future] = (index, point_root)
-                self._persist_progress(
+                    # Stopped by shutdown, not by the user: leave the point
+                    # pending so recovery runs it again.
+                    return
+                _write_json(point_root / "point_result.json", point)
+                checkpoints[index] = point
+
+            try:
+                self._dispatch_points(
                     experiment_id,
-                    list(checkpoints.values()),
-                    len(combinations),
-                    len(active),
-                    "running",
+                    experiment_dir,
+                    definition,
+                    combinations,
+                    analyses,
+                    event,
+                    run_signal,
+                    pending,
+                    active,
+                    checkpoints,
+                    concurrency,
+                    record,
                 )
-                if not active:
-                    break
-                done, _ = wait(active, return_when=FIRST_COMPLETED)
-                for future in done:
-                    index, point_root = active.pop(future)
+            except BaseException:
+                # Never abandon running simulations: wait for them and keep
+                # their evidence before the job is marked failed.
+                wait(list(active))
+                for future in list(active):
                     try:
-                        point = future.result()
-                    except Exception as exc:
-                        point = {
-                            "index": index,
-                            "parameters": combinations[index],
-                            "run_dir": str(point_root),
-                            "simulation_status": "error",
-                            "duration_seconds": None,
-                            "measurements": {},
-                            "analyses": [],
-                            "all_passed": False,
-                            "error": str(exc),
-                        }
-                    _write_json(point_root / "point_result.json", point)
-                    checkpoints[index] = point
+                        record(future)
+                    except Exception:
+                        active.pop(future, None)
+                raise
 
             points = [checkpoints[index] for index in sorted(checkpoints)]
             counts = _experiment_counts(points, len(combinations))
@@ -2274,6 +2311,61 @@ class ExperimentJobManager:
             except Exception:
                 pass
 
+    def _dispatch_points(
+        self,
+        experiment_id: str,
+        experiment_dir: Path,
+        definition: dict[str, object],
+        combinations: list[dict[str, str]],
+        analyses: list[ExperimentWaveformAnalysis],
+        event: threading.Event,
+        run_signal: _RunSignal,
+        pending: list[int],
+        active: dict[Future[ExperimentPointResult], tuple[int, Path]],
+        checkpoints: dict[int, ExperimentPointResult],
+        concurrency: int,
+        record: Callable[[Future[ExperimentPointResult]], None],
+    ) -> None:
+        next_pending = 0
+        while next_pending < len(pending) or active:
+            while (
+                not event.is_set()
+                and not self._stopping.is_set()
+                and len(active) < concurrency
+                and next_pending < len(pending)
+            ):
+                index = pending[next_pending]
+                next_pending += 1
+                point_root = experiment_dir / f"point-{index:04d}"
+                attempt_dir = self._next_attempt_dir(point_root)
+                arguments = (
+                    index,
+                    combinations[index],
+                    attempt_dir,
+                    str(definition["netlist_template"]),
+                    str(definition["filename"]),
+                    bool(definition["ascii_raw"]),
+                    int(definition["timeout_seconds"]),
+                    analyses,
+                    run_signal,
+                )
+                if bool(definition.get("reuse_cache", False)):
+                    arguments = (*arguments, True)
+                future = self._executor.submit(self._execute_point, *arguments)
+                active[future] = (index, point_root)
+            self._persist_progress(
+                experiment_id,
+                list(checkpoints.values()),
+                len(combinations),
+                len(active),
+                "running",
+            )
+            if not active:
+                break
+            done, _ = wait(active, return_when=FIRST_COMPLETED)
+            for future in done:
+                record(future)
+
     def _run_native_job(
         self,
         experiment_id: str,
@@ -2326,8 +2418,24 @@ class ExperimentJobManager:
                         int(definition["timeout_seconds"]),
                         analyses,
                         bool(definition.get("reuse_cache", False)),
-                        event,
+                        _RunSignal(event, self._stopping),
                     )
+                    if (
+                        self._stopping.is_set()
+                        and not event.is_set()
+                        and (
+                            native_batch.get("status") != "completed"
+                            or any(
+                                point["simulation_status"] == "cancelled"
+                                for point in points
+                            )
+                        )
+                    ):
+                        # Shutdown interrupted the batch; recovery runs it again.
+                        self._persist_progress(
+                            experiment_id, [], len(combinations), 0, "queued"
+                        )
+                        return
                     checkpoint_value = {
                         "schema_version": 1,
                         "definition_hash": definition_hash,

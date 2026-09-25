@@ -18,13 +18,14 @@ Or register with Claude Code:
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import json
 import os
 import tempfile
 import threading
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -58,6 +59,8 @@ PROJECT_DIR = wrapper.PROJECT_DIR
 RUNS_DIR = wrapper.RUNS_DIR
 EXAMPLES_DIR = PROJECT_DIR / "examples"
 MAX_EXPERIMENT_WORKERS = experiment_engine.MAX_EXPERIMENT_WORKERS
+# Carries a point's stop signal down to the LTspice process it launches.
+_simulation_scope = threading.local()
 MAX_WAVEFORM_RESPONSE_POINTS = 10_000
 MAX_LEGACY_SWEEP_POINTS = experiment_engine.MAX_EXPERIMENT_POINTS
 
@@ -250,7 +253,19 @@ def _run_netlist_text(
             reuse_cache=reuse_cache,
             cache_dir=_simulation_cache_dir() if reuse_cache else None,
             disable_compression=True,
+            cancel_event=getattr(_simulation_scope, "cancel_event", None),
         )
+
+
+@contextlib.contextmanager
+def _cancellable(cancel_event: threading.Event | None) -> Iterator[None]:
+    """Let LTspice runs on this thread be stopped by ``cancel_event``."""
+    previous = getattr(_simulation_scope, "cancel_event", None)
+    _simulation_scope.cancel_event = cancel_event
+    try:
+        yield
+    finally:
+        _simulation_scope.cancel_event = previous
 
 
 @dataclass
@@ -389,12 +404,17 @@ def _execute_experiment_point(
     rendered = _render_experiment_netlist(netlist_template, combination)
     try:
         arguments = (rendered, filename, ascii_raw, timeout_seconds, point_dir)
-        output_dir = (
-            _run_netlist_text(*arguments, True)
-            if reuse_cache
-            else _run_netlist_text(*arguments)
-        )
+        with _cancellable(cancel_event):
+            output_dir = (
+                _run_netlist_text(*arguments, True)
+                if reuse_cache
+                else _run_netlist_text(*arguments)
+            )
         summary = _summarize_run(output_dir)
+    except wrapper.SimulationCancelled:
+        point["simulation_status"] = "cancelled"
+        point["error"] = "experiment cancelled during simulation"
+        return point
     except (FileNotFoundError, RuntimeError) as exc:
         point["error"] = str(exc)
         return point
@@ -416,6 +436,10 @@ def _execute_experiment_point(
         point["cache_key"] = cache_key if isinstance(cache_key, str) else None
 
     if cancel_event is not None and cancel_event.is_set():
+        # Unanalysed evidence is not a result: mark it cancelled so resume
+        # re-runs the point instead of reporting it as a requirement failure.
+        point["simulation_status"] = "cancelled"
+        point["all_passed"] = False
         point["error"] = "experiment cancelled before waveform analysis"
         return point
 
@@ -459,11 +483,12 @@ def _execute_native_experiment(
     raw_cache = _RawParseCache()
     try:
         arguments = (netlist, filename, ascii_raw, timeout_seconds, batch_dir)
-        output_dir = (
-            _run_netlist_text(*arguments, True)
-            if reuse_cache
-            else _run_netlist_text(*arguments)
-        )
+        with _cancellable(cancel_event):
+            output_dir = (
+                _run_netlist_text(*arguments, True)
+                if reuse_cache
+                else _run_netlist_text(*arguments)
+            )
         summary = _summarize_run(output_dir)
         log_path = output_dir / Path(filename).with_suffix(".log").name
         if not log_path.is_file():
@@ -587,6 +612,7 @@ def _execute_native_experiment(
             "native_step_index": index,
         }
         if cancel_event is not None and cancel_event.is_set():
+            point["simulation_status"] = "cancelled"
             point["error"] = "experiment cancelled before waveform analysis"
             points.append(point)
         else:

@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
 
 from ltspice_text import decode_text
 
@@ -251,7 +251,114 @@ def _write_manifest(path: Path, manifest: dict[str, object]) -> None:
         json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
-    os.replace(temporary_path, path)
+    # Windows refuses to replace a file another handle briefly holds open.
+    for delay in (0.01, 0.02, 0.05, 0.1, 0.2, 0.4, 0.8):
+        try:
+            os.replace(temporary_path, path)
+            return
+        except PermissionError:
+            time.sleep(delay)
+    try:
+        os.replace(temporary_path, path)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
+class SimulationCancelled(RuntimeError):
+    """LTspice was stopped because its caller cancelled the run."""
+
+
+class _CancelSignal(Protocol):
+    def is_set(self) -> bool: ...
+
+
+_PROCESS_POLL_SECONDS = 0.25
+
+
+def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    """Stop LTspice and anything it started, without leaving orphans."""
+    if process.poll() is not None:
+        return
+    if sys.platform == "win32":
+        # TerminateProcess alone would leave child processes holding the
+        # output pipes, and communicate() would then wait on them forever.
+        try:
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                capture_output=True,
+                timeout=15,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+    else:
+        import signal
+
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (OSError, AttributeError):
+            pass
+    if process.poll() is None:
+        process.kill()
+
+
+def _run_simulator(
+    command: list[str],
+    cwd: Path,
+    timeout_seconds: float,
+    cancel_event: _CancelSignal | None,
+) -> subprocess.CompletedProcess[str]:
+    """Run LTspice like ``subprocess.run``, but stoppable while it runs.
+
+    The process gets its own process group (POSIX) or no console window
+    (Windows) so a timeout or cancellation can stop the whole tree instead of
+    waiting for the simulation to finish on its own.
+    """
+    options: dict[str, object] = {}
+    if sys.platform == "win32":
+        options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    else:
+        options["start_new_session"] = True
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        # The console codepage (cp1252 on Windows) cannot decode every byte
+        # LTspice may print; a decode error must not strand the manifest.
+        encoding="utf-8",
+        errors="replace",
+        **options,  # type: ignore[call-overload]
+    )
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                _terminate_process_tree(process)
+                raise SimulationCancelled("LTspice run cancelled")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_process_tree(process)
+                raise subprocess.TimeoutExpired(command, timeout_seconds)
+            try:
+                stdout, stderr = process.communicate(
+                    timeout=min(_PROCESS_POLL_SECONDS, remaining)
+                )
+            except subprocess.TimeoutExpired:
+                continue
+            return subprocess.CompletedProcess(
+                command, process.returncode, stdout, stderr
+            )
+    except BaseException:
+        _terminate_process_tree(process)
+        try:
+            process.communicate(timeout=5)
+        except (subprocess.SubprocessError, OSError, ValueError):
+            pass
+        raise
 
 
 def _sha256_file(path: Path) -> str:
@@ -615,8 +722,13 @@ def run_netlist(
     reuse_cache: bool = False,
     cache_dir: Path | None = None,
     disable_compression: bool = False,
+    cancel_event: _CancelSignal | None = None,
 ) -> Path:
-    """Run one netlist and return the directory containing LTspice outputs."""
+    """Run one netlist and return the directory containing LTspice outputs.
+
+    When ``cancel_event`` is set while LTspice is running, the simulator
+    process tree is stopped and :class:`SimulationCancelled` is raised.
+    """
     if not isinstance(reuse_cache, bool):
         raise ValueError("reuse_cache must be a boolean")
     if not isinstance(disable_compression, bool):
@@ -761,13 +873,21 @@ def run_netlist(
     _write_manifest(manifest_path, manifest)
 
     try:
-        completed = subprocess.run(
+        completed = _run_simulator(
             command,
             cwd=output_dir,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
+            timeout_seconds=timeout_seconds,
+            cancel_event=cancel_event,
         )
+    except SimulationCancelled:
+        manifest.update(
+            status="cancelled",
+            finished_at=datetime.now().astimezone().isoformat(),
+            duration_seconds=time.monotonic() - started_clock,
+            error="LTspice run cancelled",
+        )
+        _write_manifest(manifest_path, manifest)
+        raise
     except subprocess.TimeoutExpired as exc:
         manifest.update(
             status="timeout",
