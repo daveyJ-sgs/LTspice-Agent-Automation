@@ -43,11 +43,9 @@ function Find-CompatiblePython {
         if (-not $resolved) {
             continue
         }
-        # Skip the Microsoft Store "App Installer" stub. It is not an
-        # interpreter; run without arguments it opens the Store.
-        if ($resolved.Source -like "*\WindowsApps\python.exe") {
-            continue
-        }
+        # The Microsoft Store alias in WindowsApps is either a real Store
+        # Python or an installer stub; the stub fails this probe (it prints
+        # to stderr and exits non-zero) without opening the Store.
         if (Test-Python313 -Command $resolved.Source -Arguments $prefixArguments) {
             return @{ Command = $resolved.Source; Arguments = $prefixArguments }
         }

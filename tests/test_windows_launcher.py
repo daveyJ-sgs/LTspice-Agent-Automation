@@ -42,7 +42,9 @@ class WindowsLauncherTests(unittest.TestCase):
         self.assertIn("2>$null", probe)
         self.assertEqual(powershell.count("2>$null"), 1)
         self.assertIn("Test-Python313 -Command $venvPython", powershell)
-        self.assertIn('-like "*\\WindowsApps\\python.exe"', powershell)
+        # A Microsoft Store Python lives behind the same WindowsApps alias as
+        # the installer stub, so it is probed rather than skipped.
+        self.assertNotIn("WindowsApps\\python.exe\") {", powershell)
 
     def test_launcher_line_endings_are_pinned(self) -> None:
         rules = {
