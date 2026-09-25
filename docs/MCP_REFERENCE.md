@@ -934,7 +934,11 @@ Phase 1C adds frequency-domain requirements:
 | `phase_margin` | 180° plus phase at the falling 0 dB crossing, wrapped into (-180°, 180°] so a negative margin is unstable whatever the loop's low-frequency phase | None |
 
 Spectral analysis integrates the adaptive LTspice samples in time instead of
-treating them as uniformly spaced. `spectral_peak` uses a Hann window and a
+treating them as uniformly spaced: each linear segment between samples is
+integrated against the complex exponential in closed form, then divided by the
+time-weighted linear-interpolation attenuation, so a uniform grid reproduces
+the exact DFT result and long adaptive steps do not leak phasor rotation into
+spurious harmonics. `spectral_peak` uses a Hann window and a
 bounded frequency grid; `thd` uses the largest whole-cycle subwindow and an
 explicit fundamental. Both reject requested content above the conservative
 Nyquist limit implied by the largest recorded time gap. Resource limits cap a

@@ -123,22 +123,77 @@ def _spectral_samples(
     return weighted, coherent_weight
 
 
+# Below this half-angle (sin x - x cos x) / x**2 cancels, so a series is used.
+# Four terms are exact to double precision there; above it the closed form
+# loses at most ~1e-13 relative, on a term that is itself O(x) small.
+_SERIES_LIMIT = 0.05
+_ODD_MOMENT_1 = 1.0 / 3.0
+_ODD_MOMENT_2 = 4.0 / math.factorial(5)
+_ODD_MOMENT_3 = 6.0 / math.factorial(7)
+_ODD_MOMENT_4 = 8.0 / math.factorial(9)
+
+
+def _odd_moment(half_angle: float, sine: float, cosine: float) -> float:
+    """Return (sin x - x cos x) / x**2 without cancellation near x = 0."""
+    if abs(half_angle) >= _SERIES_LIMIT:
+        return (sine - half_angle * cosine) / (half_angle * half_angle)
+    # sum over k >= 1 of (-1)**(k + 1) * 2k * x**(2k - 1) / (2k + 1)!
+    square = half_angle * half_angle
+    return half_angle * (
+        _ODD_MOMENT_1
+        - square * (_ODD_MOMENT_2 - square * (_ODD_MOMENT_3 - square * _ODD_MOMENT_4))
+    )
+
+
 def _fourier_amplitude(
     axis: Sequence[float],
     weighted_values: Sequence[float],
     coherent_weight: float,
     frequency: float,
 ) -> float:
-    angular_frequency = -2.0 * math.pi * frequency
-    before_time = axis[0]
-    before = weighted_values[0] * cmath.exp(1j * angular_frequency * before_time)
+    """Fourier amplitude of the piecewise-linear waveform through the samples.
+
+    Each linear segment is integrated against exp(-j w t) in closed form, so
+    the phasor's rotation inside a long adaptive step is exact rather than
+    trapezoid-sampled at the segment ends. About its midpoint c, a segment of
+    width h with mean m and half-rise d contributes
+
+        h * exp(-j w c) * (m * sin(x) / x - j * d * (sin x - x cos x) / x**2)
+
+    with x = w h / 2. Linear interpolation itself low-passes the samples by
+    (sin(x) / x)**2 per segment; the coefficient is divided by the
+    time-weighted mean of that factor, which reproduces the trapezoid (DFT)
+    result exactly on a uniform grid and keeps harmonic ratios unbiased on an
+    adaptive one.
+    """
+    angular_frequency = 2.0 * math.pi * frequency
     coefficient = 0j
-    for after_time, after_value in zip(axis[1:], weighted_values[1:]):
-        after = after_value * cmath.exp(1j * angular_frequency * after_time)
-        coefficient += 0.5 * (before + after) * (after_time - before_time)
+    attenuation = 0.0
+    before_time = axis[0]
+    before = weighted_values[0]
+    before_rotation = cmath.exp(-1j * angular_frequency * before_time)
+    for after_time, after in zip(axis[1:], weighted_values[1:]):
+        width = after_time - before_time
+        half_angle = 0.5 * angular_frequency * width
+        sine = math.sin(half_angle)
+        cosine = math.cos(half_angle)
+        sinc = 1.0 if half_angle == 0.0 else sine / half_angle
+        # exp(-j w c) = exp(-j w a) * exp(-j x)
+        midpoint_rotation = before_rotation * complex(cosine, -sine)
+        coefficient += (
+            width
+            * midpoint_rotation
+            * complex(
+                0.5 * (before + after) * sinc,
+                -0.5 * (after - before) * _odd_moment(half_angle, sine, cosine),
+            )
+        )
+        attenuation += width * sinc * sinc
         before_time = after_time
         before = after
-    return 2.0 * abs(coefficient) / coherent_weight
+        before_rotation = cmath.exp(-1j * angular_frequency * after_time)
+    attenuation /= axis[-1] - axis[0]
+    return 2.0 * abs(coefficient) / (coherent_weight * attenuation)
 
 
 def _check_spectral_work(point_count: int, frequency_count: int) -> None:

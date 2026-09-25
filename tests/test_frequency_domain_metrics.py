@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import cmath
 import math
+import random
 import unittest
 from unittest.mock import patch
 
@@ -268,6 +269,42 @@ class FrequencyDomainMetricTests(unittest.TestCase):
         self.assertEqual(result.evidence["cycle_count"], 10)
         self.assertAlmostEqual(result.value, 10.0, places=9)
         self.assertAlmostEqual(result.evidence["harmonic_1_amplitude"], 1.0, places=12)
+
+    def test_thd_integrates_adaptive_steps_exactly(self) -> None:
+        # LTspice-like adaptive steps at ~20 points per 1 kHz cycle. The old
+        # trapezoid of y*exp(-jwt) read a pure sine as 1.87 % THD.
+        generator = random.Random(1)
+        fundamental = 1e3
+        axis = [0.0]
+        while axis[-1] < 10e-3:
+            axis.append(axis[-1] + generator.uniform(0.5, 1.5) / (20 * fundamental))
+        axis[-1] = 10e-3
+
+        def thd(third: float, time_axis: list[float]) -> waveform_metrics.MetricMeasurement:
+            values = [
+                math.sin(2 * math.pi * fundamental * time)
+                + third * math.sin(2 * math.pi * 3 * fundamental * time)
+                for time in time_axis
+            ]
+            return measure_metric(
+                time_axis,
+                values,
+                "thd",
+                fundamental_frequency=fundamental,
+                maximum_harmonic=5,
+            )
+
+        pure = thd(0.0, axis)
+        self.assertLess(pure.value, 0.15)
+        self.assertAlmostEqual(pure.evidence["fundamental_amplitude"], 1.0, delta=2e-4)
+        distorted = thd(0.1, axis)
+        self.assertAlmostEqual(distorted.value, 10.0, delta=0.1)
+
+        # On a uniform grid the result is still the exact DFT answer, even at
+        # 20 points per cycle where linear interpolation attenuates harmonics.
+        uniform = [index / (20 * fundamental) for index in range(201)]
+        self.assertAlmostEqual(thd(0.1, uniform).value, 10.0, places=10)
+        self.assertLess(thd(0.0, uniform).value, 1e-10)
 
     def test_ac_gain_cutoff_and_peaking_use_log_frequency(self) -> None:
         frequency = [10, 100, 1000, 10000]
