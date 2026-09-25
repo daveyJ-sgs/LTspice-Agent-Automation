@@ -22,6 +22,15 @@ import study_recipe
 
 RECIPE_SUFFIXES = (".ltstudy.json", ".ltopt.json")
 RESERVED_NAMES = {"runs", "examples"}
+# Windows device names cannot be used as a directory name (with or without
+# an extension) on any Windows filesystem. They are refused for new projects
+# only: slugs never contain a dot, so a bare slug is the only form that can
+# collide, and an existing macOS/Linux project with such a name stays listed.
+WINDOWS_DEVICE_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{index}" for index in range(1, 10)}
+    | {f"lpt{index}" for index in range(1, 10)}
+)
 MAX_PROJECT_NAME_LENGTH = 80
 MAX_PROJECTS_LISTED = 200
 
@@ -47,7 +56,7 @@ def slugify_project_name(name: object) -> str:
     slug = _SLUG_DISALLOWED.sub("-", name.strip().lower()).strip("-")
     if not slug:
         raise ValueError("project name must contain at least one letter or digit")
-    if slug in RESERVED_NAMES:
+    if slug in RESERVED_NAMES or slug in WINDOWS_DEVICE_NAMES:
         raise ValueError(f"'{slug}' is a reserved name; choose another")
     return slug
 
