@@ -123,22 +123,77 @@ def _spectral_samples(
     return weighted, coherent_weight
 
 
+# Below this half-angle (sin x - x cos x) / x**2 cancels, so a series is used.
+# Four terms are exact to double precision there; above it the closed form
+# loses at most ~1e-13 relative, on a term that is itself O(x) small.
+_SERIES_LIMIT = 0.05
+_ODD_MOMENT_1 = 1.0 / 3.0
+_ODD_MOMENT_2 = 4.0 / math.factorial(5)
+_ODD_MOMENT_3 = 6.0 / math.factorial(7)
+_ODD_MOMENT_4 = 8.0 / math.factorial(9)
+
+
+def _odd_moment(half_angle: float, sine: float, cosine: float) -> float:
+    """Return (sin x - x cos x) / x**2 without cancellation near x = 0."""
+    if abs(half_angle) >= _SERIES_LIMIT:
+        return (sine - half_angle * cosine) / (half_angle * half_angle)
+    # sum over k >= 1 of (-1)**(k + 1) * 2k * x**(2k - 1) / (2k + 1)!
+    square = half_angle * half_angle
+    return half_angle * (
+        _ODD_MOMENT_1
+        - square * (_ODD_MOMENT_2 - square * (_ODD_MOMENT_3 - square * _ODD_MOMENT_4))
+    )
+
+
 def _fourier_amplitude(
     axis: Sequence[float],
     weighted_values: Sequence[float],
     coherent_weight: float,
     frequency: float,
 ) -> float:
-    angular_frequency = -2.0 * math.pi * frequency
-    before_time = axis[0]
-    before = weighted_values[0] * cmath.exp(1j * angular_frequency * before_time)
+    """Fourier amplitude of the piecewise-linear waveform through the samples.
+
+    Each linear segment is integrated against exp(-j w t) in closed form, so
+    the phasor's rotation inside a long adaptive step is exact rather than
+    trapezoid-sampled at the segment ends. About its midpoint c, a segment of
+    width h with mean m and half-rise d contributes
+
+        h * exp(-j w c) * (m * sin(x) / x - j * d * (sin x - x cos x) / x**2)
+
+    with x = w h / 2. Linear interpolation itself low-passes the samples by
+    (sin(x) / x)**2 per segment; the coefficient is divided by the
+    time-weighted mean of that factor, which reproduces the trapezoid (DFT)
+    result exactly on a uniform grid and keeps harmonic ratios unbiased on an
+    adaptive one.
+    """
+    angular_frequency = 2.0 * math.pi * frequency
     coefficient = 0j
-    for after_time, after_value in zip(axis[1:], weighted_values[1:]):
-        after = after_value * cmath.exp(1j * angular_frequency * after_time)
-        coefficient += 0.5 * (before + after) * (after_time - before_time)
+    attenuation = 0.0
+    before_time = axis[0]
+    before = weighted_values[0]
+    before_rotation = cmath.exp(-1j * angular_frequency * before_time)
+    for after_time, after in zip(axis[1:], weighted_values[1:]):
+        width = after_time - before_time
+        half_angle = 0.5 * angular_frequency * width
+        sine = math.sin(half_angle)
+        cosine = math.cos(half_angle)
+        sinc = 1.0 if half_angle == 0.0 else sine / half_angle
+        # exp(-j w c) = exp(-j w a) * exp(-j x)
+        midpoint_rotation = before_rotation * complex(cosine, -sine)
+        coefficient += (
+            width
+            * midpoint_rotation
+            * complex(
+                0.5 * (before + after) * sinc,
+                -0.5 * (after - before) * _odd_moment(half_angle, sine, cosine),
+            )
+        )
+        attenuation += width * sinc * sinc
         before_time = after_time
         before = after
-    return 2.0 * abs(coefficient) / coherent_weight
+        before_rotation = cmath.exp(-1j * angular_frequency * after_time)
+    attenuation /= axis[-1] - axis[0]
+    return 2.0 * abs(coefficient) / (coherent_weight * attenuation)
 
 
 def _check_spectral_work(point_count: int, frequency_count: int) -> None:
@@ -154,8 +209,15 @@ def _clip_end(
     origins: list[tuple[int, int]],
     end: float,
 ) -> tuple[list[float], list[float], list[tuple[int, int]]]:
+    # The end is computed as start + cycles / frequency, which can land a
+    # rounding step past (or just short of) the last sample; treat either as
+    # the last sample rather than extrapolating or indexing past the axis.
+    if end >= axis[-1] or math.isclose(
+        end, axis[-1], rel_tol=1e-12, abs_tol=0.0
+    ):
+        return axis, values, origins
     position = bisect_left(axis, end)
-    if position < len(axis) and axis[position] == end:
+    if axis[position] == end:
         return axis[: position + 1], values[: position + 1], origins[: position + 1]
     before = position - 1
     after = position
@@ -193,6 +255,18 @@ def _unwrap_phase(values: Sequence[complex]) -> list[float]:
             raise ValueError("phase unwrap is ambiguous at an exact 180 degree step")
         unwrapped.append(candidate)
     return unwrapped
+
+
+def _principal_loop_phase(phase: float) -> float:
+    """Map an unwrapped loop phase onto (-360, 0] degrees.
+
+    Unwrapping starts from the principal phase of the first captured point, so
+    a loop whose true low-frequency phase is below -180 degrees (two or more
+    integrators with lag, type-III compensation) is carried 360 degrees too
+    high. Margins are defined modulo 360 degrees, so they are taken from this
+    representative rather than from the arbitrary unwrap offset.
+    """
+    return phase - 360.0 * math.ceil(phase / 360.0)
 
 
 def _log_fraction(before: float, after: float, value: float) -> float:
@@ -476,7 +550,13 @@ def _measure_thd(
         raise ValueError(
             f"maximum_harmonic must be an integer from 2 through {MAX_HARMONICS}"
         )
-    cycle_count = math.floor((x[-1] - x[0]) * fundamental)
+    cycles = (x[-1] - x[0]) * fundamental
+    nearest = round(cycles)
+    # A window that spans a whole number of cycles up to rounding keeps that
+    # last cycle instead of flooring it away.
+    cycle_count = (
+        nearest if math.isclose(cycles, nearest, rel_tol=1e-9) else math.floor(cycles)
+    )
     if cycle_count < 1:
         raise ValueError("THD analysis window must contain at least one full cycle")
     effective_end = x[0] + cycle_count / fundamental
@@ -696,7 +776,8 @@ def _gain_crossover(
     )
     gain_crossings = _crossings_log(frequency, gain, 0.0, "falling")
     crossover = _single_crossing(gain_crossings, "gain crossover")
-    crossover_phase, _ = _interpolate_log(frequency, phase, crossover[0])
+    unwrapped_phase, _ = _interpolate_log(frequency, phase, crossover[0])
+    crossover_phase = _principal_loop_phase(unwrapped_phase)
     evidence = {
         **_crossing_evidence(crossover, origins),
         "gain_db": 0.0,
@@ -729,6 +810,8 @@ def _measure_phase_margin(
     request: _FrequencyMetricRequest,
 ) -> waveform_metrics.MetricMeasurement:
     _, crossover_phase, evidence, window_parameters, _ = _gain_crossover(request)
+    # crossover_phase lies in (-360, 0], so the margin lies in (-180, 180]:
+    # a negative value is an unstable loop whatever the unwrap offset was.
     return _measurement(
         request.metric,
         180.0 + crossover_phase,
@@ -746,6 +829,9 @@ def _measure_gain_margin(
     )
     minimum_phase = min(phase)
     maximum_phase = max(phase)
+    # A phase crossover is a falling crossing of -180 degrees modulo 360; the
+    # unwrapped phase carries an arbitrary multiple of 360 from its first
+    # point, so every equivalent level inside the captured range is tested.
     first_level = math.ceil((minimum_phase + 180.0) / 360.0)
     last_level = math.floor((maximum_phase + 180.0) / 360.0)
     phase_crossings: list[tuple[tuple[float, int, int], float]] = []
@@ -761,11 +847,11 @@ def _measure_gain_margin(
         raise ValueError(
             "multiple phase crossover crossings; narrow the analysis window"
         )
-    crossover, level = phase_crossings[0]
+    crossover, _ = phase_crossings[0]
     crossover_gain, _ = _interpolate_log(frequency, gain, crossover[0])
     evidence = {
         **_crossing_evidence(crossover, origins),
-        "phase_degrees": level,
+        "phase_degrees": -180.0,
         "gain_db": crossover_gain,
         "crossing_count": len(phase_crossings),
     }
@@ -885,7 +971,11 @@ _PARAMETER_DEFINITIONS: dict[str, waveform_metrics.MetricParameter] = {
             "frequency_resolution",
             "number",
             unit="Hz",
-            description="Spectral bin width; derived from the capture when omitted.",
+            description=(
+                "Spectral bin spacing; 1/duration when omitted. A tone between "
+                "bins reads up to ~15% (1.4 dB) low with the Hann window, at "
+                "the nearest bin frequency; a finer spacing reduces that loss."
+            ),
         ),
         waveform_metrics.MetricParameter(
             "fundamental_frequency",

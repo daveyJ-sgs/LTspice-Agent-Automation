@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import cmath
 import math
+import random
 import unittest
 from unittest.mock import patch
 
@@ -246,6 +247,65 @@ class FrequencyDomainMetricTests(unittest.TestCase):
                 maximum_harmonic=101,
             )
 
+    def test_thd_window_of_exact_whole_cycles_reaches_the_last_sample(self) -> None:
+        # 0.01..0.21 s is exactly ten 50 Hz cycles, but 0.01 + 10 / 50 rounds
+        # one step past the 0.21 s window end.
+        axis = [index * 0.3 / 3000 for index in range(3001)]
+        values = [
+            math.sin(2 * math.pi * 50 * time)
+            + 0.1 * math.sin(2 * math.pi * 150 * time)
+            for time in axis
+        ]
+        self.assertGreater(0.01 + 10 / 50, 0.21)
+        result = measure_metric(
+            axis,
+            values,
+            "thd",
+            fundamental_frequency=50,
+            window_start=0.01,
+            window_end=0.21,
+        )
+
+        self.assertEqual(result.evidence["cycle_count"], 10)
+        self.assertAlmostEqual(result.value, 10.0, places=9)
+        self.assertAlmostEqual(result.evidence["harmonic_1_amplitude"], 1.0, places=12)
+
+    def test_thd_integrates_adaptive_steps_exactly(self) -> None:
+        # LTspice-like adaptive steps at ~20 points per 1 kHz cycle. The old
+        # trapezoid of y*exp(-jwt) read a pure sine as 1.87 % THD.
+        generator = random.Random(1)
+        fundamental = 1e3
+        axis = [0.0]
+        while axis[-1] < 10e-3:
+            axis.append(axis[-1] + generator.uniform(0.5, 1.5) / (20 * fundamental))
+        axis[-1] = 10e-3
+
+        def thd(third: float, time_axis: list[float]) -> waveform_metrics.MetricMeasurement:
+            values = [
+                math.sin(2 * math.pi * fundamental * time)
+                + third * math.sin(2 * math.pi * 3 * fundamental * time)
+                for time in time_axis
+            ]
+            return measure_metric(
+                time_axis,
+                values,
+                "thd",
+                fundamental_frequency=fundamental,
+                maximum_harmonic=5,
+            )
+
+        pure = thd(0.0, axis)
+        self.assertLess(pure.value, 0.15)
+        self.assertAlmostEqual(pure.evidence["fundamental_amplitude"], 1.0, delta=2e-4)
+        distorted = thd(0.1, axis)
+        self.assertAlmostEqual(distorted.value, 10.0, delta=0.1)
+
+        # On a uniform grid the result is still the exact DFT answer, even at
+        # 20 points per cycle where linear interpolation attenuates harmonics.
+        uniform = [index / (20 * fundamental) for index in range(201)]
+        self.assertAlmostEqual(thd(0.1, uniform).value, 10.0, places=10)
+        self.assertLess(thd(0.0, uniform).value, 1e-10)
+
     def test_ac_gain_cutoff_and_peaking_use_log_frequency(self) -> None:
         frequency = [10, 100, 1000, 10000]
         gain_db = [0, 3, 0, -10]
@@ -321,6 +381,91 @@ class FrequencyDomainMetricTests(unittest.TestCase):
         # what this test is pinning down.
         self.assertAlmostEqual(gain_margin.value, -5.0)
         self.assertEqual(gain_margin.evidence["frequency"], 10.0)
+
+    def test_margins_ignore_the_unwrap_offset_of_low_frequency_phase(self) -> None:
+        # Loops whose true low-frequency phase is below -180 degrees start the
+        # unwrap 360 degrees high; the margins must still be the analytic ones.
+        frequency = [10 ** (index / 100) for index in range(601)]
+        two_pi = 2 * math.pi
+
+        def unstable(f: float) -> complex:
+            # Double integrator, lead at 300 Hz, lags at 3 kHz and 5 Hz.
+            s = 1j * two_pi * f
+            return (
+                (two_pi * 1e3 / s) ** 2
+                * (1 + s / (two_pi * 300))
+                / (1 + s / (two_pi * 3e3))
+                / (1 + s / (two_pi * 5))
+            )
+
+        def type_three(f: float) -> complex:
+            s = 1j * two_pi * f
+            zero = two_pi * 100
+            return (
+                (two_pi * 1e4) ** 3
+                / zero**2
+                * (1 + s / zero) ** 2
+                / s**3
+                / (1 + s / (two_pi * 1e5))
+            )
+
+        for loop, expected_phase in (
+            (
+                unstable,
+                lambda f: -180
+                + math.degrees(
+                    math.atan(f / 300) - math.atan(f / 3e3) - math.atan(f / 5)
+                ),
+            ),
+            (
+                type_three,
+                lambda f: -270
+                + math.degrees(2 * math.atan(f / 100) - math.atan(f / 1e5)),
+            ),
+        ):
+            values = [loop(f) for f in frequency]
+            self.assertGreater(math.degrees(cmath.phase(values[0])), 0.0)
+            margin = measure_metric(frequency, values, "phase_margin")
+            crossover = margin.evidence["frequency"]
+            self.assertAlmostEqual(abs(loop(crossover)), 1.0, delta=1e-3)
+            self.assertAlmostEqual(
+                margin.value, 180 + expected_phase(crossover), delta=0.05
+            )
+            self.assertAlmostEqual(
+                margin.evidence["phase_degrees"], expected_phase(crossover), delta=0.05
+            )
+        self.assertLess(
+            measure_metric(frequency, [unstable(f) for f in frequency], "phase_margin").value,
+            -60.0,
+        )
+
+        # Conditionally stable type-III loop: phase starts near -270, rises
+        # through -180 near 102 Hz, and falls through -180 again near 9.8 kHz.
+        # The gain margin belongs to the falling crossing only.
+        def conditional(f: float) -> complex:
+            s = 1j * two_pi * f
+            return (
+                (two_pi * 1e3) ** 3
+                / (two_pi * 100) ** 2
+                * (1 + s / (two_pi * 100)) ** 2
+                / s**3
+                / (1 + s / (two_pi * 1e4)) ** 2
+            )
+
+        values = [conditional(f) for f in frequency]
+        gain_margin = measure_metric(frequency, values, "gain_margin")
+        # 2*atan(f/100) - 2*atan(f/1e4) = 90 degrees at the phase crossovers.
+        b = 1 / 100 - 1 / 1e4
+        phase_crossover = (b + math.sqrt(b * b - 4e-6)) / 2e-6
+        self.assertAlmostEqual(
+            gain_margin.evidence["frequency"], phase_crossover, delta=phase_crossover * 1e-3
+        )
+        self.assertAlmostEqual(
+            gain_margin.value,
+            -20 * math.log10(abs(conditional(phase_crossover))),
+            delta=0.01,
+        )
+        self.assertEqual(gain_margin.evidence["phase_degrees"], -180.0)
 
     def test_ac_rejects_ambiguous_or_invalid_data(self) -> None:
         with self.assertRaisesRegex(ValueError, "zero reference"):

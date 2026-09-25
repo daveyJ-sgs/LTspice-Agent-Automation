@@ -866,22 +866,109 @@ def run_netlist(
     return output_dir
 
 
-def parse_measurements(log_path: Path) -> dict[str, float]:
-    """Extract scalar .meas values from an LTspice log file."""
+_MEASUREMENT_NUMBER = (
+    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
+    r"(?![eE])(?:[A-Za-z°]+)?(?=\s|[),]|$)"
+)
+_MEASUREMENT_LINE = re.compile(
+    r"^\s*([A-Za-z_][\w]*)(\s*)(:.*?=\s*|=\s*)\(?\s*" + _MEASUREMENT_NUMBER + r"(.*)$"
+)
+# `name: expr=value AT t` / `... at t`: the trailing abscissa of a WHEN or
+# FIND/DERIV measurement.
+_MEASUREMENT_AT = re.compile(r"\s(AT|at)\s+" + _MEASUREMENT_NUMBER)
+# Simulator statistics LTspice writes as `name = value` in every log; they are
+# not measurements even though they look like `name=value` results.
+_LOG_STATISTICS = frozenset(
+    {"tnom", "temp", "totiter", "traniter", "tranpoints", "accept", "rejected", "fillins"}
+)
+_NETLIST_SUFFIXES = (".net", ".cir", ".sp", ".spi", ".asc")
+_MEAS_STATEMENT = re.compile(
+    r"(?:^|!)\s*\.meas(?:ure)?\s+(?:(?:ac|dc|op|tran|tf|noise)\s+)?([A-Za-z_]\w*)\s+(.*)$",
+    re.IGNORECASE,
+)
+
+
+def _measurement_kinds(netlist_path: Path | None) -> dict[str, str]:
+    """Classify `.meas` statements as `when` (result is an abscissa) or `value`.
+
+    A plain WHEN measurement reports the time/frequency at which its condition
+    holds; FIND ... WHEN and DERIV ... WHEN report the found value there. Names
+    are case-folded because SPICE names are case-insensitive.
+    """
+    if netlist_path is None:
+        return {}
+    try:
+        if netlist_path.stat().st_size > MAX_LOG_FILE_BYTES:
+            return {}
+        text = decode_text(netlist_path.read_bytes())
+    except (OSError, UnicodeError, ValueError):
+        return {}
+    statements: list[str] = []
+    for line in text.splitlines():
+        if line.lstrip().startswith("+") and statements:
+            statements[-1] += " " + line.lstrip()[1:]
+        else:
+            statements.append(line)
+    kinds: dict[str, str] = {}
+    for statement in statements:
+        match = _MEAS_STATEMENT.search(statement)
+        if match is None:
+            continue
+        keywords = {word.upper() for word in re.findall(r"[A-Za-z]+", match.group(2))}
+        kinds[match.group(1).casefold()] = (
+            "when" if "WHEN" in keywords and not keywords & {"FIND", "DERIV"} else "value"
+        )
+    return kinds
+
+
+def _sibling_netlist(log_path: Path) -> Path | None:
+    for suffix in _NETLIST_SUFFIXES:
+        candidate = log_path.with_suffix(suffix)
+        # Only a regular file staged beside the log; never follow a link out.
+        if candidate.is_file() and not candidate.is_symlink():
+            return candidate
+    return None
+
+
+def parse_measurements(
+    log_path: Path, netlist_path: Path | None = None
+) -> dict[str, float]:
+    """Extract scalar .meas values from an LTspice log file.
+
+    LTspice prints a plain WHEN measurement as `name: v(out)=0.5 AT 0.000693`,
+    where the result is the abscissa after AT, and FIND ... AT/WHEN as
+    `name: v(out)=1.23 at 0.001`, where the result is the found value. The
+    `.meas` statements of `netlist_path` (by default the run netlist beside
+    the log, which run_netlist stages with the same stem) decide which is
+    which; without them the value before AT is kept, as before. Simulator
+    statistics such as `tnom = 27` are not measurements.
+    """
     text = _decode_log(log_path)
+    kinds = _measurement_kinds(
+        _sibling_netlist(log_path) if netlist_path is None else netlist_path
+    )
 
     measurements: dict[str, float] = {}
-    pattern = re.compile(
-        r"^\s*([A-Za-z_][\w]*)\s*(?::.*?=\s*|=\s*)\(?\s*"
-        r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
-        r"(?![eE])(?:[A-Za-z°]+)?(?=\s|[),]|$)",
-        re.MULTILINE,
-    )
-    for match in pattern.finditer(text):
-        value = float(match.group(2))
+    for line in text.splitlines():
+        match = _MEASUREMENT_LINE.match(line)
+        if match is None:
+            continue
+        name, spacing, separator, number, rest = match.groups()
+        if (
+            name.casefold() in _LOG_STATISTICS
+            and separator.startswith("=")
+            and (spacing or separator != separator.rstrip())
+        ):
+            continue
+        at = _MEASUREMENT_AT.search(rest) if separator.startswith(":") else None
+        if at is not None:
+            kind = kinds.get(name.casefold())
+            if kind == "when":
+                number = at.group(2)
+        value = float(number)
         if not math.isfinite(value):
-            raise ValueError(f"Non-finite measurement: {match.group(1)}")
-        measurements[match.group(1)] = value
+            raise ValueError(f"Non-finite measurement: {name}")
+        measurements[name] = value
     return measurements
 
 
@@ -899,17 +986,26 @@ def parse_stepped_measurements(log_path: Path, name: str) -> list[float]:
     return [value for _, value in sorted(tables[name].items())]
 
 
-def parse_stepped_measurement_rows(log_path: Path) -> dict[str, dict[int, float]]:
-    """Read stepped `.meas` tables while preserving LTspice's row numbers."""
+def parse_stepped_measurement_rows(
+    log_path: Path, netlist_path: Path | None = None
+) -> dict[str, dict[int, float]]:
+    """Read stepped `.meas` tables while preserving LTspice's row numbers.
+
+    The first value column is the result, except for a plain WHEN measurement
+    whose table carries an `at` column: that column holds the abscissa, which
+    is the result. WHEN is recognised as in parse_measurements.
+    """
     text = _decode_log(log_path)
+    kinds = _measurement_kinds(
+        _sibling_netlist(log_path) if netlist_path is None else netlist_path
+    )
     tables: dict[str, dict[int, float]] = {}
     current_name: str | None = None
+    at_column: int | None = None
+    expect_header = False
     measurement_pattern = re.compile(r"^Measurement:\s*([A-Za-z_][\w]*)\s*$")
-    row_pattern = re.compile(
-        r"^\s*(\d+)\s+\(?\s*"
-        r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
-        r"(?![eE])(?:[A-Za-z°]+)?(?=\s|[),]|$)"
-    )
+    row_pattern = re.compile(r"^\s*(\d+)\s+\(?\s*" + _MEASUREMENT_NUMBER)
+    cell_pattern = re.compile(r"^\s*\(?\s*" + _MEASUREMENT_NUMBER)
     for line in text.splitlines():
         measurement = measurement_pattern.match(line.strip())
         if measurement is not None:
@@ -917,9 +1013,21 @@ def parse_stepped_measurement_rows(log_path: Path) -> dict[str, dict[int, float]
             if current_name in tables:
                 raise ValueError(f"Duplicate stepped measurement table: {current_name}")
             tables[current_name] = {}
+            at_column = None
+            expect_header = True
             continue
         if current_name is None:
             continue
+        if expect_header:
+            expect_header = False
+            columns = [column.strip() for column in line.strip().split("\t")]
+            if columns and columns[0].casefold() == "step":
+                kind = kinds.get(current_name.casefold())
+                for index, column in enumerate(columns):
+                    if column.casefold() == "at" and kind == "when":
+                        at_column = index
+                        break
+                continue
         row = row_pattern.match(line)
         if row is None:
             continue
@@ -928,7 +1036,18 @@ def parse_stepped_measurement_rows(log_path: Path) -> dict[str, dict[int, float]
             raise ValueError(
                 f"Duplicate row {step_number} for stepped measurement {current_name}"
             )
-        value = float(row.group(2))
+        number: str | None = row.group(2)
+        if at_column is not None:
+            cells = line.strip().split("\t")
+            cell = (
+                cell_pattern.match(cells[at_column])
+                if at_column < len(cells)
+                else None
+            )
+            number = None if cell is None else cell.group(1)
+        if number is None:
+            continue
+        value = float(number)
         if not math.isfinite(value):
             raise ValueError(
                 f"Non-finite row {step_number} for stepped measurement {current_name}"

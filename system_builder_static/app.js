@@ -446,20 +446,23 @@ function metricParameters(name) {
 }
 
 // SPICE magnitude suffixes. "meg" and "mil" are listed before "m" because a
-// prefix match would otherwise read 1Meg as 1 milli.
+// prefix match would otherwise read 1Meg as 1 milli. Decimal scales are
+// exponents added to the literal's own exponent, so 10u parses as the literal
+// 10e-6 (1e-5) rather than 10 * 1e-6 (9.999999999999999e-6).
 const SPICE_SCALES = [
-  ["meg", 1e6], ["mil", 25.4e-6], ["t", 1e12], ["g", 1e9], ["k", 1e3],
-  ["m", 1e-3], ["u", 1e-6], ["n", 1e-9], ["p", 1e-12], ["f", 1e-15],
+  ["meg", 6], ["mil", null], ["t", 12], ["g", 9], ["k", 3],
+  ["m", -3], ["u", -6], ["n", -9], ["p", -12], ["f", -15],
 ];
 
 function spiceNumber(token) {
-  const match = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z]*)$/i.exec(String(token ?? "").trim());
+  const match = /^([+-]?(?:\d+\.?\d*|\.\d+))(?:e([+-]?\d+))?([a-zµμ]*)$/i.exec(String(token ?? "").trim());
   if (!match) return NaN;
-  const mantissa = Number(match[1]);
-  const suffix = match[2].toLowerCase();
-  if (!suffix) return mantissa;
+  const exponent = match[2] === undefined ? 0 : Number(match[2]);
+  // Micro may be typed as the micro sign (U+00B5) or Greek mu (U+03BC).
+  const suffix = match[3].toLowerCase().replace(/[µμ]/g, "u");
   const scale = SPICE_SCALES.find(([name]) => suffix.startsWith(name));
-  return scale ? mantissa * scale[1] : mantissa;
+  if (scale && scale[1] === null) return Number(`${match[1]}e${exponent}`) * 25.4e-6;
+  return Number(`${match[1]}e${exponent + (scale ? scale[1] : 0)}`);
 }
 
 // The swept range a frequency-valued requirement parameter has to land inside.

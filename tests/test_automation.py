@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import struct
 import tempfile
 import unittest
@@ -607,6 +608,78 @@ Binary:
                 encoding="utf-16le",
             )
             self.assertEqual(parse_measurements(path), {"gain": -35.5, "tpd": 2.5e-9})
+
+    def test_when_measurements_report_the_abscissa_and_skip_log_statistics(self) -> None:
+        # RC = 1 ms step: v(out) crosses 0.5 at RC*ln(2) and is 1 - 1/e at RC.
+        t50 = 1e-3 * math.log(2)
+        log = (
+            "Circuit: * rc\n\n"
+            "tnom = 27\n"
+            "temp = 27\n"
+            "method = modified trap\n"
+            f"t50: v(out)=0.5 AT {t50:.9g}\n"
+            f"vtau: v(out)={1 - math.exp(-1):.9g} at 0.001\n"
+            f"vx: v(out)={1 - math.exp(-1):.9g} AT 0.001\n"
+            "tr=0.00219722 FROM 0.000105361 TO 0.00230259\n"
+            "vmax: MAX(v(out))=0.999955 FROM 0 TO 0.01\n"
+            "totiter = 2135\n"
+            "traniter = 2000\n"
+            "matrix size = 5\n"
+            "Total elapsed time: 0.035 seconds.\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rc.log"
+            path.write_text(log, encoding="utf-16le")
+            # Without a netlist the kind of measurement is unknown, so the value
+            # before AT is kept as before; log statistics are still skipped.
+            measurements = parse_measurements(path)
+            self.assertEqual(
+                set(measurements), {"t50", "vtau", "vx", "tr", "vmax"}
+            )
+            self.assertEqual(measurements["t50"], 0.5)
+            self.assertAlmostEqual(measurements["vtau"], 1 - math.exp(-1), places=9)
+            self.assertEqual(measurements["tr"], 0.00219722)
+            self.assertEqual(measurements["vmax"], 0.999955)
+            # The run netlist beside the log says which lines are WHEN results.
+            (Path(directory) / "rc.cir").write_text(
+                "* rc\n"
+                ".meas tran t50 WHEN v(out)=0.5\n"
+                ".meas tran vtau FIND v(out) AT=1m\n"
+                ".MEAS TRAN VX FIND v(out)\n+ WHEN v(in)=1 CROSS=1\n",
+                encoding="utf-8",
+            )
+            measurements = parse_measurements(path)
+            self.assertAlmostEqual(measurements["t50"], t50, places=12)
+            self.assertAlmostEqual(measurements["vx"], 1 - math.exp(-1), places=9)
+            other = Path(directory) / "other.net"
+            other.write_text(".meas tran t50 FIND v(out) WHEN v(in)=1\n")
+            self.assertEqual(parse_measurements(path, other)["t50"], 0.5)
+
+    def test_stepped_when_measurements_use_the_at_column(self) -> None:
+        log = (
+            ".step r=1000\n.step r=2000\n"
+            "Measurement: t50\n"
+            "  step\tv(out)\tat\n"
+            "     1\t0.5\t0.000693147\n"
+            "     2\t0.5\t0.00138629\n"
+            "Measurement: vtau\n"
+            "  step\tv(out)\tat\n"
+            "     1\t0.632121\t0.001\n"
+            "     2\t0.393469\t0.001\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "step.log"
+            path.write_text(log, encoding="utf-16le")
+            (Path(directory) / "step.net").write_text(
+                ".meas tran t50 when v(out)=0.5\n.meas tran vtau find v(out) at=1m\n"
+            )
+            self.assertEqual(
+                parse_stepped_measurement_rows(path),
+                {
+                    "t50": {1: 0.000693147, 2: 0.00138629},
+                    "vtau": {1: 0.632121, 2: 0.393469},
+                },
+            )
 
     def test_raw_and_log_parsers_reject_oversized_artifacts_before_read(self) -> None:
         import ltspice_wrapper
