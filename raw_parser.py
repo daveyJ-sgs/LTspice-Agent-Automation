@@ -178,45 +178,17 @@ def parse_raw(path: Path) -> RawData:
             expected_bytes = compact_bytes
             point_bytes = 8 + (variable_count - 1) * 4
             precision = "compact"
-    data = raw[data_offset : data_offset + expected_bytes]
+    data = memoryview(raw)[data_offset : data_offset + expected_bytes]
     if remaining != expected_bytes:
         raise ValueError(
             f"Expected {expected_bytes} data bytes, found {remaining} in {path}"
         )
 
-    values = {name: [] for name in variables}
-    def value_offset(point: int, variable_index: int) -> tuple[int, str]:
-        if fast_access:
-            offset = 0
-            for prior_index in range(variable_index):
-                if is_complex or precision == "double" or prior_index == 0:
-                    offset += point_count * (16 if is_complex else 8)
-                else:
-                    offset += point_count * 4
-            if is_complex:
-                return offset + point * 16, "complex"
-            if precision == "double" or variable_index == 0:
-                return offset + point * 8, "double"
-            return offset + point * 4, "float"
-
-        if is_complex:
-            return point * point_bytes + variable_index * 16, "complex"
-        if precision == "double":
-            return point * point_bytes + variable_index * 8, "double"
-        if variable_index == 0:
-            return point * point_bytes, "double"
-        return point * point_bytes + 8 + (variable_index - 1) * 4, "float"
-
-    for point in range(point_count):
-        for variable_index, name in enumerate(variables):
-            offset, value_type = value_offset(point, variable_index)
-            if value_type == "complex":
-                real, imaginary = struct.unpack_from("<dd", data, offset)
-                values[name].append(complex(real, imaginary))
-            elif value_type == "double":
-                values[name].append(struct.unpack_from("<d", data, offset)[0])
-            else:
-                values[name].append(struct.unpack_from("<f", data, offset)[0])
+    if fast_access:
+        columns = _decode_fast_access(data, point_count, variable_count, is_complex, precision)
+    else:
+        columns = _decode_point_major(data, point_count, variable_count, is_complex, precision)
+    values = dict(zip(variables, columns))
 
     # LTspice may use the sign bit on binary transient-axis samples while
     # compressing a RAW file. The physical time coordinate is the magnitude;
@@ -226,6 +198,67 @@ def parse_raw(path: Path) -> RawData:
 
     step_count, points_per_step = (point_count, 1) if point_steps else _step_shape(values[variables[0]])
     return RawData(flags=flags, variables=variables, values=values, step_count=step_count, points_per_step=points_per_step)
+
+
+# Rows decoded per struct.iter_unpack chunk; bounds the transient row tuples
+# held alongside the output columns for large point-major payloads.
+_ROW_CHUNK = 4096
+
+
+def _decode_point_major(
+    data: memoryview,
+    point_count: int,
+    variable_count: int,
+    is_complex: bool,
+    precision: str,
+) -> list[list[float | complex]]:
+    """Decode point-major rows (every vector's value for point 0, then 1, ...)."""
+    if is_complex:
+        row_format = "<" + "dd" * variable_count
+    elif precision == "double":
+        row_format = "<" + "d" * variable_count
+    else:
+        row_format = "<d" + "f" * (variable_count - 1)
+    row = struct.Struct(row_format)
+    field_count = variable_count * 2 if is_complex else variable_count
+    fields: list[list[float | complex]] = [[] for _ in range(field_count)]
+    chunk_bytes = row.size * _ROW_CHUNK
+    for start in range(0, point_count * row.size, chunk_bytes):
+        chunk = data[start : start + chunk_bytes]
+        for field, chunk_values in zip(fields, zip(*row.iter_unpack(chunk))):
+            field.extend(chunk_values)
+    if not is_complex:
+        return fields
+    return [
+        [complex(real, imaginary) for real, imaginary in zip(fields[index], fields[index + 1])]
+        for index in range(0, len(fields), 2)
+    ]
+
+
+def _decode_fast_access(
+    data: memoryview,
+    point_count: int,
+    variable_count: int,
+    is_complex: bool,
+    precision: str,
+) -> list[list[float | complex]]:
+    """Decode vector-major FastAccess data (all of vector 0, then vector 1, ...)."""
+    columns: list[list[float | complex]] = []
+    offset = 0
+    for variable_index in range(variable_count):
+        if is_complex:
+            pairs = struct.unpack_from(f"<{2 * point_count}d", data, offset)
+            columns.append(
+                [complex(real, imaginary) for real, imaginary in zip(pairs[0::2], pairs[1::2])]
+            )
+            offset += point_count * 16
+        elif precision == "double" or variable_index == 0:
+            columns.append(list(struct.unpack_from(f"<{point_count}d", data, offset)))
+            offset += point_count * 8
+        else:
+            columns.append(list(struct.unpack_from(f"<{point_count}f", data, offset)))
+            offset += point_count * 4
+    return columns
 
 
 def export_csv(data: RawData, path: Path) -> None:
