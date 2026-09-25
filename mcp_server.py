@@ -205,7 +205,7 @@ def _find_raw(run_dir: Path, raw_filename: str | None) -> Path:
 
 
 def _summarize_run(output_dir: Path) -> dict[str, object]:
-    manifest = json.loads((output_dir / "run_manifest.json").read_text())
+    manifest = json.loads((output_dir / "run_manifest.json").read_text(encoding="utf-8"))
     measurements: dict[str, float] = {}
     for log_path in sorted(output_dir.glob("*.log")):
         log_path = _within_directory(
@@ -947,7 +947,7 @@ def run_parameter_sweep(
     fieldnames = ["value", "status", "duration_seconds", "run_dir", *measurement_names]
     sweep_dir.mkdir(parents=True, exist_ok=True)
     csv_path = sweep_dir / "results.csv"
-    with csv_path.open("w", newline="") as handle:
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, restval="")
         writer.writeheader()
         for row in rows:
@@ -1757,7 +1757,7 @@ def list_examples() -> list[dict[str, str]]:
     examples = []
     for path in sorted(EXAMPLES_DIR.glob("*.cir")) + sorted(EXAMPLES_DIR.glob("*.net")):
         description = ""
-        for line in path.read_text(errors="replace").splitlines():
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             stripped = line.strip()
             if stripped.startswith("*"):
                 description = stripped.lstrip("* ").strip()

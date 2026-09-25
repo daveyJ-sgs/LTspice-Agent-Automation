@@ -17,6 +17,9 @@ creates a writable starter workspace at:
 Documents\LTspice System Builder Workspace
 ```
 
+`Documents` is the folder Windows reports for the user, so a Documents folder
+redirected to OneDrive or a network location is used as-is.
+
 The advanced DAQ reference assets are copied there only when absent. System
 Builder also adds missing `rc-lowpass-starter` and
 `instrumentation-amp-starter` project folders, giving a new workspace two
@@ -63,10 +66,13 @@ output or an error. See
 For source development, clone or download this repository and double-click
 [`Start-SystemBuilder.cmd`](../Start-SystemBuilder.cmd). The launcher:
 
-1. Finds Python 3.13 or newer, or prints the exact `winget` installation command.
+1. Finds Python 3.13 or newer (a Microsoft Store installer stub simply fails
+   the version probe), or prints the exact `winget` installation command.
 2. Creates a private `.venv` inside the repository when needed.
 3. Installs the declared System Builder dependencies into that environment.
-4. Finds LTspice in the standard per-user and machine-wide locations.
+4. Reports whether LTspice is in a standard per-user or machine-wide location.
+   This is a diagnostic only: the launcher does not export the discovered
+   path, so a path saved in System Builder's LTspice settings still wins.
 5. Opens System Builder in the default browser on a random loopback-only port.
 
 It does not request administrator privileges, change machine-wide PowerShell
@@ -89,8 +95,15 @@ prints the local URL and workspace; open that URL manually if desired. Stop the
 server with `Ctrl+C` in the launcher window.
 
 The wrapper checks common install locations, including winget's per-user
-default at `%LOCALAPPDATA%\Programs\ADI\LTspice\LTspice.exe`. Set
-`LTSPICE_EXECUTABLE` only for a nonstandard installation:
+default at `%LOCALAPPDATA%\Programs\ADI\LTspice\LTspice.exe`. LTspice is
+resolved in this order:
+
+1. `LTSPICE_EXECUTABLE`, when you set it yourself (the launchers never set it).
+2. The path saved in System Builder's LTspice settings.
+3. The standard install locations above.
+
+For a nonstandard installation, save its path in System Builder's settings, or
+set `LTSPICE_EXECUTABLE` for scripts and the command-line wrapper:
 
 ```powershell
 $env:LTSPICE_EXECUTABLE = 'C:\Program Files\ADI\LTspice\LTspice.exe'
@@ -112,6 +125,25 @@ Make just to run tests.
 The wrapper uses `subprocess` and `pathlib` rather than shell-specific command
 strings. Model-library search paths and representative `.asc` files still need
 verification against the target LTspice version.
+
+### Long paths
+
+Windows limits ordinary paths to 260 characters (`MAX_PATH`). Simulation
+cache entries are named `runs\cache\simulation-<64-hex-digit key>`, and run and
+experiment folders nest below the workspace, so a deeply placed workspace
+(for example inside a long OneDrive path) can exceed the limit and fail with
+`FileNotFoundError` or `[WinError 206]`. Keep the workspace near the top of a
+drive, or enable long-path support once (administrator PowerShell, then sign
+out and back in):
+
+```powershell
+New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' `
+  -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force
+```
+
+Python 3.13 honours this setting. LTspice itself may still reject a netlist
+path longer than 260 characters, so a short workspace path remains the safer
+choice.
 
 ## Real LTspice GitHub qualification
 

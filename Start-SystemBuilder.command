@@ -13,15 +13,24 @@ cd "$PROJECT_ROOT"
 
 WORKSPACE="$HOME/Documents/LTspice/projects"
 NO_BROWSER_FLAG=""
-for arg in "$@"; do
-    case "$arg" in
+while [ "$#" -gt 0 ]; do
+    case "$1" in
         --workspace=*)
-            WORKSPACE="${arg#*=}"
+            WORKSPACE="${1#*=}"
+            ;;
+        --workspace)
+            if [ "$#" -lt 2 ]; then
+                echo "--workspace needs a path" >&2
+                exit 2
+            fi
+            WORKSPACE="$2"
+            shift
             ;;
         --no-browser)
             NO_BROWSER_FLAG="--no-browser"
             ;;
     esac
+    shift
 done
 
 is_python_313_or_newer() {
@@ -30,10 +39,17 @@ is_python_313_or_newer() {
 }
 
 find_compatible_python() {
+    local candidate path
     for candidate in python3.14 python3.13 python3; do
-        if command -v "$candidate" >/dev/null 2>&1 \
-            && is_python_313_or_newer "$candidate"; then
-            command -v "$candidate"
+        path="$(command -v "$candidate" 2>/dev/null)" || continue
+        # Without the Command Line Tools, /usr/bin/python3 is only a stub
+        # that pops up an installer dialog instead of running Python.
+        if [ "$path" = "/usr/bin/python3" ] \
+            && ! /usr/bin/xcode-select -p >/dev/null 2>&1; then
+            continue
+        fi
+        if is_python_313_or_newer "$path"; then
+            echo "$path"
             return 0
         fi
     done
@@ -54,7 +70,8 @@ EOF
         exit 1
     fi
     echo "Creating the local Python environment..."
-    "$PYTHON_BIN" -m venv "$VENV_ROOT"
+    # --clear replaces a partial or broken .venv left by an earlier attempt.
+    "$PYTHON_BIN" -m venv --clear "$VENV_ROOT"
 fi
 
 if ! is_python_313_or_newer "$VENV_PYTHON"; then
@@ -92,25 +109,39 @@ fi
 
 echo "Python: $("$VENV_PYTHON" -c 'import platform; print(platform.python_version())')"
 
+# Discovery here is diagnostic only: a discovered install is deliberately NOT
+# exported as LTSPICE_EXECUTABLE. System Builder resolves LTspice itself --
+# a user-set LTSPICE_EXECUTABLE first, then the path saved in its settings,
+# then these same standard install locations -- and exporting a discovered
+# path would silently outrank the path saved in the settings.
 LTSPICE_PATH="${LTSPICE_EXECUTABLE:-}"
+LTSPICE_SOURCE="from LTSPICE_EXECUTABLE"
 if [ -n "$LTSPICE_PATH" ] && [ ! -f "$LTSPICE_PATH" ]; then
     echo "Warning: LTSPICE_EXECUTABLE does not name a file: $LTSPICE_PATH" >&2
+    # Drop the stale value so it cannot outrank the saved setting.
+    unset LTSPICE_EXECUTABLE
     LTSPICE_PATH=""
 fi
-if [ -z "$LTSPICE_PATH" ] && [ -f "/Applications/LTspice.app/Contents/MacOS/LTspice" ]; then
-    LTSPICE_PATH="/Applications/LTspice.app/Contents/MacOS/LTspice"
+if [ -z "$LTSPICE_PATH" ]; then
+    LTSPICE_SOURCE="a path saved in System Builder settings takes precedence"
+    for candidate in \
+        "/Applications/LTspice.app/Contents/MacOS/LTspice" \
+        "$HOME/Applications/LTspice.app/Contents/MacOS/LTspice"; do
+        if [ -f "$candidate" ]; then
+            LTSPICE_PATH="$candidate"
+            break
+        fi
+    done
 fi
 
 if [ -n "$LTSPICE_PATH" ]; then
-    export LTSPICE_EXECUTABLE="$LTSPICE_PATH"
-    echo "LTspice: $LTSPICE_PATH"
+    echo "LTspice: $LTSPICE_PATH ($LTSPICE_SOURCE)"
     echo "First installation only: open LTspice once and answer its usage-data prompt."
 else
-    unset LTSPICE_EXECUTABLE
     cat <<'EOF' >&2
-Warning: LTspice was not found. Recipe editing and plan preview remain
-available, but simulation and schematic capture will fail until LTspice is
-installed:
+Warning: LTspice was not found in a standard location. Recipe editing and plan
+preview remain available, but simulation and schematic capture will fail
+until LTspice is installed or its path is saved in System Builder settings:
 
     brew install --cask ltspice
 
@@ -119,9 +150,12 @@ EOF
 fi
 
 echo "Workspace: $WORKSPACE"
-"$VENV_PYTHON" "$PROJECT_ROOT/system_builder.py" --workspace "$WORKSPACE" $NO_BROWSER_FLAG
-STATUS=$?
+# Capture the exit status explicitly: under set -e a failing server would
+# otherwise end the script before the window can show what happened.
+STATUS=0
+"$VENV_PYTHON" "$PROJECT_ROOT/system_builder.py" --workspace "$WORKSPACE" $NO_BROWSER_FLAG \
+    || STATUS=$?
 echo ""
 echo "System Builder stopped. Press Return to close this window."
-read -r _
-exit $STATUS
+read -r _ || true
+exit "$STATUS"

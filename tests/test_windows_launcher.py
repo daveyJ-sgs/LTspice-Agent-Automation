@@ -23,5 +23,39 @@ class WindowsLauncherTests(unittest.TestCase):
         ):
             self.assertIn(required, powershell)
         self.assertNotIn("-Verb RunAs", powershell)
+        # Discovery is diagnostic only: exporting a discovered install would
+        # outrank the path the user saved in System Builder's settings.
+        self.assertNotIn("$env:LTSPICE_EXECUTABLE =", powershell)
         self.assertIn("powershell.exe -NoLogo -NoProfile", command)
         self.assertIn('"%~dp0Start-SystemBuilder.ps1" %*', command)
+
+    def test_native_probes_cannot_trip_windows_powershell_stop_preference(self) -> None:
+        # Under Windows PowerShell 5.1, `2>$null` on a native command with
+        # $ErrorActionPreference = "Stop" is a terminating error, so every
+        # stderr-silenced probe must run in Test-Python313's "Continue" scope.
+        powershell = (ROOT / "Start-SystemBuilder.ps1").read_text(encoding="utf-8")
+        probe = powershell[
+            powershell.index("function Test-Python313")
+            : powershell.index("function Find-CompatiblePython")
+        ]
+        self.assertIn('$ErrorActionPreference = "Continue"', probe)
+        self.assertIn("2>$null", probe)
+        self.assertEqual(powershell.count("2>$null"), 1)
+        self.assertIn("Test-Python313 -Command $venvPython", powershell)
+        # A Microsoft Store Python lives behind the same WindowsApps alias as
+        # the installer stub, so it is probed rather than skipped.
+        self.assertNotIn("WindowsApps\\python.exe\") {", powershell)
+
+    def test_launcher_line_endings_are_pinned(self) -> None:
+        rules = {
+            tuple(line.split()[0:1] + line.split()[2:3])
+            for line in (ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.startswith("#")
+        }
+        for rule in (
+            ("*.cmd", "eol=crlf"),
+            ("*.ps1", "eol=crlf"),
+            ("*.command", "eol=lf"),
+            ("*.sh", "eol=lf"),
+        ):
+            self.assertIn(rule, rules)

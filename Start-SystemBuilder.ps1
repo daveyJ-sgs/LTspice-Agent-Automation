@@ -13,6 +13,23 @@ if (-not (Test-Path -LiteralPath $workspacePath -PathType Container)) {
     throw "System Builder workspace is not a directory: $workspacePath"
 }
 
+function Test-Python313 {
+    param([string]$Command, [string[]]$Arguments = @())
+    # Windows PowerShell 5.1 turns anything a native command writes to a
+    # redirected stderr into an ErrorRecord, which "Stop" makes terminating.
+    # Probe with "Continue" in this function's scope only; the caller's
+    # preference is untouched.
+    $ErrorActionPreference = "Continue"
+    try {
+        & $Command @Arguments -c `
+            "import sys; raise SystemExit(0 if sys.version_info >= (3, 13) else 1)" `
+            2>$null | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
 function Find-CompatiblePython {
     $candidates = @(
         @{ Command = "py"; Arguments = @("-3") },
@@ -21,14 +38,16 @@ function Find-CompatiblePython {
     foreach ($candidate in $candidates) {
         $command = [string]$candidate.Command
         $prefixArguments = [string[]]$candidate.Arguments
-        if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
+        $resolved = Get-Command $command -CommandType Application -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if (-not $resolved) {
             continue
         }
-        & $command @prefixArguments -c `
-            "import sys; raise SystemExit(0 if sys.version_info >= (3, 13) else 1)" `
-            2>$null
-        if ($LASTEXITCODE -eq 0) {
-            return $candidate
+        # The Microsoft Store alias in WindowsApps is either a real Store
+        # Python or an installer stub; the stub fails this probe (it prints
+        # to stderr and exits non-zero) without opening the Store.
+        if (Test-Python313 -Command $resolved.Source -Arguments $prefixArguments) {
+            return @{ Command = $resolved.Source; Arguments = $prefixArguments }
         }
     }
     throw @"
@@ -46,6 +65,9 @@ function Find-LTspice {
             return (Resolve-Path -LiteralPath $configured).Path
         }
         Write-Warning "LTSPICE_EXECUTABLE does not name a file: $configured"
+        # Drop the stale value so it cannot outrank the path saved in
+        # System Builder's settings.
+        Remove-Item Env:LTSPICE_EXECUTABLE -ErrorAction SilentlyContinue
     }
 
     $candidates = @()
@@ -80,10 +102,7 @@ if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
     }
 }
 
-& $venvPython -c `
-    "import sys; raise SystemExit(0 if sys.version_info >= (3, 13) else 1)" `
-    2>$null
-if ($LASTEXITCODE -ne 0) {
+if (-not (Test-Python313 -Command $venvPython)) {
     throw @"
 The existing .venv uses an unsupported Python version. Remove this directory,
 then run the launcher again so it can create a Python 3.13+ environment:
@@ -127,16 +146,23 @@ $pythonVersion = & $venvPython -c `
     "import platform; print(platform.python_version())"
 Write-Host "Python: $pythonVersion"
 
+# Discovery here is diagnostic only: a discovered install is deliberately NOT
+# exported as LTSPICE_EXECUTABLE. System Builder resolves LTspice itself --
+# a user-set LTSPICE_EXECUTABLE first, then the path saved in its settings,
+# then these same standard install locations -- and exporting a discovered
+# path would silently outrank the path saved in the settings.
 $ltspice = Find-LTspice
-if ($ltspice) {
-    $env:LTSPICE_EXECUTABLE = $ltspice
-    Write-Host "LTspice: $ltspice"
+if ($ltspice -and $env:LTSPICE_EXECUTABLE) {
+    Write-Host "LTspice: $ltspice (from LTSPICE_EXECUTABLE)"
+    Write-Host "First installation only: open LTspice once and answer its usage-data prompt."
+} elseif ($ltspice) {
+    Write-Host "LTspice: $ltspice (a path saved in System Builder settings takes precedence)"
     Write-Host "First installation only: open LTspice once and answer its usage-data prompt."
 } else {
-    Remove-Item Env:LTSPICE_EXECUTABLE -ErrorAction SilentlyContinue
     Write-Warning @"
-LTspice was not found. Recipe editing and plan preview remain available, but
-simulation and schematic capture will fail until LTspice is installed:
+LTspice was not found in a standard location. Recipe editing and plan preview
+remain available, but simulation and schematic capture will fail until
+LTspice is installed or its path is saved in System Builder settings:
 
     winget install --id AnalogDevices.LTspice
 

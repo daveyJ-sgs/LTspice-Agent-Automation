@@ -97,10 +97,11 @@ then run the baseline RC example from the repository root:
 python3 ltspice_wrapper.py
 ```
 
-On macOS, the wrapper discovers:
+On macOS, the wrapper discovers (machine-wide first, then per-user):
 
 ```text
 /Applications/LTspice.app/Contents/MacOS/LTspice
+~/Applications/LTspice.app/Contents/MacOS/LTspice
 ```
 
 Override executable discovery when necessary:
@@ -108,6 +109,11 @@ Override executable discovery when necessary:
 ```bash
 LTSPICE_EXECUTABLE=/path/to/LTspice python3 ltspice_wrapper.py
 ```
+
+Resolution order is: a `LTSPICE_EXECUTABLE` you set yourself, then the path
+saved in System Builder's LTspice settings, then the standard install
+locations. The `Start-SystemBuilder` launchers only report what they find and
+never export `LTSPICE_EXECUTABLE`, so a saved setting is not overridden.
 
 Install optional plotting, MCP, GUI, and development dependencies in a local
 virtual environment:
@@ -260,14 +266,21 @@ and Python environment and opens the GUI without a Terminal window.
 
 Double-click `Start-SystemBuilder.command` (or run it from a terminal) for the
 no-admin first-start path: it creates a private `.venv`, installs the GUI
-dependencies, finds LTspice at `/Applications/LTspice.app`, and opens System
+dependencies, reports LTspice in `/Applications` or `~/Applications`, and opens System
 Builder in the default browser on a random loopback-only port. Install
 LTspice first with `brew install --cask ltspice`, then launch it once to
 answer its usage-data prompt. The default workspace is
 `~/Documents/LTspice/projects`, with RC low-pass and three-opamp instrumentation
 amplifier starter projects added without overwriting existing projects. The GUI
 starts empty until you open or create a project. Pass
-`--workspace=/path/to/your/projects` to use another workspace.
+`--workspace=/path/to/your/projects` (or `--workspace /path/to/your/projects`)
+to use another workspace.
+
+If the repository was downloaded as a ZIP rather than cloned, Gatekeeper may
+refuse the first double-click because the launcher is not signed. Open
+**System Settings > Privacy & Security**, choose **Open Anyway** next to the
+`Start-SystemBuilder.command` message, and confirm. Alternatively, run it once
+from Terminal with `./Start-SystemBuilder.command`.
 
 ## Tests and quality gates
 

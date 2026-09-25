@@ -1,8 +1,10 @@
 import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import schematic_capture
 
@@ -38,12 +40,39 @@ class SchematicCaptureTests(unittest.TestCase):
             "GetFileNameWithoutExtension($Source)",
             schematic_capture._WINDOWS_CAPTURE_SCRIPT,
         )
+        # File names may contain [ ] which -like treats as wildcards.
+        self.assertNotIn("-notlike", schematic_capture._WINDOWS_CAPTURE_SCRIPT)
+        self.assertIn(
+            "MainWindowTitle.IndexOf($sourceStem, [StringComparison]::OrdinalIgnoreCase)",
+            schematic_capture._WINDOWS_CAPTURE_SCRIPT,
+        )
         self.assertIn("GetDpiForWindow", schematic_capture._WINDOWS_CAPTURE_SCRIPT)
         self.assertIn("ShowWindow($process.MainWindowHandle, 3)", schematic_capture._WINDOWS_CAPTURE_SCRIPT)
         self.assertIn("UIAutomationClient", schematic_capture._WINDOWS_CAPTURE_SCRIPT)
         self.assertIn("LTspice Tool Change Log", schematic_capture._WINDOWS_CAPTURE_SCRIPT)
         self.assertIn('Name -eq "Web Sync"', schematic_capture._WINDOWS_CAPTURE_SCRIPT)
         self.assertIn("[NativeWindow]::Click", schematic_capture._WINDOWS_CAPTURE_SCRIPT)
+
+    def test_windows_capture_decodes_powershell_output_without_failing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            executable = Path(temporary) / "LTspice.exe"
+            executable.write_bytes(b"")
+            completed = subprocess.CompletedProcess([], 1, "", "boom \ufffd")
+            with patch.object(
+                schematic_capture.shutil, "which", return_value="powershell.exe"
+            ), patch.object(
+                schematic_capture.subprocess, "run", return_value=completed
+            ) as run:
+                with self.assertRaisesRegex(RuntimeError, "boom"):
+                    schematic_capture._capture_windows(
+                        Path(temporary) / "a.asc", Path(temporary) / "a.png", executable
+                    )
+        kwargs = run.call_args.kwargs
+        self.assertEqual(kwargs["errors"], "replace")
+        self.assertIn(kwargs["encoding"], {"oem", "utf-8"})
+        self.assertNotIn("text", kwargs)
+        # Bytes undefined in cp1252 (or invalid UTF-8) must decode, not raise.
+        b"\x81\x8d\xff".decode(kwargs["encoding"], kwargs["errors"])
 
     def test_captures_content_addressed_asset_and_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

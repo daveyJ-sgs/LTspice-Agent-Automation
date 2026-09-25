@@ -30,7 +30,7 @@ def main() -> None:
     submitted = request_json(
         f"{BASE_URL}/simulate/async",
         method="POST",
-        payload={"filename": NETLIST.name, "netlist": NETLIST.read_text(), "ascii": True, "timeout": 120},
+        payload={"filename": NETLIST.name, "netlist": NETLIST.read_text(encoding="utf-8"), "ascii": True, "timeout": 120},
     )
     job_id = str(submitted["job_id"])
     print(f"Submitted {job_id}")

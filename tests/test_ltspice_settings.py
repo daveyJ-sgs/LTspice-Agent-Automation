@@ -6,6 +6,7 @@ touches the real per-machine settings file.
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -74,6 +75,28 @@ class LTspiceSettingsTests(unittest.TestCase):
                 resolved = ltspice_wrapper._default_ltspice()
 
         self.assertEqual(resolved, Path(env_wins.name).expanduser())
+
+    def test_macos_discovery_finds_a_per_user_applications_install(self) -> None:
+        with tempfile.TemporaryDirectory() as home:
+            executable = Path(home) / "Applications/LTspice.app/Contents/MacOS/LTspice"
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b"")
+            real_is_file = Path.is_file
+
+            def is_file(path: Path) -> bool:
+                # Never let a real machine-wide install on the test host win.
+                if str(path).startswith("/Applications/"):
+                    return False
+                return real_is_file(path)
+
+            with patch.dict("os.environ", {}, clear=False), \
+                 patch("sys.platform", "darwin"), \
+                 patch.object(Path, "home", return_value=Path(home)), \
+                 patch.object(Path, "is_file", is_file):
+                os.environ.pop("LTSPICE_EXECUTABLE", None)
+                resolved = ltspice_wrapper._default_ltspice()
+
+        self.assertEqual(resolved, executable)
 
     def test_settings_file_is_not_reused_across_machines_setting(self) -> None:
         # A fresh settings file (nothing saved yet) must not crash and must

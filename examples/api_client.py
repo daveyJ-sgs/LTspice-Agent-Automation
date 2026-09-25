@@ -14,7 +14,7 @@ NETLIST = PROJECT_DIR / "examples" / "rc_lowpass.cir"
 
 def main() -> None:
     payload = json.dumps(
-        {"filename": NETLIST.name, "netlist": NETLIST.read_text()}
+        {"filename": NETLIST.name, "netlist": NETLIST.read_text(encoding="utf-8")}
     ).encode("utf-8")
     request = Request(
         "http://127.0.0.1:8765/simulate",

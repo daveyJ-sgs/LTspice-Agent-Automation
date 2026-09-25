@@ -1127,6 +1127,31 @@ Binary:
             self.assertEqual(manifest["simulator"]["executable"], str(LTSPICE))
             self.assertEqual(len(manifest["simulator"]["executable_sha256"]), 64)
 
+    def test_cache_staging_name_is_no_longer_than_the_published_entry(self) -> None:
+        cache_key = "f" * 64
+        staged: list[Path] = []
+        replace = ltspice_wrapper.os.replace
+
+        def recording_replace(source: Path, destination: Path) -> None:
+            if Path(destination).name.startswith("simulation-"):
+                staged.append(Path(source))
+            replace(source, destination)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary) / "run"
+            output_dir.mkdir()
+            (output_dir / "deck.log").write_text("done\n", encoding="utf-8")
+            cache_dir = Path(temporary) / "cache"
+            with patch.object(ltspice_wrapper.os, "replace", recording_replace):
+                ltspice_wrapper._publish_cache_entry(
+                    cache_dir, cache_key, {}, output_dir, "deck.cir"
+                )
+            final = cache_dir / f"simulation-{cache_key}"
+            self.assertTrue(final.is_dir())
+            self.assertEqual(len(staged), 1)
+            self.assertLessEqual(len(staged[0].name), len(final.name))
+            self.assertEqual([path.name for path in cache_dir.iterdir()], [final.name])
+
 
 if __name__ == "__main__":
     unittest.main()

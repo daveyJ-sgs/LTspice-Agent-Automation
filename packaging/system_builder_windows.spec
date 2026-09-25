@@ -9,6 +9,13 @@ data_files = [
     (project_root / "examples/mixed_signal_daq_ac.cir", "examples"),
     (project_root / "examples/mixed_signal_daq_transient.cir", "examples"),
     (project_root / "examples/mixed_signal_daq.asc", "examples"),
+    # Starter projects copied into a fresh workspace by
+    # project_scaffold.seed_starter_projects at startup.
+    (project_root / "examples/rc_lowpass_starter", "examples/rc_lowpass_starter"),
+    (
+        project_root / "examples/instrumentation_amp_starter",
+        "examples/instrumentation_amp_starter",
+    ),
     (
         project_root / "docs/images/mixed-signal-daq-schematic.png",
         "docs/images",

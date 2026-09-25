@@ -40,7 +40,7 @@ def collect_records(root: Path = RUNS_DIR) -> list[dict[str, object]]:
     for manifest_path in root.rglob("run_manifest.json"):
         try:
             manifest_path = _inside(manifest_path, root)
-            manifest = json.loads(manifest_path.read_text())
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, ValueError):
             continue
         run_dir = manifest_path.parent

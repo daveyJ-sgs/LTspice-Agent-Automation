@@ -700,7 +700,7 @@ def read_netlist_text(workspace_root: Path, relative_path: object) -> str:
     try:
         return decode_text(path.read_bytes())
     except (OSError, UnicodeError) as exc:
-        raise ValueError("netlist must be readable UTF-8 or UTF-16 text") from exc
+        raise ValueError("netlist must be readable UTF-8, UTF-16, or Windows ANSI text") from exc
 
 
 def write_netlist_text(workspace_root: Path, relative_path: object, content: str) -> None:

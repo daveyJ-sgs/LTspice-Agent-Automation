@@ -70,7 +70,17 @@ class ProjectScaffoldTests(unittest.TestCase):
             "sensor-front-end-v2",
         )
         self.assertEqual(project_scaffold.slugify_project_name("  a b  "), "a-b")
-        for bad in ("", "   ", "***", "runs", "examples", "x" * 81, 123, None):
+        # Only the bare device names are reserved.
+        for fine in ("con.txt", "console", "com10", "lpt0", "aux amp"):
+            self.assertNotIn(
+                project_scaffold.slugify_project_name(fine),
+                project_scaffold.WINDOWS_DEVICE_NAMES,
+            )
+        for bad in (
+            "", "   ", "***", "runs", "examples", "x" * 81, 123, None,
+            # Windows device names, in any case and with trailing punctuation.
+            "CON", "prn", "Aux", "NUL.", "com1", "COM9", "lpt1", "Lpt9 ",
+        ):
             with self.assertRaises(ValueError):
                 project_scaffold.slugify_project_name(bad)
 
