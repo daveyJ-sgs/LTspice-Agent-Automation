@@ -105,11 +105,31 @@ function showView(view) {
   });
   const crumb = byId("topbar-crumb");
   if (crumb) crumb.textContent = VIEW_LABELS[view];
+  setNavDrawer(false);
   if (window.location.hash.slice(1) !== view) {
     window.history.pushState(null, "", `#${view}`);
   }
   window.scrollTo({top: 0});
 }
+
+// Below the narrow breakpoint the sidebar is a top bar and its navigation a
+// drawer; on wider screens the toggle is hidden and the class is inert.
+function setNavDrawer(open) {
+  const toggle = byId("nav-toggle");
+  if (!toggle) return;
+  toggle.setAttribute("aria-expanded", String(open));
+  document.querySelector(".app-sidebar").classList.toggle("nav-open", open);
+}
+
+byId("nav-toggle").addEventListener("click", () => {
+  setNavDrawer(byId("nav-toggle").getAttribute("aria-expanded") !== "true");
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && byId("nav-toggle").getAttribute("aria-expanded") === "true") {
+    setNavDrawer(false);
+    byId("nav-toggle").focus();
+  }
+});
 
 function routeFromHash() {
   showView((window.location.hash || "#dashboard").slice(1));
