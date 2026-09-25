@@ -25,6 +25,23 @@ def text_encoding(raw: bytes) -> str:
 
 
 def decode_text(raw: bytes) -> str:
-    """Decode supported LTspice text and remove an optional Unicode BOM."""
+    """Decode supported LTspice text and remove an optional Unicode BOM.
+
+    BOM-marked and detected UTF-16 text is decoded strictly. BOM-less text is
+    tried as UTF-8 first; when that fails it is treated as a Windows ANSI file
+    (cp1252, then latin-1 for the five bytes cp1252 leaves undefined), which
+    is what LTspice and Windows editors write for a netlist containing, for
+    example, 'µ'. Binary content with NUL bytes is still rejected.
+    """
     encoding = text_encoding(raw)
-    return raw.decode(encoding).removeprefix("\ufeff")
+    if encoding != "utf-8" or raw.startswith(b"\xef\xbb\xbf"):
+        return raw.decode(encoding).removeprefix("\ufeff")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        if b"\x00" in raw:
+            raise
+    try:
+        return raw.decode("cp1252")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
