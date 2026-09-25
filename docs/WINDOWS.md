@@ -17,6 +17,9 @@ creates a writable starter workspace at:
 Documents\LTspice System Builder Workspace
 ```
 
+`Documents` is the folder Windows reports for the user, so a Documents folder
+redirected to OneDrive or a network location is used as-is.
+
 The advanced DAQ reference assets are copied there only when absent. System
 Builder also adds missing `rc-lowpass-starter` and
 `instrumentation-amp-starter` project folders, giving a new workspace two
