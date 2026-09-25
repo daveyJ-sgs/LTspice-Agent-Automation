@@ -49,4 +49,38 @@ class WindowsBundleTests(unittest.TestCase):
         self.assertIn("mixed_signal_daq.ltstudy.json", specification)
         self.assertIn("mixed-signal-daq-schematic.png", specification)
         self.assertIn('Filter "python.exe"', smoke)
+        self.assertIn("rc_lowpass_starter", specification)
         self.assertIn('Invoke-RestMethod -Uri ($url + "health")', smoke)
+
+    def test_spec_bundles_every_starter_project_seeded_at_startup(self) -> None:
+        import project_scaffold
+
+        specification = ROOT / "packaging/system_builder_windows.spec"
+        captured: dict[str, object] = {}
+
+        def analysis(*_args: object, **kwargs: object) -> mock.Mock:
+            captured.update(kwargs)
+            return mock.Mock()
+
+        namespace: dict[str, object] = {
+            "SPECPATH": str(specification.parent),
+            "Analysis": analysis,
+            "PYZ": mock.Mock(),
+            "EXE": mock.Mock(),
+            "COLLECT": mock.Mock(),
+        }
+        exec(compile(specification.read_text(encoding="utf-8"), str(specification), "exec"), namespace)
+        datas = captured["datas"]
+        assert isinstance(datas, list)
+        bundled = {Path(source).resolve(): destination for source, destination in datas}
+        for name, source in project_scaffold.STARTER_PROJECTS.items():
+            with self.subTest(starter=name):
+                resolved = source.resolve()
+                self.assertIn(resolved, bundled)
+                self.assertTrue(resolved.is_dir())
+                # The frozen layout must mirror the source tree so that
+                # project_scaffold's examples-relative path still resolves.
+                self.assertEqual(
+                    bundled[resolved],
+                    resolved.relative_to(ROOT).as_posix(),
+                )
