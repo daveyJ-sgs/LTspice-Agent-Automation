@@ -290,7 +290,7 @@ button, .secondary-button { cursor: pointer; border-radius: var(--radius-sm); pa
 .compact-button { color: var(--accent-text); white-space: nowrap; background: transparent; border-color: var(--border); border-radius: var(--radius-sm); padding: 6px 9px; font: 600 10.5px "IBM Plex Mono", monospace; text-transform: uppercase; }
 .compact-button:hover { border-color: var(--accent); }
 .remove-button { color: var(--danger); background: transparent; border: 0; padding: 5px 7px; font: 600 15px "IBM Plex Mono", monospace; }
-.table-wrap { overflow-x: auto; border-radius: var(--radius-sm); }
+.table-wrap { position: relative; overflow-x: auto; border-radius: var(--radius-sm); }
 table { border-collapse: collapse; width: 100%; }
 th { color: var(--subtle); font: 600 10.5px "IBM Plex Mono", monospace; letter-spacing: .06em; text-transform: uppercase; }
 th, td { text-align: left; padding: 11px 9px; border-bottom: 1px solid var(--border); }
