@@ -560,7 +560,9 @@ def _publish_cache_entry(
     cache_entry = cache_dir / f"simulation-{cache_key}"
     if cache_entry.exists():
         return _validated_cache_artifacts(cache_entry, cache_key, request) is not None
-    temporary_entry = cache_dir / f".simulation-{cache_key}.{uuid.uuid4().hex}.tmp"
+    # Keep the staging name no longer than the final entry: under the Windows
+    # MAX_PATH limit a longer temporary path fails before the entry does.
+    temporary_entry = cache_dir / f".simulation-{cache_key[:16]}-{uuid.uuid4().hex[:12]}.tmp"
     artifact_dir = temporary_entry / "artifacts"
     artifact_dir.mkdir(parents=True)
     records: list[dict[str, object]] = []

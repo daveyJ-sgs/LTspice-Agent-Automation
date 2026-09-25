@@ -126,6 +126,25 @@ The wrapper uses `subprocess` and `pathlib` rather than shell-specific command
 strings. Model-library search paths and representative `.asc` files still need
 verification against the target LTspice version.
 
+### Long paths
+
+Windows limits ordinary paths to 260 characters (`MAX_PATH`). Simulation
+cache entries are named `runs\cache\simulation-<64-hex-digit key>`, and run and
+experiment folders nest below the workspace, so a deeply placed workspace
+(for example inside a long OneDrive path) can exceed the limit and fail with
+`FileNotFoundError` or `[WinError 206]`. Keep the workspace near the top of a
+drive, or enable long-path support once (administrator PowerShell, then sign
+out and back in):
+
+```powershell
+New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' `
+  -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force
+```
+
+Python 3.13 honours this setting. LTspice itself may still reject a netlist
+path longer than 260 characters, so a short workspace path remains the safer
+choice.
+
 ## Real LTspice GitHub qualification
 
 The opt-in **Real LTspice Windows qualification** workflow performs the same
