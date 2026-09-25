@@ -230,6 +230,12 @@ jobs:
         timeout-minutes: 3
         run: python tests/real_ltspice_smoke.py
 
+      - name: Verify cancel and timeout stop the simulator
+        if: env.REMOTE_MODE == '0'
+        shell: pwsh
+        timeout-minutes: 3
+        run: python tests/real_ltspice_cancel.py
+
       - name: Run complete structured DAQ qualification
         if: env.REMOTE_MODE == '0'
         shell: pwsh
