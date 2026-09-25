@@ -266,14 +266,21 @@ and Python environment and opens the GUI without a Terminal window.
 
 Double-click `Start-SystemBuilder.command` (or run it from a terminal) for the
 no-admin first-start path: it creates a private `.venv`, installs the GUI
-dependencies, finds LTspice at `/Applications/LTspice.app`, and opens System
+dependencies, reports LTspice in `/Applications` or `~/Applications`, and opens System
 Builder in the default browser on a random loopback-only port. Install
 LTspice first with `brew install --cask ltspice`, then launch it once to
 answer its usage-data prompt. The default workspace is
 `~/Documents/LTspice/projects`, with RC low-pass and three-opamp instrumentation
 amplifier starter projects added without overwriting existing projects. The GUI
 starts empty until you open or create a project. Pass
-`--workspace=/path/to/your/projects` to use another workspace.
+`--workspace=/path/to/your/projects` (or `--workspace /path/to/your/projects`)
+to use another workspace.
+
+If the repository was downloaded as a ZIP rather than cloned, Gatekeeper may
+refuse the first double-click because the launcher is not signed. Open
+**System Settings > Privacy & Security**, choose **Open Anyway** next to the
+`Start-SystemBuilder.command` message, and confirm. Alternatively, run it once
+from Terminal with `./Start-SystemBuilder.command`.
 
 ## Tests and quality gates
 

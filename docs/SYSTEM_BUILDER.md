@@ -42,13 +42,18 @@ make system-builder
 
 **macOS (no-admin alternative):** double-click `Start-SystemBuilder.command`
 (or run it from a terminal). It creates the private `.venv`, installs the GUI
-dependencies, finds `/Applications/LTspice.app`, and opens the same
-loopback-only application. No administrator access or machine-wide changes.
-Pass `--workspace` the same way to point it at your own projects folder:
+dependencies, reports LTspice in `/Applications` or `~/Applications`, and
+opens the same loopback-only application. No administrator access or
+machine-wide changes. Pass `--workspace` the same way to point it at your own
+projects folder (`--workspace=PATH` and `--workspace PATH` both work):
 
 ```bash
 ./Start-SystemBuilder.command --workspace=/Users/dave/Documents/LTspice/projects
 ```
+
+If Gatekeeper blocks the first double-click of a ZIP download, choose
+**Open Anyway** in **System Settings > Privacy & Security**, or run the
+launcher once from Terminal.
 
 The application opens the default browser on a random `127.0.0.1` port. A
 repository-root development launch can load the bundled advanced reference
