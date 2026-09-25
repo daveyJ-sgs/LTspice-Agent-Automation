@@ -43,3 +43,17 @@ class WindowsLauncherTests(unittest.TestCase):
         self.assertEqual(powershell.count("2>$null"), 1)
         self.assertIn("Test-Python313 -Command $venvPython", powershell)
         self.assertIn('-like "*\\WindowsApps\\python.exe"', powershell)
+
+    def test_launcher_line_endings_are_pinned(self) -> None:
+        rules = {
+            tuple(line.split()[0:1] + line.split()[2:3])
+            for line in (ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.startswith("#")
+        }
+        for rule in (
+            ("*.cmd", "eol=crlf"),
+            ("*.ps1", "eol=crlf"),
+            ("*.command", "eol=lf"),
+            ("*.sh", "eol=lf"),
+        ):
+            self.assertIn(rule, rules)

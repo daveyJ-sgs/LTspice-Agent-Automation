@@ -1,0 +1,9 @@
+# Launchers must keep the line endings their interpreters expect, whatever
+# core.autocrlf the cloning machine uses. The repository stores LF; these
+# rules only control the checked-out working tree.
+*.cmd     text eol=crlf
+*.ps1     text eol=crlf
+# bash rejects CRLF ("$'\r': command not found"), so a Windows checkout
+# copied to a Mac must still carry LF.
+*.command text eol=lf
+*.sh      text eol=lf
