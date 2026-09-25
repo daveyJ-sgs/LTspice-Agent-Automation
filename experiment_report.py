@@ -414,6 +414,18 @@ def _plots(
                 raise ValueError(f"waveform analysis {name} has inconsistent plot metadata")
             group["traces"].append(trace)
     current_raw = None
+    if max_traces_per_plot is None and groups:
+        # Large studies would otherwise exceed the display budget and leave no
+        # report at all; show representative traces instead, sized so every
+        # plot fits even when each trace uses the full point allowance.
+        automatic_cap = min(
+            MAX_TRACE_COUNT // len(groups),
+            MAX_DISPLAYED_POINTS // (len(groups) * DISPLAY_POINT_LIMIT),
+        )
+        if automatic_cap >= 1 and any(
+            len(group["traces"]) > automatic_cap for group in groups.values()
+        ):
+            max_traces_per_plot = automatic_cap
     for group in groups.values():
         traces = group["traces"]
         assert isinstance(traces, list)

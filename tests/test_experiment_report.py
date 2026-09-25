@@ -529,11 +529,23 @@ class ExperimentReportTests(TemporaryRunsTestCase):
 
         with (
             patch.object(experiment_report.raw_parser, "parse_raw", return_value=self._raw_data()),
-            patch.object(experiment_report, "MAX_TRACE_COUNT", 1),
+            patch.object(experiment_report, "MAX_DISPLAYED_POINTS", 1),
             self.assertRaisesRegex(ValueError, "display budget"),
         ):
             experiment_report.build_experiment_report(self.runs, self.experiment_id)
         self.assertFalse((self.experiment_dir / "report.html").exists())
+
+    def test_large_study_reports_representative_traces_by_default(self) -> None:
+        with (
+            patch.object(experiment_report.raw_parser, "parse_raw", return_value=self._raw_data()),
+            patch.object(experiment_report, "MAX_TRACE_COUNT", 1),
+        ):
+            report = experiment_report.build_experiment_report(
+                self.runs, self.experiment_id
+            )
+        self.assertEqual(report["trace_count"], 1)
+        html = Path(report["report_html"]).read_text(encoding="utf-8")
+        self.assertIn("1 representative traces from 2 full-resolution traces", html)
 
     def test_rejects_waveform_step_mapped_to_the_wrong_point(self) -> None:
         results_path = self.experiment_dir / "results.json"
