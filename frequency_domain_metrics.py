@@ -154,8 +154,15 @@ def _clip_end(
     origins: list[tuple[int, int]],
     end: float,
 ) -> tuple[list[float], list[float], list[tuple[int, int]]]:
+    # The end is computed as start + cycles / frequency, which can land a
+    # rounding step past (or just short of) the last sample; treat either as
+    # the last sample rather than extrapolating or indexing past the axis.
+    if end >= axis[-1] or math.isclose(
+        end, axis[-1], rel_tol=1e-12, abs_tol=0.0
+    ):
+        return axis, values, origins
     position = bisect_left(axis, end)
-    if position < len(axis) and axis[position] == end:
+    if axis[position] == end:
         return axis[: position + 1], values[: position + 1], origins[: position + 1]
     before = position - 1
     after = position
@@ -488,7 +495,13 @@ def _measure_thd(
         raise ValueError(
             f"maximum_harmonic must be an integer from 2 through {MAX_HARMONICS}"
         )
-    cycle_count = math.floor((x[-1] - x[0]) * fundamental)
+    cycles = (x[-1] - x[0]) * fundamental
+    nearest = round(cycles)
+    # A window that spans a whole number of cycles up to rounding keeps that
+    # last cycle instead of flooring it away.
+    cycle_count = (
+        nearest if math.isclose(cycles, nearest, rel_tol=1e-9) else math.floor(cycles)
+    )
     if cycle_count < 1:
         raise ValueError("THD analysis window must contain at least one full cycle")
     effective_end = x[0] + cycle_count / fundamental

@@ -246,6 +246,29 @@ class FrequencyDomainMetricTests(unittest.TestCase):
                 maximum_harmonic=101,
             )
 
+    def test_thd_window_of_exact_whole_cycles_reaches_the_last_sample(self) -> None:
+        # 0.01..0.21 s is exactly ten 50 Hz cycles, but 0.01 + 10 / 50 rounds
+        # one step past the 0.21 s window end.
+        axis = [index * 0.3 / 3000 for index in range(3001)]
+        values = [
+            math.sin(2 * math.pi * 50 * time)
+            + 0.1 * math.sin(2 * math.pi * 150 * time)
+            for time in axis
+        ]
+        self.assertGreater(0.01 + 10 / 50, 0.21)
+        result = measure_metric(
+            axis,
+            values,
+            "thd",
+            fundamental_frequency=50,
+            window_start=0.01,
+            window_end=0.21,
+        )
+
+        self.assertEqual(result.evidence["cycle_count"], 10)
+        self.assertAlmostEqual(result.value, 10.0, places=9)
+        self.assertAlmostEqual(result.evidence["harmonic_1_amplitude"], 1.0, places=12)
+
     def test_ac_gain_cutoff_and_peaking_use_log_frequency(self) -> None:
         frequency = [10, 100, 1000, 10000]
         gain_db = [0, 3, 0, -10]
