@@ -66,7 +66,9 @@ For source development, clone or download this repository and double-click
 1. Finds Python 3.13 or newer, or prints the exact `winget` installation command.
 2. Creates a private `.venv` inside the repository when needed.
 3. Installs the declared System Builder dependencies into that environment.
-4. Finds LTspice in the standard per-user and machine-wide locations.
+4. Reports whether LTspice is in a standard per-user or machine-wide location.
+   This is a diagnostic only: the launcher does not export the discovered
+   path, so a path saved in System Builder's LTspice settings still wins.
 5. Opens System Builder in the default browser on a random loopback-only port.
 
 It does not request administrator privileges, change machine-wide PowerShell
@@ -89,8 +91,15 @@ prints the local URL and workspace; open that URL manually if desired. Stop the
 server with `Ctrl+C` in the launcher window.
 
 The wrapper checks common install locations, including winget's per-user
-default at `%LOCALAPPDATA%\Programs\ADI\LTspice\LTspice.exe`. Set
-`LTSPICE_EXECUTABLE` only for a nonstandard installation:
+default at `%LOCALAPPDATA%\Programs\ADI\LTspice\LTspice.exe`. LTspice is
+resolved in this order:
+
+1. `LTSPICE_EXECUTABLE`, when you set it yourself (the launchers never set it).
+2. The path saved in System Builder's LTspice settings.
+3. The standard install locations above.
+
+For a nonstandard installation, save its path in System Builder's settings, or
+set `LTSPICE_EXECUTABLE` for scripts and the command-line wrapper:
 
 ```powershell
 $env:LTSPICE_EXECUTABLE = 'C:\Program Files\ADI\LTspice\LTspice.exe'

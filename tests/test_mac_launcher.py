@@ -25,6 +25,10 @@ class MacLauncherTests(unittest.TestCase):
         ):
             self.assertIn(required, script)
         self.assertNotIn("sudo ", script)
+        # Discovery is diagnostic only: exporting a discovered install would
+        # outrank the path the user saved in System Builder's settings.
+        self.assertNotIn("export LTSPICE_EXECUTABLE", script)
+        self.assertIn("$HOME/Applications/LTspice.app/Contents/MacOS/LTspice", script)
         self.assertTrue(script.startswith("#!/bin/bash"))
 
     @unittest.skipUnless(

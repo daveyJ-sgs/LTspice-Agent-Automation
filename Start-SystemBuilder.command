@@ -92,25 +92,39 @@ fi
 
 echo "Python: $("$VENV_PYTHON" -c 'import platform; print(platform.python_version())')"
 
+# Discovery here is diagnostic only: a discovered install is deliberately NOT
+# exported as LTSPICE_EXECUTABLE. System Builder resolves LTspice itself --
+# a user-set LTSPICE_EXECUTABLE first, then the path saved in its settings,
+# then these same standard install locations -- and exporting a discovered
+# path would silently outrank the path saved in the settings.
 LTSPICE_PATH="${LTSPICE_EXECUTABLE:-}"
+LTSPICE_SOURCE="from LTSPICE_EXECUTABLE"
 if [ -n "$LTSPICE_PATH" ] && [ ! -f "$LTSPICE_PATH" ]; then
     echo "Warning: LTSPICE_EXECUTABLE does not name a file: $LTSPICE_PATH" >&2
+    # Drop the stale value so it cannot outrank the saved setting.
+    unset LTSPICE_EXECUTABLE
     LTSPICE_PATH=""
 fi
-if [ -z "$LTSPICE_PATH" ] && [ -f "/Applications/LTspice.app/Contents/MacOS/LTspice" ]; then
-    LTSPICE_PATH="/Applications/LTspice.app/Contents/MacOS/LTspice"
+if [ -z "$LTSPICE_PATH" ]; then
+    LTSPICE_SOURCE="a path saved in System Builder settings takes precedence"
+    for candidate in \
+        "/Applications/LTspice.app/Contents/MacOS/LTspice" \
+        "$HOME/Applications/LTspice.app/Contents/MacOS/LTspice"; do
+        if [ -f "$candidate" ]; then
+            LTSPICE_PATH="$candidate"
+            break
+        fi
+    done
 fi
 
 if [ -n "$LTSPICE_PATH" ]; then
-    export LTSPICE_EXECUTABLE="$LTSPICE_PATH"
-    echo "LTspice: $LTSPICE_PATH"
+    echo "LTspice: $LTSPICE_PATH ($LTSPICE_SOURCE)"
     echo "First installation only: open LTspice once and answer its usage-data prompt."
 else
-    unset LTSPICE_EXECUTABLE
     cat <<'EOF' >&2
-Warning: LTspice was not found. Recipe editing and plan preview remain
-available, but simulation and schematic capture will fail until LTspice is
-installed:
+Warning: LTspice was not found in a standard location. Recipe editing and plan
+preview remain available, but simulation and schematic capture will fail
+until LTspice is installed or its path is saved in System Builder settings:
 
     brew install --cask ltspice
 

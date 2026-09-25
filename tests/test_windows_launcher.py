@@ -23,5 +23,8 @@ class WindowsLauncherTests(unittest.TestCase):
         ):
             self.assertIn(required, powershell)
         self.assertNotIn("-Verb RunAs", powershell)
+        # Discovery is diagnostic only: exporting a discovered install would
+        # outrank the path the user saved in System Builder's settings.
+        self.assertNotIn("$env:LTSPICE_EXECUTABLE =", powershell)
         self.assertIn("powershell.exe -NoLogo -NoProfile", command)
         self.assertIn('"%~dp0Start-SystemBuilder.ps1" %*', command)

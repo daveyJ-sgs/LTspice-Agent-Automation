@@ -109,6 +109,11 @@ Override executable discovery when necessary:
 LTSPICE_EXECUTABLE=/path/to/LTspice python3 ltspice_wrapper.py
 ```
 
+Resolution order is: a `LTSPICE_EXECUTABLE` you set yourself, then the path
+saved in System Builder's LTspice settings, then the standard install
+locations. The `Start-SystemBuilder` launchers only report what they find and
+never export `LTSPICE_EXECUTABLE`, so a saved setting is not overridden.
+
 Install optional plotting, MCP, GUI, and development dependencies in a local
 virtual environment:
 

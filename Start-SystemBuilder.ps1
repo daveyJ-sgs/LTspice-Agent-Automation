@@ -46,6 +46,9 @@ function Find-LTspice {
             return (Resolve-Path -LiteralPath $configured).Path
         }
         Write-Warning "LTSPICE_EXECUTABLE does not name a file: $configured"
+        # Drop the stale value so it cannot outrank the path saved in
+        # System Builder's settings.
+        Remove-Item Env:LTSPICE_EXECUTABLE -ErrorAction SilentlyContinue
     }
 
     $candidates = @()
@@ -127,16 +130,23 @@ $pythonVersion = & $venvPython -c `
     "import platform; print(platform.python_version())"
 Write-Host "Python: $pythonVersion"
 
+# Discovery here is diagnostic only: a discovered install is deliberately NOT
+# exported as LTSPICE_EXECUTABLE. System Builder resolves LTspice itself --
+# a user-set LTSPICE_EXECUTABLE first, then the path saved in its settings,
+# then these same standard install locations -- and exporting a discovered
+# path would silently outrank the path saved in the settings.
 $ltspice = Find-LTspice
-if ($ltspice) {
-    $env:LTSPICE_EXECUTABLE = $ltspice
-    Write-Host "LTspice: $ltspice"
+if ($ltspice -and $env:LTSPICE_EXECUTABLE) {
+    Write-Host "LTspice: $ltspice (from LTSPICE_EXECUTABLE)"
+    Write-Host "First installation only: open LTspice once and answer its usage-data prompt."
+} elseif ($ltspice) {
+    Write-Host "LTspice: $ltspice (a path saved in System Builder settings takes precedence)"
     Write-Host "First installation only: open LTspice once and answer its usage-data prompt."
 } else {
-    Remove-Item Env:LTSPICE_EXECUTABLE -ErrorAction SilentlyContinue
     Write-Warning @"
-LTspice was not found. Recipe editing and plan preview remain available, but
-simulation and schematic capture will fail until LTspice is installed:
+LTspice was not found in a standard location. Recipe editing and plan preview
+remain available, but simulation and schematic capture will fail until
+LTspice is installed or its path is saved in System Builder settings:
 
     winget install --id AnalogDevices.LTspice
 
