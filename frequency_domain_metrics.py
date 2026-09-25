@@ -195,6 +195,18 @@ def _unwrap_phase(values: Sequence[complex]) -> list[float]:
     return unwrapped
 
 
+def _principal_loop_phase(phase: float) -> float:
+    """Map an unwrapped loop phase onto (-360, 0] degrees.
+
+    Unwrapping starts from the principal phase of the first captured point, so
+    a loop whose true low-frequency phase is below -180 degrees (two or more
+    integrators with lag, type-III compensation) is carried 360 degrees too
+    high. Margins are defined modulo 360 degrees, so they are taken from this
+    representative rather than from the arbitrary unwrap offset.
+    """
+    return phase - 360.0 * math.ceil(phase / 360.0)
+
+
 def _log_fraction(before: float, after: float, value: float) -> float:
     return math.log10(value / before) / math.log10(after / before)
 
@@ -696,7 +708,8 @@ def _gain_crossover(
     )
     gain_crossings = _crossings_log(frequency, gain, 0.0, "falling")
     crossover = _single_crossing(gain_crossings, "gain crossover")
-    crossover_phase, _ = _interpolate_log(frequency, phase, crossover[0])
+    unwrapped_phase, _ = _interpolate_log(frequency, phase, crossover[0])
+    crossover_phase = _principal_loop_phase(unwrapped_phase)
     evidence = {
         **_crossing_evidence(crossover, origins),
         "gain_db": 0.0,
@@ -729,6 +742,8 @@ def _measure_phase_margin(
     request: _FrequencyMetricRequest,
 ) -> waveform_metrics.MetricMeasurement:
     _, crossover_phase, evidence, window_parameters, _ = _gain_crossover(request)
+    # crossover_phase lies in (-360, 0], so the margin lies in (-180, 180]:
+    # a negative value is an unstable loop whatever the unwrap offset was.
     return _measurement(
         request.metric,
         180.0 + crossover_phase,
@@ -746,6 +761,9 @@ def _measure_gain_margin(
     )
     minimum_phase = min(phase)
     maximum_phase = max(phase)
+    # A phase crossover is a falling crossing of -180 degrees modulo 360; the
+    # unwrapped phase carries an arbitrary multiple of 360 from its first
+    # point, so every equivalent level inside the captured range is tested.
     first_level = math.ceil((minimum_phase + 180.0) / 360.0)
     last_level = math.floor((maximum_phase + 180.0) / 360.0)
     phase_crossings: list[tuple[tuple[float, int, int], float]] = []
@@ -761,11 +779,11 @@ def _measure_gain_margin(
         raise ValueError(
             "multiple phase crossover crossings; narrow the analysis window"
         )
-    crossover, level = phase_crossings[0]
+    crossover, _ = phase_crossings[0]
     crossover_gain, _ = _interpolate_log(frequency, gain, crossover[0])
     evidence = {
         **_crossing_evidence(crossover, origins),
-        "phase_degrees": level,
+        "phase_degrees": -180.0,
         "gain_db": crossover_gain,
         "crossing_count": len(phase_crossings),
     }

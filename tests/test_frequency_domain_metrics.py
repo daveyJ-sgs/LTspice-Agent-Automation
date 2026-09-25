@@ -322,6 +322,91 @@ class FrequencyDomainMetricTests(unittest.TestCase):
         self.assertAlmostEqual(gain_margin.value, -5.0)
         self.assertEqual(gain_margin.evidence["frequency"], 10.0)
 
+    def test_margins_ignore_the_unwrap_offset_of_low_frequency_phase(self) -> None:
+        # Loops whose true low-frequency phase is below -180 degrees start the
+        # unwrap 360 degrees high; the margins must still be the analytic ones.
+        frequency = [10 ** (index / 100) for index in range(601)]
+        two_pi = 2 * math.pi
+
+        def unstable(f: float) -> complex:
+            # Double integrator, lead at 300 Hz, lags at 3 kHz and 5 Hz.
+            s = 1j * two_pi * f
+            return (
+                (two_pi * 1e3 / s) ** 2
+                * (1 + s / (two_pi * 300))
+                / (1 + s / (two_pi * 3e3))
+                / (1 + s / (two_pi * 5))
+            )
+
+        def type_three(f: float) -> complex:
+            s = 1j * two_pi * f
+            zero = two_pi * 100
+            return (
+                (two_pi * 1e4) ** 3
+                / zero**2
+                * (1 + s / zero) ** 2
+                / s**3
+                / (1 + s / (two_pi * 1e5))
+            )
+
+        for loop, expected_phase in (
+            (
+                unstable,
+                lambda f: -180
+                + math.degrees(
+                    math.atan(f / 300) - math.atan(f / 3e3) - math.atan(f / 5)
+                ),
+            ),
+            (
+                type_three,
+                lambda f: -270
+                + math.degrees(2 * math.atan(f / 100) - math.atan(f / 1e5)),
+            ),
+        ):
+            values = [loop(f) for f in frequency]
+            self.assertGreater(math.degrees(cmath.phase(values[0])), 0.0)
+            margin = measure_metric(frequency, values, "phase_margin")
+            crossover = margin.evidence["frequency"]
+            self.assertAlmostEqual(abs(loop(crossover)), 1.0, delta=1e-3)
+            self.assertAlmostEqual(
+                margin.value, 180 + expected_phase(crossover), delta=0.05
+            )
+            self.assertAlmostEqual(
+                margin.evidence["phase_degrees"], expected_phase(crossover), delta=0.05
+            )
+        self.assertLess(
+            measure_metric(frequency, [unstable(f) for f in frequency], "phase_margin").value,
+            -60.0,
+        )
+
+        # Conditionally stable type-III loop: phase starts near -270, rises
+        # through -180 near 102 Hz, and falls through -180 again near 9.8 kHz.
+        # The gain margin belongs to the falling crossing only.
+        def conditional(f: float) -> complex:
+            s = 1j * two_pi * f
+            return (
+                (two_pi * 1e3) ** 3
+                / (two_pi * 100) ** 2
+                * (1 + s / (two_pi * 100)) ** 2
+                / s**3
+                / (1 + s / (two_pi * 1e4)) ** 2
+            )
+
+        values = [conditional(f) for f in frequency]
+        gain_margin = measure_metric(frequency, values, "gain_margin")
+        # 2*atan(f/100) - 2*atan(f/1e4) = 90 degrees at the phase crossovers.
+        b = 1 / 100 - 1 / 1e4
+        phase_crossover = (b + math.sqrt(b * b - 4e-6)) / 2e-6
+        self.assertAlmostEqual(
+            gain_margin.evidence["frequency"], phase_crossover, delta=phase_crossover * 1e-3
+        )
+        self.assertAlmostEqual(
+            gain_margin.value,
+            -20 * math.log10(abs(conditional(phase_crossover))),
+            delta=0.01,
+        )
+        self.assertEqual(gain_margin.evidence["phase_degrees"], -180.0)
+
     def test_ac_rejects_ambiguous_or_invalid_data(self) -> None:
         with self.assertRaisesRegex(ValueError, "zero reference"):
             measure_metric(

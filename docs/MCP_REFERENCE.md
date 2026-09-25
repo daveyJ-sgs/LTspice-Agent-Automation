@@ -931,7 +931,7 @@ Phase 1C adds frequency-domain requirements:
 | `peaking_db` | Peak gain minus gain at the reference frequency | `reference_frequency` |
 | `gain_crossover_frequency` | Falling 0 dB loop-gain crossing | None |
 | `gain_margin` | Negative gain at the falling odd-180° phase crossing | None |
-| `phase_margin` | 180° plus phase at the falling 0 dB crossing | None |
+| `phase_margin` | 180° plus phase at the falling 0 dB crossing, wrapped into (-180°, 180°] so a negative margin is unstable whatever the loop's low-frequency phase | None |
 
 Spectral analysis integrates the adaptive LTspice samples in time instead of
 treating them as uniformly spaced. `spectral_peak` uses a Hann window and a
