@@ -152,6 +152,7 @@ class ExperimentJobSnapshot(TypedDict):
     error_points: int
     passed_points: int
     failed_points: int
+    cancelled_points: NotRequired[int]
     all_passed: bool | None
     error: str | None
     execution_mode: str
@@ -754,6 +755,9 @@ def _experiment_counts(
         for point in points
     )
     passed_points = sum(point["all_passed"] for point in points)
+    cancelled_points = sum(
+        point["simulation_status"] == "cancelled" for point in points
+    )
     return {
         "finished_points": len(points),
         "pending_points": point_count - len(points),
@@ -761,6 +765,8 @@ def _experiment_counts(
         "error_points": error_points,
         "passed_points": passed_points,
         "failed_points": len(points) - passed_points,
+        # A subset of failed_points: stopped by a cancel, re-run on resume.
+        "cancelled_points": cancelled_points,
     }
 
 
@@ -1752,6 +1758,7 @@ class ExperimentJobManager:
             "error_points": 0,
             "passed_points": 0,
             "failed_points": 0,
+            "cancelled_points": 0,
             "all_passed": None,
             "cancel_requested": False,
             "artifacts": [],
@@ -1866,6 +1873,7 @@ class ExperimentJobManager:
             "error_points": int(manifest.get("error_points", 0)),
             "passed_points": int(manifest.get("passed_points", 0)),
             "failed_points": int(manifest.get("failed_points", 0)),
+            "cancelled_points": int(manifest.get("cancelled_points", 0)),
             "all_passed": manifest.get("all_passed")
             if isinstance(manifest.get("all_passed"), bool)
             else None,

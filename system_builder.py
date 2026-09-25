@@ -308,6 +308,7 @@ def create_app(
         passed_points = snapshot.get("passed_points", 0)
         failed_points = snapshot.get("failed_points", 0)
         error_points = snapshot.get("error_points", 0)
+        cancelled_points = snapshot.get("cancelled_points", 0)
         return {
             # "kind" and "job_id" are a normalized envelope, added alongside
             # (not instead of) the pre-existing fields below: study jobs are
@@ -331,6 +332,8 @@ def create_app(
             # failed_points includes errored points; these let a client show
             # "did not simulate" separately, with the recorded reason.
             "error_points": error_points,
+            # Also inside failed_points: interrupted by a cancel, not failed.
+            "cancelled_points": cancelled_points,
             "point_error": first_point_error(workspace / "runs" / experiment_id)
             if error_points
             else None,

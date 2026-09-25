@@ -340,6 +340,7 @@ function invalidateFrozenPlan() {
   byId("execution-acknowledgement").checked = false;
   byId("execution-acknowledgement").disabled = false;
   byId("start-button").disabled = true;
+  byId("start-button").textContent = "Start local study";
 }
 
 // A recipe edit: the saved file is now out of date and any frozen plan no
@@ -2916,15 +2917,18 @@ function visibleTrackedJobs() {
   return key ? [...trackedJobs.values()].filter((job) => job.project === key) : [];
 }
 
-// Errored points count as failed in the engine; split them out so a run
-// where LTspice never produced output does not read as "0 pass · 8 fail".
+// Errored and cancelled points count as failed in the engine; split them out
+// so a run where LTspice never produced output does not read as
+// "0 pass · 8 fail", and points a cancel interrupted do not read as failures.
 function jobPointSummary(job) {
   const finished = Number(job.finished_points || 0);
   const total = Number(job.point_count || 0);
   const errored = Number(job.error_points || 0);
-  const failed = Math.max(0, Number(job.failed_points || 0) - errored);
+  const cancelled = Number(job.cancelled_points || 0);
+  const failed = Math.max(0, Number(job.failed_points || 0) - errored - cancelled);
   const parts = [`${finished}/${total} points`, `${job.passed_points || 0} pass`, `${failed} fail`];
   if (errored) parts.push(`${errored} error`);
+  if (cancelled) parts.push(`${cancelled} interrupted`);
   return parts.join(" · ");
 }
 
@@ -3330,6 +3334,7 @@ async function freezePlan() {
     byId("frozen-artifact").textContent = result.plan.artifact;
     byId("execution-acknowledgement").checked = false;
     byId("start-button").disabled = true;
+    byId("start-button").textContent = "Start local study";
     byId("execution-confirmation").hidden = false;
     byId("remote-preview-controls").hidden = false;
     byId("remote-preview-result").hidden = true;
