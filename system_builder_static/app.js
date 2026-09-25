@@ -2514,7 +2514,7 @@ function refilterHistory() {
 }
 
 function comparableJobs() {
-  return (latestHistory?.jobs || []).filter((job) => job.status === "completed");
+  return (latestHistory?.jobs || []).filter((job) => job.status === "completed" && !jobAllErrored(job));
 }
 
 function openComparePanel() {
@@ -3115,6 +3115,13 @@ function renderHistory(result) {
   index.textContent = result.index.current ? "Current" : (result.index.available ? "Stale" : "Unavailable");
   index.className = result.index.current ? "index-ready" : "index-missing";
   index.title = result.index.message;
+
+  const compare = byId("open-compare");
+  const completed = comparableJobs().length;
+  compare.disabled = completed < 2;
+  compare.title = completed < 2
+    ? `Needs two completed runs to compare (${completed} so far).`
+    : "Diff two finished runs";
 
   const jobs = result.jobs.filter(matchesHistoryFilter).map((job) => {
     const row = document.createElement("div");

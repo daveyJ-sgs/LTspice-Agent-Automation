@@ -236,7 +236,10 @@ def create_project(workspace_root: Path, name: object) -> dict[str, object]:
     root = workspace_root.resolve(strict=True)
     project_dir = root / slug
     if project_dir.exists() or project_dir.is_symlink():
-        raise ProjectExistsError(f"a project named '{slug}' already exists")
+        raise ProjectExistsError(
+            f"a project named '{name.strip()}' already exists "
+            f"(its folder is {slug}/)"
+        )
 
     recipe_text = _template_recipe(name.strip())
     project_dir.mkdir()
