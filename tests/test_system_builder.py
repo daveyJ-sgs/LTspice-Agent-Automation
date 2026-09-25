@@ -1,5 +1,6 @@
 import json
 import shutil
+import subprocess
 import tempfile
 import time
 import unittest
@@ -1343,6 +1344,36 @@ class SystemBuilderTests(unittest.TestCase):
             self.assertEqual(captured.status_code, 200)
             self.assertEqual(captured.json()["capture_method"], "test-native-window")
             self.assertEqual(captured_image.status_code, 200)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is not installed")
+    def test_spice_numbers_scale_by_exponent_and_accept_micro_signs(self) -> None:
+        javascript = (PROJECT_ROOT / "system_builder_static/app.js").read_text(
+            encoding="utf-8"
+        )
+        start = javascript.index("const SPICE_SCALES = [")
+        end = javascript.index("function acSweepRange(")
+        tokens = [
+            "10u", "10µ", "10μ", "0.1u", "1Meg", "2.2k", "1e3k",
+            "1.5e-3m", "100n", "4.7p", "1mil", "-5m", "10uF", "4k7",
+        ]
+        script = (
+            javascript[start:end]
+            + f"\nprocess.stdout.write(JSON.stringify({json.dumps(tokens)}"
+            + ".map((token) => String(spiceNumber(token)))));\n"
+        )
+        completed = subprocess.run(
+            ["node", "-e", script], capture_output=True, text=True, check=True
+        )
+        # Compared as JavaScript's shortest round-trip strings: 10u must be
+        # the literal 1e-5, not 10 * 1e-6 = 9.999999999999999e-6.
+        self.assertEqual(
+            json.loads(completed.stdout),
+            [
+                "0.00001", "0.00001", "0.00001", "1e-7", "1000000", "2200",
+                "1000000", "0.0000015", "1e-7", "4.7e-12", "0.0000254",
+                "-0.005", "0.00001", "NaN",
+            ],
+        )
 
     def test_engineering_theme_is_offline_and_gradient_free(self) -> None:
         html = (PROJECT_ROOT / "system_builder_static/index.html").read_text(
