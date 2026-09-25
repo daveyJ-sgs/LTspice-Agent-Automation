@@ -343,7 +343,11 @@ def _plots(
     max_traces_per_plot: int | None = None,
 ) -> list[dict[str, object]]:
     groups: dict[str, dict[str, object]] = {}
-    raw_cache: dict[Path, raw_parser.RawData] = {}
+    # Hold only the most recently parsed RAW. Independent points each own a
+    # RAW, so caching every one kept all points' samples (several times the
+    # file size each) alive for the whole report; consecutive analyses of the
+    # same file, including every step of a native batch, still share a parse.
+    current_raw: tuple[Path, raw_parser.RawData] | None = None
     points = results["points"]
     assert isinstance(points, list)
     metadata = _point_metadata(manifest)
@@ -389,10 +393,11 @@ def _plots(
             )
             if Path(raw_href).parts[0] != expected_root:
                 raise ValueError("waveform artifact does not match its experiment point")
-            if raw_path not in raw_cache:
-                raw_cache[raw_path] = raw_parser.parse_raw(raw_path)
+            if current_raw is None or current_raw[0] != raw_path:
+                current_raw = None  # release the previous samples before parsing
+                current_raw = (raw_path, raw_parser.parse_raw(raw_path))
             trace = _trace(
-                raw_cache[raw_path], analysis, label, details, legend_label, raw_href
+                current_raw[1], analysis, label, details, legend_label, raw_href
             )
             signature = (
                 trace["axis_label"],
@@ -408,6 +413,7 @@ def _plots(
             if group["signature"] != signature:
                 raise ValueError(f"waveform analysis {name} has inconsistent plot metadata")
             group["traces"].append(trace)
+    current_raw = None
     for group in groups.values():
         traces = group["traces"]
         assert isinstance(traces, list)

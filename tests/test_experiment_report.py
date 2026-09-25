@@ -279,12 +279,17 @@ class ExperimentReportTests(TemporaryRunsTestCase):
 
     def test_builds_self_contained_report_with_visible_downsampled_overlays(self) -> None:
         with (
-            patch.object(experiment_report.raw_parser, "parse_raw", return_value=self._raw_data()),
+            patch.object(
+                experiment_report.raw_parser, "parse_raw", return_value=self._raw_data()
+            ) as parse,
             patch.object(experiment_report, "DISPLAY_POINT_LIMIT", 3),
         ):
             result = experiment_report.build_experiment_report(
                 self.runs, self.experiment_id
             )
+
+        # Both native steps share the batch RAW, so it is parsed once.
+        parse.assert_called_once()
 
         report_path = Path(result["report_html"])
         document = report_path.read_text(encoding="utf-8")
