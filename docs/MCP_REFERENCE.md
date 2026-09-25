@@ -888,7 +888,12 @@ objects, for example:
 ```
 
 Each result includes units, pass/fail state, the threshold, metric parameters,
-and point or region evidence. A stepped raw file requires `step_index`; the
+and point or region evidence. Transition levels the requirement omits are
+inferred from the window's first and last samples and reported in evidence
+(`initial_value`, `final_value`), not in parameters, so one requirement keeps
+one check identity across Monte Carlo points. `settling_time` is measured from
+the start of the analysis window, not from the stimulus edge: set
+`window_start` at the edge to measure settling after it. A stepped raw file requires `step_index`; the
 tool splits on actual axis resets rather than assuming equal transient lengths.
 
 Phase 1B adds closed, per-requirement `window_start`/`window_end` selection and
@@ -939,8 +944,11 @@ integrated against the complex exponential in closed form, then divided by the
 time-weighted linear-interpolation attenuation, so a uniform grid reproduces
 the exact DFT result and long adaptive steps do not leak phasor rotation into
 spurious harmonics. `spectral_peak` uses a Hann window and a
-bounded frequency grid; `thd` uses the largest whole-cycle subwindow and an
-explicit fundamental. Both reject requested content above the conservative
+bounded frequency grid spaced by `frequency_resolution` (default 1/duration);
+it reports the largest grid bin, so a tone between bins is reported at the
+nearest bin frequency and up to ~15% (1.4 dB) low. Use a finer
+`frequency_resolution` when the peak amplitude or frequency must be accurate.
+`thd` uses the largest whole-cycle subwindow and an explicit fundamental. Both reject requested content above the conservative
 Nyquist limit implied by the largest recorded time gap. Resource limits cap a
 spectral search at 4,096 bins and 5,000,000 point-frequency operations, and THD
 at the 100th harmonic.

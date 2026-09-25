@@ -971,7 +971,11 @@ _PARAMETER_DEFINITIONS: dict[str, waveform_metrics.MetricParameter] = {
             "frequency_resolution",
             "number",
             unit="Hz",
-            description="Spectral bin width; derived from the capture when omitted.",
+            description=(
+                "Spectral bin spacing; 1/duration when omitted. A tone between "
+                "bins reads up to ~15% (1.4 dB) low with the Hann window, at "
+                "the nearest bin frequency; a finer spacing reduces that loss."
+            ),
         ),
         waveform_metrics.MetricParameter(
             "fundamental_frequency",

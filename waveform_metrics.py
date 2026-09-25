@@ -1033,7 +1033,12 @@ _PARAMETER_DEFINITIONS: dict[str, MetricParameter] = {
             "settling_tolerance",
             "number",
             default=0.02,
-            description="Half-width of the settling band as a fraction of the swing.",
+            description=(
+                "Half-width of the settling band as a fraction of the swing. "
+                "Settling time is measured from the start of the analysis "
+                "window, not from the stimulus edge; start the window at the "
+                "edge to measure settling after it."
+            ),
         ),
         MetricParameter(
             "threshold_value",
