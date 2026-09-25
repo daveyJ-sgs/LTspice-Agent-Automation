@@ -40,6 +40,12 @@ class SchematicCaptureTests(unittest.TestCase):
             "GetFileNameWithoutExtension($Source)",
             schematic_capture._WINDOWS_CAPTURE_SCRIPT,
         )
+        # File names may contain [ ] which -like treats as wildcards.
+        self.assertNotIn("-notlike", schematic_capture._WINDOWS_CAPTURE_SCRIPT)
+        self.assertIn(
+            "MainWindowTitle.IndexOf($sourceStem, [StringComparison]::OrdinalIgnoreCase)",
+            schematic_capture._WINDOWS_CAPTURE_SCRIPT,
+        )
         self.assertIn("GetDpiForWindow", schematic_capture._WINDOWS_CAPTURE_SCRIPT)
         self.assertIn("ShowWindow($process.MainWindowHandle, 3)", schematic_capture._WINDOWS_CAPTURE_SCRIPT)
         self.assertIn("UIAutomationClient", schematic_capture._WINDOWS_CAPTURE_SCRIPT)

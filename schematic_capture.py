@@ -236,7 +236,10 @@ while ((Get-Date) -lt $deadline) {
   Start-Sleep -Milliseconds 150
 }
 if ($process.MainWindowHandle -eq 0) { throw "LTspice did not open a schematic window" }
-if ($process.MainWindowTitle -notlike ("*" + [IO.Path]::GetFileNameWithoutExtension($Source) + "*")) {
+# Literal, case-insensitive substring test: -like would treat [ ] * ? in the
+# file name as wildcards and reject (or wrongly accept) the window.
+$sourceStem = [IO.Path]::GetFileNameWithoutExtension($Source)
+if ($process.MainWindowTitle.IndexOf($sourceStem, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
   throw "LTspice opened the wrong schematic window: $($process.MainWindowTitle)"
 }
 [NativeWindow]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
