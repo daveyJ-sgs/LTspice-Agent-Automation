@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import socket
 import sqlite3
 import threading
 import uuid
@@ -281,12 +283,25 @@ class SimulationHandler(BaseHTTPRequestHandler):
             _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, job)
 
 
+class _LoopbackHTTPServer(ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR lets a second socket bind a port that is
+    # already listening, so two bridges (or another program) could share
+    # 8765. POSIX SO_REUSEADDR only permits rebinding over TIME_WAIT.
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self) -> None:
+        exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+        if exclusive is not None:
+            self.socket.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+        super().server_bind()
+
+
 def create_server(
     host: str = "127.0.0.1", port: int = 8765, workers: int = 1
 ) -> ThreadingHTTPServer:
     if host != "127.0.0.1":
         raise ValueError("the REST bridge only supports 127.0.0.1 binding")
-    server = ThreadingHTTPServer((host, port), SimulationHandler)
+    server = _LoopbackHTTPServer((host, port), SimulationHandler)
     server.job_manager = JobManager(workers, JOB_DB)  # type: ignore[attr-defined]
     return server
 

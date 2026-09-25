@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import unittest
@@ -69,6 +70,19 @@ class ApiTests(TemporaryRunsTestCase):
             api_server._execute_simulation({"netlist": netlist}, "run-utf8")
         written = self.runs / "api-inputs" / "run-utf8-request.cir"
         self.assertEqual(written.read_bytes(), netlist.encode("utf-8"))
+
+    def test_second_server_cannot_share_a_listening_port(self) -> None:
+        # Windows SO_REUSEADDR would let the second bind succeed.
+        self.assertEqual(
+            api_server._LoopbackHTTPServer.allow_reuse_address, os.name != "nt"
+        )
+        first = api_server.create_server(port=0)
+        try:
+            with self.assertRaises(OSError):
+                api_server.create_server(port=first.server_address[1])
+        finally:
+            first.job_manager.shutdown()
+            first.server_close()
 
     def test_rejects_non_loopback_binding(self) -> None:
         for host in ("0.0.0.0", "::1", "localhost"):
