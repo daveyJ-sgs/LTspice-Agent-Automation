@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import tempfile
 import threading
@@ -34,6 +35,73 @@ class ArtifactTests(unittest.TestCase):
             winner = next(index for index, error in enumerate(errors) if error is None)
             self.assertEqual(path.read_bytes(), (b"first", b"second")[winner])
             self.assertEqual(list(Path(temporary).iterdir()), [path])
+
+    def test_write_once_publishes_when_hard_links_are_unsupported(self) -> None:
+        # exFAT, FAT32 and some network shares refuse os.link with a
+        # non-FileExistsError OSError.
+        refused = OSError(errno.EPERM, "Operation not permitted")
+        for refuses_overwrite in (False, True):
+            with self.subTest(rename_refuses_overwrite=refuses_overwrite), \
+                 tempfile.TemporaryDirectory() as temporary, \
+                 patch.object(artifacts.os, "link", side_effect=refused), \
+                 patch.object(artifacts, "_RENAME_REFUSES_OVERWRITE", refuses_overwrite):
+                path = Path(temporary) / "artifact.json"
+                artifacts.write_once(path, b"content")
+                artifacts.write_once(path, b"content")
+                with self.assertRaisesRegex(ValueError, "existing artifact differs"):
+                    artifacts.write_once(path, b"different")
+                self.assertEqual(path.read_bytes(), b"content")
+                self.assertEqual(list(Path(temporary).iterdir()), [path])
+
+    def test_concurrent_write_once_without_hard_links_keeps_one_winner(self) -> None:
+        barrier = threading.Barrier(2)
+        fsync = artifacts.os.fsync
+        synchronized = threading.local()
+
+        def synchronized_fsync(fd: int) -> None:
+            fsync(fd)
+            # Line both writers up after their temporary files, exactly as
+            # the hard-link regression does; later fsyncs run freely.
+            if not getattr(synchronized, "done", False):
+                synchronized.done = True
+                barrier.wait(timeout=5)
+
+        refused = OSError(errno.EPERM, "Operation not permitted")
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "artifact.json"
+            with patch.object(artifacts.os, "fsync", synchronized_fsync), \
+                 patch.object(artifacts.os, "link", side_effect=refused), \
+                 patch.object(artifacts, "_RENAME_REFUSES_OVERWRITE", False):
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    futures = [executor.submit(artifacts.write_once, path, content)
+                               for content in (b"first", b"second")]
+            errors = [future.exception() for future in futures]
+            self.assertEqual(sum(error is None for error in errors), 1)
+            self.assertEqual(sum(isinstance(error, ValueError) for error in errors), 1)
+            winner = next(index for index, error in enumerate(errors) if error is None)
+            self.assertEqual(path.read_bytes(), (b"first", b"second")[winner])
+            self.assertEqual(list(Path(temporary).iterdir()), [path])
+
+    def test_failed_linkless_write_does_not_leave_a_truncated_artifact(self) -> None:
+        refused = OSError(errno.EPERM, "Operation not permitted")
+        calls = 0
+        fsync = artifacts.os.fsync
+
+        def failing_second_fsync(fd: int) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError(errno.EIO, "I/O error")
+            fsync(fd)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "artifact.json"
+            with patch.object(artifacts.os, "link", side_effect=refused), \
+                 patch.object(artifacts, "_RENAME_REFUSES_OVERWRITE", False), \
+                 patch.object(artifacts.os, "fsync", failing_second_fsync), \
+                 self.assertRaises(OSError):
+                artifacts.write_once(path, b"content")
+            self.assertEqual(list(Path(temporary).iterdir()), [])
 
     @classmethod
     def setUpClass(cls) -> None:
