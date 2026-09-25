@@ -3512,8 +3512,10 @@ async function openProject(project) {
       frozenQualificationLaunch = null;
       byId("optimization-results").hidden = true;
       optimizationDisplayUnits = new WeakMap();
+      clearOptimizationJob();
       renderOptimizationEditors();
       await previewOptimization();
+      recoverOptimizationJob().catch(() => {});
       showView("optimization");
     } else {
       setCurrentStudyProject(project.slug, project.path);
