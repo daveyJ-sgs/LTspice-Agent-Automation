@@ -433,7 +433,9 @@ def preview_study_recipe(
             _error("execution", "invalid_execution", "execution must be an object")
         )
     else:
-        unknown_execution = sorted(set(execution) - {"max_concurrency", "reuse_cache"})
+        unknown_execution = sorted(
+            set(execution) - {"max_concurrency", "reuse_cache", "timeout_seconds"}
+        )
         for key in unknown_execution:
             errors.append(
                 _error(
@@ -446,13 +448,27 @@ def preview_study_recipe(
         if (
             not isinstance(concurrency, int)
             or isinstance(concurrency, bool)
-            or not 1 <= concurrency <= 8
+            or not 1 <= concurrency <= experiment_engine.MAX_EXPERIMENT_WORKERS
         ):
             errors.append(
                 _error(
                     "execution.max_concurrency",
                     "invalid_concurrency",
                     "max_concurrency must be an integer from 1 through 8",
+                )
+            )
+        timeout_seconds = execution.get("timeout_seconds", 120)
+        if (
+            not isinstance(timeout_seconds, int)
+            or isinstance(timeout_seconds, bool)
+            or not 1 <= timeout_seconds <= experiment_engine.MAX_TIMEOUT_SECONDS
+        ):
+            errors.append(
+                _error(
+                    "execution.timeout_seconds",
+                    "invalid_timeout",
+                    "timeout_seconds must be an integer from 1 through "
+                    f"{experiment_engine.MAX_TIMEOUT_SECONDS}",
                 )
             )
         if not isinstance(execution.get("reuse_cache", False), bool):
@@ -576,6 +592,7 @@ def preview_study_recipe(
             "total_run_count": point_count * experiment_count,
             "max_concurrency": execution.get("max_concurrency", 2),
             "reuse_cache": execution.get("reuse_cache", False),
+            "timeout_seconds": execution.get("timeout_seconds", 120),
         },
         "experiments": experiment_previews,
     }

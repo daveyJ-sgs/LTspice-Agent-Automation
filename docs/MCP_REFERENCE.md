@@ -455,8 +455,11 @@ sample.
 The Phase 2B lifecycle keeps definition and execution separate. First call
 `define_experiment` with the same definition accepted by `run_experiment`, plus
 an optional `execution_mode` of `"independent"` or `"native"`. Independent mode
-accepts `max_concurrency` from 1 through 4; native mode always uses one stepped
-LTspice process. Definition validates and persists the experiment but does not
+accepts `max_concurrency` from 1 through 8, the same bound study recipes use;
+native mode always uses one stepped LTspice process. Cancelling stops LTspice
+processes that are already running; their points are recorded as cancelled and
+run again on resume. Shutting the server down also stops running simulations,
+and recovery re-runs those points. Definition validates and persists the experiment but does not
 launch LTspice. Then call
 `start_experiment` with the returned `experiment_id`, and poll
 `get_experiment` for `finished_points`, `pending_points`, `running_points`, and

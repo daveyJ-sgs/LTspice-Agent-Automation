@@ -591,7 +591,7 @@ def create_study_router(
                         experiment["waveform_analyses"],
                         experiment["filename"],
                         False,
-                        120,
+                        execution_definition.get("timeout_seconds", 120),
                         execution_definition.get("max_concurrency", 2),
                         execution_definition.get("reuse_cache", False),
                     )
