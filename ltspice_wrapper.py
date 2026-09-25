@@ -940,9 +940,8 @@ def parse_measurements(
     `name: v(out)=1.23 at 0.001`, where the result is the found value. The
     `.meas` statements of `netlist_path` (by default the run netlist beside
     the log, which run_netlist stages with the same stem) decide which is
-    which; without them the case of the AT keyword decides, as LTspice prints
-    it upper-case only for WHEN. Simulator statistics such as `tnom = 27` are
-    not measurements.
+    which; without them the value before AT is kept, as before. Simulator
+    statistics such as `tnom = 27` are not measurements.
     """
     text = _decode_log(log_path)
     kinds = _measurement_kinds(
@@ -964,7 +963,7 @@ def parse_measurements(
         at = _MEASUREMENT_AT.search(rest) if separator.startswith(":") else None
         if at is not None:
             kind = kinds.get(name.casefold())
-            if kind == "when" or (kind is None and at.group(1) == "AT"):
+            if kind == "when":
                 number = at.group(2)
         value = float(number)
         if not math.isfinite(value):
@@ -1025,9 +1024,7 @@ def parse_stepped_measurement_rows(
             if columns and columns[0].casefold() == "step":
                 kind = kinds.get(current_name.casefold())
                 for index, column in enumerate(columns):
-                    if column.casefold() == "at" and (
-                        kind == "when" or (kind is None and column == "AT")
-                    ):
+                    if column.casefold() == "at" and kind == "when":
                         at_column = index
                         break
                 continue

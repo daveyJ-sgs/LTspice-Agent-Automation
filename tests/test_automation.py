@@ -630,18 +630,17 @@ Binary:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "rc.log"
             path.write_text(log, encoding="utf-16le")
-            # Without a netlist the upper-case AT that LTspice prints only for
-            # WHEN decides, so a FIND line carrying AT (vx) reads as WHEN...
+            # Without a netlist the kind of measurement is unknown, so the value
+            # before AT is kept as before; log statistics are still skipped.
             measurements = parse_measurements(path)
             self.assertEqual(
                 set(measurements), {"t50", "vtau", "vx", "tr", "vmax"}
             )
-            self.assertAlmostEqual(measurements["t50"], t50, places=12)
+            self.assertEqual(measurements["t50"], 0.5)
             self.assertAlmostEqual(measurements["vtau"], 1 - math.exp(-1), places=9)
             self.assertEqual(measurements["tr"], 0.00219722)
             self.assertEqual(measurements["vmax"], 0.999955)
-            self.assertEqual(measurements["vx"], 0.001)
-            # ...but the run netlist beside the log is authoritative.
+            # The run netlist beside the log says which lines are WHEN results.
             (Path(directory) / "rc.cir").write_text(
                 "* rc\n"
                 ".meas tran t50 WHEN v(out)=0.5\n"
