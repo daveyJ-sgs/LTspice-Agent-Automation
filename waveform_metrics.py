@@ -724,6 +724,28 @@ def _transition_state(
     return initial, final, final - initial
 
 
+def _transition_levels(
+    request: _WaveformMetricRequest, initial: float, final: float
+) -> tuple[dict[str, float | int], dict[str, float | int | str]]:
+    """Split the transition levels into evidence and requirement parameters.
+
+    The levels actually used are always evidence. Only levels the requirement
+    supplied are parameters: parameters feed the check identity used to line
+    up one requirement across Monte Carlo points, and a level inferred from
+    each point's own waveform differs from point to point.
+    """
+    evidence: dict[str, float | int] = {
+        "initial_value": initial,
+        "final_value": final,
+    }
+    parameters: dict[str, float | int | str] = {}
+    if request.initial_value is not None:
+        parameters["initial_value"] = initial
+    if request.final_value is not None:
+        parameters["final_value"] = final
+    return evidence, parameters
+
+
 def _measure_monotonicity(request: _WaveformMetricRequest) -> MetricMeasurement:
     initial, final, amplitude = _transition_state(request)
     direction = request.direction
@@ -749,11 +771,12 @@ def _measure_monotonicity(request: _WaveformMetricRequest) -> MetricMeasurement:
         "start_axis": request.axis[segment],
         "end_axis": request.axis[segment + 1],
     }
-    parameters: dict[str, float | int | str] = {
-        "initial_value": initial,
-        "final_value": final,
-        "direction": direction,
-    }
+    levels, parameters = _transition_levels(request, initial, final)
+    evidence.update(levels)
+    if request.direction is None:
+        evidence["direction_sign"] = 1 if rising else -1
+    else:
+        parameters["direction"] = direction
     return _measurement(
         request,
         reversals[segment],
@@ -804,12 +827,10 @@ def _measure_transition_time(
         "high_index_before": request.origins[high_before][0],
         "high_index_after": request.origins[high_after][1],
     }
-    parameters = {
-        "initial_value": initial,
-        "final_value": final,
-        "low_fraction": request.low_fraction,
-        "high_fraction": request.high_fraction,
-    }
+    levels, parameters = _transition_levels(request, initial, final)
+    evidence.update(levels)
+    parameters["low_fraction"] = request.low_fraction
+    parameters["high_fraction"] = request.high_fraction
     return _measurement(
         request,
         high_axis - low_axis,
@@ -829,7 +850,8 @@ def _measure_overshoot(request: _WaveformMetricRequest) -> MetricMeasurement:
         excursion = max(0.0, final - request.values[peak_index])
     evidence = _point(peak_index, request.axis, request.origins)
     evidence["waveform_value"] = request.values[peak_index]
-    parameters = {"initial_value": initial, "final_value": final}
+    levels, parameters = _transition_levels(request, initial, final)
+    evidence.update(levels)
     return _measurement(
         request,
         100.0 * excursion / abs(amplitude),
@@ -849,7 +871,8 @@ def _measure_undershoot(request: _WaveformMetricRequest) -> MetricMeasurement:
         excursion = max(0.0, request.values[peak_index] - initial)
     evidence = _point(peak_index, request.axis, request.origins)
     evidence["waveform_value"] = request.values[peak_index]
-    parameters = {"initial_value": initial, "final_value": final}
+    levels, parameters = _transition_levels(request, initial, final)
+    evidence.update(levels)
     return _measurement(
         request,
         100.0 * excursion / abs(amplitude),
@@ -881,11 +904,9 @@ def _measure_settling_time(
         raise ValueError("waveform does not settle within the supplied data")
     evidence = _point(settling_index, request.axis, request.origins)
     evidence.update({"band_minimum": lower, "band_maximum": upper})
-    parameters = {
-        "initial_value": initial,
-        "final_value": final,
-        "settling_tolerance": request.settling_tolerance,
-    }
+    levels, parameters = _transition_levels(request, initial, final)
+    evidence.update(levels)
+    parameters["settling_tolerance"] = request.settling_tolerance
     return _measurement(
         request,
         request.axis[settling_index] - request.axis[0],
@@ -983,12 +1004,18 @@ _PARAMETER_DEFINITIONS: dict[str, MetricParameter] = {
         MetricParameter(
             "initial_value",
             "number",
-            description="Starting level; inferred from the waveform when omitted.",
+            description=(
+                "Starting level; inferred from the first windowed sample when "
+                "omitted and then reported in evidence, not parameters."
+            ),
         ),
         MetricParameter(
             "final_value",
             "number",
-            description="Settled level; inferred from the waveform when omitted.",
+            description=(
+                "Settled level; inferred from the last windowed sample when "
+                "omitted and then reported in evidence, not parameters."
+            ),
         ),
         MetricParameter(
             "low_fraction",

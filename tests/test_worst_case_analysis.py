@@ -3,11 +3,13 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import waveform_metrics
 import worst_case_analysis
 
 
@@ -207,6 +209,89 @@ class WorstCaseAnalysisTests(unittest.TestCase):
                             "points": [first, point],
                         }
                     )
+
+    def test_inferred_transition_levels_keep_one_check_identity(self) -> None:
+        # Monte Carlo points whose step amplitudes differ infer different
+        # initial/final levels from their own waveforms; the requirement is
+        # still the same check, so the points must rank together.
+        tau = 1e-4
+        axis = [index * 1e-6 for index in range(2001)]
+
+        def point(index: int, amplitude: float) -> dict[str, object]:
+            values = [amplitude * (1 - math.exp(-time / tau)) for time in axis]
+            results = []
+            for metric, target, extra in (
+                ("overshoot", 5.0, {}),
+                ("rise_time", 3e-4, {}),
+                ("settling_time", 1e-3, {"settling_tolerance": 0.02}),
+                ("monotonicity", 1e-9, {}),
+            ):
+                measurement = waveform_metrics.measure_metric(
+                    axis, values, metric, **extra
+                )
+                results.append(
+                    waveform_metrics.evaluate_requirement(measurement, "<=", target)
+                )
+            return {
+                "index": index,
+                "parameters": {"R": str(index + 1)},
+                "run_dir": f"point-{index:04d}",
+                "simulation_status": "completed",
+                "measurements": {},
+                "analyses": [
+                    {
+                        "name": "step",
+                        "status": "completed",
+                        "analysis": {"results": results},
+                    }
+                ],
+            }
+
+        points = [point(0, 0.95), point(1, 0.97)]
+        final_values = [
+            item["analyses"][0]["analysis"]["results"][0]["evidence"]["final_value"]
+            for item in points
+        ]
+        self.assertNotEqual(final_values[0], final_values[1])
+        self.assertAlmostEqual(final_values[1], 0.97 * (1 - math.exp(-20)))
+
+        analysis = worst_case_analysis.build_worst_case_analysis(
+            {
+                "experiment_id": "mcp-experiment-20260825-090000-000000-a1b2c3d4",
+                "point_count": 2,
+                "points": points,
+            }
+        )
+
+        self.assertEqual(analysis["requirement_count"], 4)
+        by_metric = {item["metric"]: item for item in analysis["requirements"]}
+        self.assertEqual(by_metric["overshoot"]["parameters"], {})
+        self.assertEqual(
+            by_metric["rise_time"]["parameters"],
+            {"low_fraction": 0.1, "high_fraction": 0.9},
+        )
+        self.assertEqual(by_metric["monotonicity"]["parameters"], {})
+        for record in by_metric["overshoot"]["worst_cases"]:
+            self.assertEqual(record["value"], 0.0)
+        for record in by_metric["rise_time"]["worst_cases"]:
+            # 10-90% of a first-order step is tau*ln(9), whatever its amplitude.
+            self.assertAlmostEqual(record["value"], tau * math.log(9), delta=1e-9)
+        for record in by_metric["settling_time"]["worst_cases"]:
+            # Within 2% of the (essentially settled) final value at tau*ln(50).
+            self.assertAlmostEqual(record["value"], tau * math.log(50), delta=1.5e-6)
+
+    def test_explicit_transition_levels_remain_requirement_parameters(self) -> None:
+        measurement = waveform_metrics.measure_metric(
+            [0, 1, 2], [0, 1, 1], "overshoot", initial_value=0, final_value=1
+        )
+        self.assertEqual(
+            measurement.parameters, {"initial_value": 0.0, "final_value": 1.0}
+        )
+        partial = waveform_metrics.measure_metric(
+            [0, 1, 2], [0, 1, 1], "overshoot", final_value=1
+        )
+        self.assertEqual(partial.parameters, {"final_value": 1.0})
+        self.assertEqual(partial.evidence["initial_value"], 0.0)
 
     def test_unfinished_points_are_counted_but_not_ranked(self) -> None:
         analysis = worst_case_analysis.build_worst_case_analysis(
