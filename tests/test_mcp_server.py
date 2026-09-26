@@ -3225,6 +3225,7 @@ class MCPServerTests(TemporaryRunsTestCase):
             "error_points": 0,
             "passed_points": 0,
             "failed_points": 0,
+            "cancelled_points": 0,
             "all_passed": None,
             "error": None,
             "execution_mode": "independent",

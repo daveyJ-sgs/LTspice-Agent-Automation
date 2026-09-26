@@ -154,7 +154,7 @@ class ExperimentJobSnapshot(TypedDict):
     error_points: int
     passed_points: int
     failed_points: int
-    cancelled_points: NotRequired[int]
+    cancelled_points: int
     all_passed: bool | None
     error: str | None
     execution_mode: str
