@@ -523,10 +523,11 @@
           </div>
           <div class="table-wrap">
             <table class="editor-table optimization-table">
-              <thead><tr><th>Name</th><th>Domain type</th><th>Values or range</th><th>Unit</th></tr></thead>
+              <thead><tr><th>Name</th><th>Domain type</th><th>Values or range</th><th>Unit</th><th><span class="visually-hidden">Remove</span></th></tr></thead>
               <tbody id="optimization-domains"></tbody>
             </table>
           </div>
+          <div id="optimization-domain-add" class="button-row"></div>
           <div class="editor-note"><p class="step">FIXED CIRCUIT CONDITIONS</p><div id="optimization-fixed"></div></div>
 
           <div class="subsection-heading"><div><p class="step">02 / OPERATING CORNERS</p><h3>Finite corner axes</h3></div></div>
@@ -585,7 +586,7 @@
             <code id="optimization-frozen-artifact" class="artifact-path">—</code>
             <label class="execution-check">
               <input id="optimization-acknowledgement" type="checkbox">
-              <span>I understand this will launch the paired AC and transient LTspice studies locally and write durable evidence.</span>
+              <span>I understand this will launch every paired LTspice study locally and write durable evidence.</span>
             </label>
             <button id="optimization-start" class="danger-button" type="button" data-needs-ltspice="true" disabled>Start local optimization</button>
             <p class="field-problem ltspice-gate-note" hidden></p>

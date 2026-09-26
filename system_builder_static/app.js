@@ -2838,7 +2838,10 @@ function openComparePanel() {
     select.replaceChildren(...jobs.map((job) => {
       const option = document.createElement("option");
       option.value = job.experiment_id;
-      option.textContent = `${job.experiment_id} · ${job.passed_points}/${job.point_count} pass`;
+      // The id alone is unreadable in a long list; the full id stays in the
+      // tooltip for telling apart two runs of the same study.
+      option.textContent = `${jobDisplayName(job)} · ${relativeTime(job.recorded_at)} · ${job.passed_points}/${job.point_count} pass`;
+      option.title = job.experiment_id;
       return option;
     }));
     select.value = jobs[Math.min(defaultIndex, jobs.length - 1)].experiment_id;

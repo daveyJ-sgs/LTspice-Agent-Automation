@@ -477,6 +477,95 @@ class SystemBuilderTests(unittest.TestCase):
         self.assertEqual(result["plan"]["point_count"], 32)
         self.assertEqual(result["execution"]["total_run_count"], 64)
 
+    def _rc_optimization(self, root: Path) -> dict[str, object]:
+        shutil.copytree(
+            PROJECT_ROOT / "examples/rc_lowpass_starter", root / "rc-lowpass-starter"
+        )
+        selector = {
+            "experiment": "ac",
+            "analysis": "lowpass_response",
+            "metric": "ac_gain_db",
+            "metric_parameters": {"frequency_value": 5000},
+        }
+        return {
+            "schema_version": 1,
+            "kind": "optimization",
+            "execution": {"study_recipe_path": "rc-lowpass-starter/rc_lowpass.ltstudy.json"},
+            "qualification": {"fixed_parameters": {}, "variables": [], "correlations": [], "corner_axes": []},
+            "title": "RC optimization",
+            "description": "Rejection at 5 kHz.",
+            "parameters": [
+                {"name": "R1_VAL", "kind": "preferred_values", "series": "E12", "values": [820, 1000], "unit": "ohm"},
+                {"name": "C1_VAL", "kind": "preferred_values", "series": "E12", "values": [1.2e-7, 1.5e-7], "unit": "F"},
+            ],
+            "fixed_parameters": {},
+            "corner_axes": [],
+            "objectives": [
+                {**selector, "name": "rejection", "goal": "minimize", "weight": 1,
+                 "absolute_tolerance": 0.05, "relative_tolerance": 0},
+            ],
+            "constraints": [
+                {"name": "min_cutoff", "experiment": "ac", "analysis": "lowpass_response",
+                 "metric": "cutoff_frequency", "operator": ">=", "target": 750,
+                 "metric_parameters": {"reference_frequency": 10}},
+            ],
+        }
+
+    def test_optimization_preview_refuses_an_objective_nothing_measures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            recipe = self._rc_optimization(root)
+            client = TestClient(system_builder.create_app(root, testing=True), base_url="http://testserver")
+            client.get("/")
+            response = client.post("/api/optimization/preview", json=recipe, headers=self._headers())
+
+            self.assertFalse(response.json()["valid"])
+            message = response.json()["errors"][0]["message"]
+            self.assertIn("rejection", message)
+            self.assertIn("frequency_value=5000", message)
+
+            # A constraint at the same frequency is measured for the run, and
+            # that measurement serves the objective too.
+            recipe["constraints"].append(
+                {"name": "stopband", "experiment": "ac", "analysis": "lowpass_response",
+                 "metric": "ac_gain_db", "operator": "<=", "target": 0,
+                 "metric_parameters": {"frequency_value": 5000}}
+            )
+            response = client.post("/api/optimization/preview", json=recipe, headers=self._headers())
+
+            self.assertTrue(response.json()["valid"], response.json()["errors"])
+
+    def test_unmeasured_constraints_join_the_optimization_copy_of_the_study(self) -> None:
+        experiments = {
+            "ac": {
+                "waveform_analyses": [
+                    {"name": "response", "requirements": [
+                        {"metric": "ac_gain_db", "operator": ">=", "target": -1, "frequency_value": 10},
+                    ]},
+                ],
+            }
+        }
+        original = json.dumps(experiments, sort_keys=True)
+        study_analyses = experiments["ac"]["waveform_analyses"]
+        recipe = {"constraints": [
+            {"experiment": "ac", "analysis": "response", "metric": "ac_gain_db",
+             "operator": ">=", "target": -1, "metric_parameters": {"frequency_value": 10}},
+            {"experiment": "ac", "analysis": "response", "metric": "ac_gain_db",
+             "operator": "<=", "target": -20, "metric_parameters": {"frequency_value": 1e7}},
+        ]}
+
+        system_builder._measure_constraints(recipe, experiments)
+
+        requirements = experiments["ac"]["waveform_analyses"][0]["requirements"]
+        self.assertEqual(len(requirements), 2)
+        self.assertEqual(
+            requirements[1],
+            {"metric": "ac_gain_db", "operator": "<=", "target": -20, "frequency_value": 1e7},
+        )
+        # The study's own analysis objects are left as they were.
+        self.assertEqual(len(study_analyses[0]["requirements"]), 1)
+        self.assertNotEqual(original, json.dumps(experiments, sort_keys=True))
+
     def test_optimization_preview_is_guarded_and_rejects_invalid_domains(self) -> None:
         self._open()
         recipe = self.client.get(

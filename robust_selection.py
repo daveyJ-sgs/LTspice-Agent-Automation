@@ -87,6 +87,25 @@ def _decimal(value: object, field: str) -> Decimal:
     return number
 
 
+REQUIRED_EXPERIMENTS = ("ac", "transient")
+
+
+def require_supported_experiments(result: dict[str, object]) -> None:
+    """Refuse a source study whose paired analyses this engine cannot re-run.
+
+    Tolerance evaluation re-runs exactly an AC and a transient study per
+    point. Saying so before any plan is written beats failing after one is.
+    """
+    experiments = result.get("experiments")
+    names = sorted(experiments) if isinstance(experiments, dict) else []
+    if set(names) != set(REQUIRED_EXPERIMENTS):
+        raise ValueError(
+            "tolerance qualification and robust selection currently need a paired "
+            "AC and transient study named 'ac' and 'transient'; this optimization "
+            f"ran {', '.join(repr(name) for name in names) or 'no studies'}"
+        )
+
+
 def _source_finalist(
     runs_dir: Path, finalist: dict[str, object], tie_break_rank: int
 ) -> dict[str, object]:
@@ -102,6 +121,7 @@ def _source_finalist(
     result, artifact = optimization_engine._load_verified_optimization_study(
         runs_dir, study_id
     )
+    require_supported_experiments(result)
     candidates = result.get("candidates")
     if not isinstance(candidates, list) or not 0 <= candidate_index < len(candidates):
         raise ValueError(f"finalist {label} candidate does not exist")

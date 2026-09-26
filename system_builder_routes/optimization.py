@@ -50,7 +50,22 @@ def create_optimization_router(
         )
         if error is not None:
             return error
-        return JSONResponse(optimization_recipe.preview_optimization_recipe(recipe))
+        preview = optimization_recipe.preview_optimization_recipe(recipe)
+        if preview.get("valid"):
+            # The paired study is what measures every objective; check it now
+            # rather than after publication.
+            try:
+                experiments, _, _ = optimization_experiments(recipe)  # type: ignore[misc]
+                validate_optimization_experiments(recipe, experiments)
+            except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
+                preview = {
+                    **preview,
+                    "valid": False,
+                    "errors": [
+                        {"path": "optimization", "code": "invalid_plan", "message": str(exc)}
+                    ],
+                }
+        return JSONResponse(preview)
 
     @router.post("/api/optimization/freeze")
     async def freeze_optimization(request: Request) -> Response:

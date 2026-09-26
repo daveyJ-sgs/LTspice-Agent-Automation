@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import hmac
 import json
+import math
 import re
 import secrets
 import socket
@@ -68,6 +69,80 @@ def _default_manager_factory(runs_dir: Path) -> object:
 
 def _json_error(status: int, code: str, message: str) -> JSONResponse:
     return json_error(status, code, message)
+
+
+def _requirement_measures(
+    requirement: dict[str, object], metric: object, wanted: dict[str, object]
+) -> bool:
+    """Whether a study requirement reports ``metric`` at ``wanted`` arguments.
+
+    An argument the requirement leaves out takes the engine default, so only
+    an explicit, different value rules it out.
+    """
+    if requirement.get("metric") != metric:
+        return False
+    for key, value in wanted.items():
+        if key not in requirement:
+            continue
+        actual = requirement[key]
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            try:
+                if not math.isclose(float(actual), float(value), rel_tol=1e-12):  # type: ignore[arg-type]
+                    return False
+            except (TypeError, ValueError):
+                return False
+        elif actual != value:
+            return False
+    return True
+
+
+def _measure_constraints(
+    recipe: object, experiments: dict[str, dict[str, object]]
+) -> None:
+    """Add each constraint the paired study does not measure as a requirement.
+
+    Optimization reads only values the study's requirements report. A
+    constraint already carries the operator and target a requirement needs, so
+    the optimization's own copy of the study measures it too; the study recipe
+    on disk is unchanged.
+    """
+    if not isinstance(recipe, dict):
+        return
+    for constraint in recipe.get("constraints", []) or []:
+        if not isinstance(constraint, dict):
+            continue
+        experiment = experiments.get(str(constraint.get("experiment")))
+        if experiment is None or not isinstance(experiment.get("waveform_analyses"), list):
+            continue
+        wanted = constraint.get("metric_parameters") or {}
+        if not isinstance(wanted, dict):
+            continue
+        analyses = [
+            dict(analysis) if isinstance(analysis, dict) else analysis
+            for analysis in experiment["waveform_analyses"]  # type: ignore[union-attr]
+        ]
+        for analysis in analyses:
+            if not isinstance(analysis, dict) or analysis.get("name") != constraint.get("analysis"):
+                continue
+            requirements = [
+                requirement
+                for requirement in analysis.get("requirements", [])
+                if isinstance(requirement, dict)
+            ]
+            if not any(
+                _requirement_measures(requirement, constraint.get("metric"), wanted)
+                for requirement in requirements
+            ):
+                analysis["requirements"] = [
+                    *requirements,
+                    {
+                        "metric": constraint.get("metric"),
+                        "operator": constraint.get("operator"),
+                        "target": constraint.get("target"),
+                        **wanted,
+                    },
+                ]
+        experiment["waveform_analyses"] = analyses
 
 
 def create_app(
@@ -405,6 +480,7 @@ def create_app(
             }
             for definition in definitions
         }
+        _measure_constraints(recipe, experiments)
         artifact = json.dumps(
             experiments,
             sort_keys=True,
@@ -436,6 +512,30 @@ def create_app(
                 raise ValueError(
                     f"analysis {experiment_name}.{analysis_name} is not defined by "
                     "the paired circuit study"
+                )
+            # Objectives read the values the study's requirements (and the
+            # constraints added to them) measure; nothing else is computed. An
+            # objective nothing measures would run every candidate and then
+            # mark all of them invalid, so refuse it before LTspice starts.
+            metric = selector.get("metric")
+            wanted = selector.get("metric_parameters") or {}
+            if not isinstance(wanted, dict):
+                raise ValueError("optimization metric_parameters must be an object")
+            if not any(
+                _requirement_measures(requirement, metric, wanted)
+                for analysis in analyses or []
+                if isinstance(analysis, dict) and analysis.get("name") == analysis_name
+                for requirement in analysis.get("requirements", [])
+                if isinstance(requirement, dict)
+            ):
+                arguments = ", ".join(f"{key}={value}" for key, value in wanted.items())
+                name = selector.get("name") or metric
+                raise ValueError(
+                    f"{name}: the {experiment_name} study never measures "
+                    f"{analysis_name}.{metric}"
+                    + (f" at {arguments}" if arguments else "")
+                    + ". Add a constraint on it, or a requirement for it in the "
+                    "study, so every candidate reports that value."
                 )
 
     def optimization_job_payload(snapshot: dict[str, object]) -> dict[str, object]:

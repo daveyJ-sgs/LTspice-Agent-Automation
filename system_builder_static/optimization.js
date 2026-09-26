@@ -127,6 +127,50 @@ function setParameterKind(parameter, kind) {
   if (kind === "preferred_series") Object.assign(parameter, {series: "E12", minimum: 1, maximum: 10});
 }
 
+// Every list in the recipe -- domains, corner axes, objectives, constraints --
+// can grow and shrink here, so a recipe can be built in the editor rather
+// than only tuned.
+function removeListItem(list, index, label, render) {
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "remove-button";
+  remove.textContent = "\u00d7";
+  remove.title = `Remove ${label}`;
+  remove.setAttribute("aria-label", `Remove ${label}`);
+  remove.addEventListener("click", () => {
+    list.splice(index, 1);
+    render();
+    scheduleOptimizationPreview();
+  });
+  return remove;
+}
+
+function addListButton(text, key, make, render) {
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "compact-button";
+  add.textContent = text;
+  add.addEventListener("click", () => {
+    const list = optimizationRecipe[key] || (optimizationRecipe[key] = []);
+    list.push(make(list.length + 1));
+    render();
+    scheduleOptimizationPreview();
+  });
+  return add;
+}
+
+// A new objective or constraint starts on the study and analysis the recipe
+// already measures, which is nearly always where the next one belongs.
+function selectorDefaults() {
+  const known = [...(optimizationRecipe.objectives || []), ...(optimizationRecipe.constraints || [])][0];
+  return {
+    experiment: known?.experiment || "ac",
+    analysis: known?.analysis || "",
+    metric: known?.metric || "ac_gain_db",
+    metric_parameters: {...(known?.metric_parameters || {})},
+  };
+}
+
 function renderOptimizationDomains() {
   const parameters = optimizationRecipe.parameters || [];
   optId("optimization-domain-count").textContent = `${parameters.length} domains`;
@@ -198,7 +242,8 @@ function renderOptimizationDomains() {
         scheduleOptimizationPreview();
       });
     }
-    for (const control of [name, kind, domain, unit]) {
+    const remove = removeListItem(parameters, index, `domain ${parameter.name}`, renderOptimizationDomains);
+    for (const control of [name, kind, domain, unit, remove]) {
       const cell = document.createElement("td");
       cell.append(control);
       row.append(cell);
@@ -206,6 +251,9 @@ function renderOptimizationDomains() {
     return row;
   });
   optId("optimization-domains").replaceChildren(...rows);
+  optId("optimization-domain-add").replaceChildren(addListButton("+ Domain", "parameters", (number) => ({
+    name: `PARAM${number}`, kind: "continuous", minimum: 1, maximum: 2, count: 2, unit: "",
+  }), renderOptimizationDomains));
   optId("optimization-fixed").replaceChildren(
     fixedParameterEditor(optimizationRecipe, renderOptimizationDomains, "No fixed conditions."),
   );
@@ -309,10 +357,15 @@ function renderOptimizationCorners() {
       row.append(label, value, marker);
       values.append(row);
     }
-    card.append(fields, values);
+    const heading = document.createElement("div");
+    heading.className = "editor-card-actions";
+    heading.append(removeListItem(optimizationRecipe.corner_axes, axisIndex, `corner axis ${axis.name}`, renderOptimizationCorners));
+    card.append(heading, fields, values);
     return card;
   });
-  optId("optimization-corners").replaceChildren(...cards);
+  optId("optimization-corners").replaceChildren(...cards, addListButton("+ Corner axis", "corner_axes", (number) => ({
+    name: `corner_${number}`, parameter: "", unit: "", values: [{name: "low", value: 1}, {name: "high", value: 2}],
+  }), renderOptimizationCorners));
 }
 
 function metricParametersText(selector) {
@@ -491,9 +544,10 @@ function toleranceProblem(item) {
 function renderOptimizationSelectors() {
   const objectives = optimizationRecipe.objectives || [];
   optId("optimization-objective-count").textContent = `${objectives.length} objectives`;
-  optId("optimization-objectives").replaceChildren(...objectives.map((item) => {
+  optId("optimization-objectives").replaceChildren(...objectives.map((item, index) => {
     const row = document.createElement("div");
     row.className = "optimization-row";
+    row.append(removeListItem(objectives, index, `objective ${item.name}`, renderOptimizationSelectors));
     row.append(
       selectorField(item, "name", "Name"),
       selectorField(item, "experiment", "Study", [["ac", "AC"], ["transient", "Transient"]]),
@@ -506,13 +560,17 @@ function renderOptimizationSelectors() {
       toleranceField(item, "relative_tolerance", "Rel. tolerance", renderOptimizationSelectors),
     );
     return row;
-  }));
+  }), addListButton("+ Objective", "objectives", (number) => ({
+    name: `objective_${number}`, ...selectorDefaults(), goal: "minimize", weight: 1,
+    absolute_tolerance: 0, relative_tolerance: 0,
+  }), renderOptimizationSelectors));
 
   const constraints = optimizationRecipe.constraints || [];
   optId("optimization-constraint-count").textContent = `${constraints.length} constraints`;
-  optId("optimization-constraints").replaceChildren(...constraints.map((item) => {
+  optId("optimization-constraints").replaceChildren(...constraints.map((item, index) => {
     const row = document.createElement("div");
     row.className = "optimization-row constraint";
+    row.append(removeListItem(constraints, index, `constraint ${item.name}`, renderOptimizationSelectors));
     row.append(
       selectorField(item, "name", "Name"),
       selectorField(item, "experiment", "Study", [["ac", "AC"], ["transient", "Transient"]]),
@@ -523,7 +581,9 @@ function renderOptimizationSelectors() {
       metricArgumentsField(item, renderOptimizationSelectors),
     );
     return row;
-  }));
+  }), addListButton("+ Constraint", "constraints", (number) => ({
+    name: `constraint_${number}`, ...selectorDefaults(), operator: "<=", target: 0,
+  }), renderOptimizationSelectors));
 }
 
 function renderOptimizationEditors() {

@@ -329,5 +329,18 @@ class RobustSelectionTests(TemporaryRunsTestCase):
         self.assertEqual(failed["numeric_mismatches"], 1)
 
 
+class SupportedExperimentTests(unittest.TestCase):
+    def test_a_study_without_the_paired_ac_and_transient_runs_is_refused(self) -> None:
+        robust_selection.require_supported_experiments(
+            {"experiments": {"ac": {}, "transient": {}}}
+        )
+        for experiments in ({"ac": {}}, {"ac": {}, "tran": {}}, {}):
+            with self.subTest(experiments=experiments), self.assertRaisesRegex(
+                ValueError, "paired AC and transient"
+            ):
+                robust_selection.require_supported_experiments({"experiments": experiments})
+
+
 if __name__ == "__main__":
     unittest.main()
+

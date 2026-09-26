@@ -21,6 +21,7 @@ def _candidate(
     result, _ = optimization_engine._load_verified_optimization_study(
         runs_dir, study_id
     )
+    robust_selection.require_supported_experiments(result)
     candidates = result.get("candidates")
     if not isinstance(candidates, list) or not 0 <= candidate_index < len(candidates):
         raise ValueError("selected optimization candidate does not exist")
