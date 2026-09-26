@@ -197,14 +197,18 @@ family says which one it could not fit rather than flattening it silently.
 
 A capture also opens on one readable family rather than on every node it
 holds: voltages where there are any, otherwise the most populous unit, capped
-at six traces. **All** and **None** override that.
+at six traces with output nodes first. **All** and **None** override that.
 
 AC captures are complex, so the viewer plots magnitude, and opens in dB on the
 log frequency axis -- a Bode plot. Linear magnitude stays one click away, and
 exact gain and phase remain the requirement engine's job. A trace that is
 identically zero is negative infinity dB, and the viewer says so instead of
-drawing nothing. A single-sample capture, such as an operating point, is drawn
-as markers rather than as a line through one point.
+drawing nothing.
+
+An operating-point capture (`.op`) has no sweep to plot against, so it is
+shown as a table of every node voltage and device current with SI prefixes --
+one column per step when the `.op` was stepped. A single-sample transient or
+AC capture is still plotted, as markers.
 
 **Simulate once** on the netlist editor runs one deck through LTspice without
 the define/preview/freeze/acknowledge sequence, for checking that a deck runs
