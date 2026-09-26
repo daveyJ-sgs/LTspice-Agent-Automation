@@ -1442,6 +1442,40 @@ System Builder launch, packaging, remote execution, and project slices:
    - Defer this larger dependency-injection change until Phase 5 or real user
      workflows demonstrate that one process must manage multiple workspace
      roots; it is not on the critical path to DAQ architecture
+7. **GUI-D6 — Follow-ups from the 2026-09-25 audit merge and GUI test pass —
+   open**
+   - **Qualification beyond AC + transient (needs a decision).** Tolerance
+     qualification and robust selection re-run exactly two studies named `ac`
+     and `transient` (`robust_selection.py` `required_experiments`,
+     `qualification_study.py`, `qualification_recipe.py`), so any other
+     optimization layout is refused at Preview since `e55571a`. Generalizing
+     means deriving the experiment set from the source optimization study and
+     changing the MCP-shared, content-addressed robust-selection plan; keep
+     the DAQ plan identity stable by sorting the derived names
+   - **Report trace cap.** `experiment_report.py` (~417-428) applies the
+     automatic per-plot trace cap when any one plot exceeds it, even if the
+     total stays under `MAX_TRACE_COUNT`/`MAX_DISPLAYED_POINTS`; cap only when
+     the uncapped totals exceed the budget
+   - **Recovered jobs for untitled recipes.** `adoptRecoveredJobs` (app.js)
+     matches `study_title` against `studyTitle()`, which falls back to the
+     recipe name, but the server records only `report_context.title`; a
+     running job from a recipe without a title is not re-adopted in Study
+     setup after a reload
+   - **Redirected Windows Documents.** The packaged app's default workspace
+     follows the real (possibly OneDrive-redirected) Documents folder
+     (`system_builder_windows.py`); projects under the old
+     `%USERPROFILE%\Documents` are no longer listed and nothing migrates them
+   - **Permissive netlist decoding.** `ltspice_text.py`'s latin-1 fallback
+     always succeeds, so malformed UTF-8 or binary without NUL bytes decodes
+     to garbled text instead of being rejected
+   - **Qualification shows no candidate.** The Qualification view does not say
+     which candidate (index and parameter values) it is about to qualify
+   - **Hard-coded study choices.** The optimization editor offers only
+     "AC"/"Transient" in its Study selects; derive them from the paired study
+     recipe's experiment names
+   - **No JavaScript tests.** The netlist editor, job polling, freeze sequence,
+     boundary picker, and SPICE-value parsing in `system_builder_static/` are
+     covered only by manual browser passes
 
 ### Phase 5: Flagship portable mixed-signal DAQ/scope
 
