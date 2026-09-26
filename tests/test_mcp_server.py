@@ -4116,6 +4116,28 @@ class MCPServerTests(TemporaryRunsTestCase):
             )
         self.assertEqual(point["simulation_status"], "cancelled")
 
+    def test_native_batch_cancelled_during_simulation_is_marked_cancelled(self) -> None:
+        with patch.object(
+            mcp_server,
+            "_run_netlist_text",
+            side_effect=mcp_server.wrapper.SimulationCancelled("LTspice run cancelled"),
+        ):
+            points, batch = mcp_server._execute_native_experiment(
+                [{"R": "1k"}, {"R": "2k"}],
+                self.runs / "native-batch",
+                "R1 in out {R}\n.end\n",
+                "circuit.cir",
+                False,
+                30,
+                [],
+                False,
+                threading.Event(),
+            )
+        self.assertEqual(batch["status"], "cancelled")
+        self.assertEqual(
+            [point["simulation_status"] for point in points], ["cancelled", "cancelled"]
+        )
+
     def test_shutdown_stops_running_points_and_recovery_reruns_them(self) -> None:
         manager = mcp_server.ExperimentJobManager(self.runs, workers=1)
         started = threading.Event()

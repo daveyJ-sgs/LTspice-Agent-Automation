@@ -78,7 +78,7 @@ class SystemBuilderHistoryTests(unittest.TestCase):
         experiment = self.write_job(status="completed")
         manifest_path = experiment / "experiment_manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        manifest.update({"error_points": 2, "failed_points": 3})
+        manifest.update({"error_points": 2, "failed_points": 4, "cancelled_points": 1})
         manifest["definition"]["point_plan"] = {
             "source": {
                 "kind": "statistical",
@@ -102,6 +102,7 @@ class SystemBuilderHistoryTests(unittest.TestCase):
         job = workspace_history(self.workspace)["jobs"][0]
 
         self.assertEqual(job["error_points"], 2)
+        self.assertEqual(job["cancelled_points"], 1)
         self.assertEqual(job["point_error"], "LTspice executable not found: ltspice")
         self.assertEqual(job["study_title"], "RC study")
         self.assertEqual(job["experiment_name"], "ac")

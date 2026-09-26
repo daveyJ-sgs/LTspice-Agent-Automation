@@ -447,14 +447,17 @@ def _execute_experiment_point(
 
 
 def _native_error_points(
-    combinations: list[dict[str, str]], batch_dir: Path, error: str
+    combinations: list[dict[str, str]],
+    batch_dir: Path,
+    error: str,
+    status: str = "error",
 ) -> list[ExperimentPointResult]:
     return [
         {
             "index": index,
             "parameters": combination,
             "run_dir": str(batch_dir),
-            "simulation_status": "error",
+            "simulation_status": status,
             "duration_seconds": None,
             "measurements": {},
             "analyses": [],
@@ -540,10 +543,14 @@ def _execute_native_experiment(
                         f"expected {len(combinations)}, found {raw_data.step_count}"
                     )
     except (FileNotFoundError, OSError, RuntimeError, UnicodeError, ValueError) as exc:
-        error = str(exc)
+        # A cancel stops the whole deck; record it like the per-point path.
+        status = "cancelled" if isinstance(exc, wrapper.SimulationCancelled) else "error"
+        error = (
+            "experiment cancelled during simulation" if status == "cancelled" else str(exc)
+        )
         failed_batch: dict[str, object] = {
             "run_dir": str(batch_dir),
-            "status": "error",
+            "status": status,
             "step_parameter": experiment_engine._NATIVE_STEP_PARAMETER,
             "step_count": len(combinations),
             "error": error,
@@ -563,7 +570,7 @@ def _execute_native_experiment(
             if isinstance(cache, dict):
                 failed_batch["cache_hit"] = cache.get("hit") is True
                 failed_batch["cache_key"] = cache.get("key")
-        return _native_error_points(combinations, batch_dir, error), failed_batch
+        return _native_error_points(combinations, batch_dir, error, status), failed_batch
 
     assert output_dir is not None and summary is not None
     duration = summary.get("duration_seconds")

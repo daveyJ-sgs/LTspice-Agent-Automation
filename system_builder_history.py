@@ -207,6 +207,7 @@ def workspace_history(workspace: Path, *, limit: int = 12) -> dict[str, object]:
                     # failed_points counts errored points too; error_points
                     # lets the UI tell "did not simulate" from "missed spec".
                     "error_points": error_points,
+                    "cancelled_points": _integer(manifest.get("cancelled_points")),
                     "point_error": first_point_error(experiment_dir)
                     if error_points
                     else None,
