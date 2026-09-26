@@ -175,7 +175,12 @@ function updateRecipeFromControls() {
 function numericValue(value) {
   if (value.trim() === "") return "";
   const number = Number(value);
-  return Number.isFinite(number) ? number : value;
+  if (Number.isFinite(number)) return number;
+  // Component values are typed the way the netlist writes them: 10k, 4.7u,
+  // 100n, 2meg. Anything that is not a SPICE number stays text for the
+  // server to name.
+  const spice = spiceNumber(value);
+  return Number.isFinite(spice) ? spice : value;
 }
 
 function defaultDisplayUnit(item) {
@@ -622,6 +627,15 @@ function formatDefault(value) {
 // has no open netlist editor. Re-renders once on arrival; a failed read just
 // leaves the hint out rather than retrying in a loop.
 const netlistTextRequests = new Set();
+
+// A new requirement should be one the circuit could plausibly pass. For an
+// .ac deck that is passband gain at the bottom of the sweep; otherwise there
+// is no universal choice, so the placeholder stays for the user to set.
+function defaultRequirement(experiment) {
+  const sweep = acSweepRange(experimentNetlistText(experiment) || "");
+  if (sweep) return {metric: "ac_gain_db", operator: ">=", target: -3, frequency_value: sweep.start};
+  return {metric: "maximum", operator: "<=", target: 0};
+}
 
 function experimentNetlistText(experiment) {
   const path = experiment?.netlist_path;
@@ -1538,7 +1552,7 @@ function populateExperiments() {
       addRequirement.className = "compact-button";
       addRequirement.textContent = "+ Requirement";
       addRequirement.addEventListener("click", () => {
-        (analysis.requirements || (analysis.requirements = [])).push({metric: "maximum", operator: "<=", target: 0});
+        (analysis.requirements || (analysis.requirements = [])).push(defaultRequirement(experiment));
         populateExperiments();
         schedulePreview();
       });
@@ -1558,7 +1572,7 @@ function populateExperiments() {
       analyses.push({
         name: `analysis_${suffix}`,
         variable: "V(out)",
-        requirements: [{metric: "maximum", operator: "<=", target: 0}],
+        requirements: [defaultRequirement(experiment)],
       });
       populateExperiments();
       schedulePreview();
@@ -4393,18 +4407,15 @@ byId("add-experiment").addEventListener("click", () => {
   let suffix = experiments.length + 1;
   while (names.has(`experiment_${suffix}`)) suffix += 1;
   const defaultNetlist = netlistFiles[0] || "";
-  experiments.push({
+  const experiment = {
     name: `experiment_${suffix}`,
     netlist_path: defaultNetlist,
     filename: defaultNetlist.split("/").pop() || "",
-    waveform_analyses: [
-      {
-        name: "response",
-        variable: "V(out)",
-        requirements: [{metric: "maximum", operator: "<=", target: 0}],
-      },
-    ],
-  });
+  };
+  experiment.waveform_analyses = [
+    {name: "response", variable: "V(out)", requirements: [defaultRequirement(experiment)]},
+  ];
+  experiments.push(experiment);
   populateExperiments();
   schedulePreview();
 });

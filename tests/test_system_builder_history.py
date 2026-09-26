@@ -129,6 +129,15 @@ class SystemBuilderHistoryTests(unittest.TestCase):
 
         self.assertEqual(job["study_title"], "Boundary · R1 · batch 1")
 
+        manifest["definition"]["point_plan"] = {
+            "source": {"kind": "optimization", "candidate_count": 9}
+        }
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        job = workspace_history(self.workspace)["jobs"][0]
+
+        self.assertEqual(job["study_title"], "Optimization · 9 candidates")
+
     def test_history_is_bounded_and_skips_invalid_manifests(self) -> None:
         self.write_job()
         invalid = self.runs / "mcp-experiment-20260827-201101-123456"

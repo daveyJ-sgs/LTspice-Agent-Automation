@@ -49,7 +49,10 @@ const OPT_UNITS = {
 function optNumber(value) {
   if (String(value).trim() === "") return "";
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : value;
+  if (Number.isFinite(parsed)) return parsed;
+  // SPICE suffixes, as in the netlist (spiceNumber lives in app.js).
+  const spice = spiceNumber(value);
+  return Number.isFinite(spice) ? spice : value;
 }
 
 function optInput(value, label, onInput) {
