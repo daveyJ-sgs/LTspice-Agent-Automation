@@ -440,7 +440,9 @@ Each `advance_adaptive_boundary_study` call either incorporates a completed
 child batch or starts the next deterministic batch of evenly spaced interior
 values. Poll the returned `active_experiment_id` with `get_experiment`, then
 advance again when it is terminal. `get_adaptive_boundary_study` inspects the
-parent without changing it. The content-addressed parent manifest records every
+parent without changing it. Every snapshot carries the bracket ends
+(`low_input`, `high_input`, `low_passed`) and `boundary_estimate`, the input
+where the signed margin crosses zero by linear interpolation between them. The content-addressed parent manifest records every
 child experiment, input, signed margin, evidence path, bracket, width, shrink
 ratio, and cumulative sample count, so a restart resumes at a batch boundary.
 

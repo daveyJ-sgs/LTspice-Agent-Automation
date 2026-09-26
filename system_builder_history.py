@@ -191,6 +191,21 @@ def workspace_history(workspace: Path, *, limit: int = 12) -> dict[str, object]:
                 else None
             )
             experiment_name = builder.get("experiment_name")
+            if study_title is None and isinstance(source, dict):
+                # Sensitivity and boundary studies carry no report context of
+                # their own; name them by what they vary rather than
+                # "Experiment".
+                if source.get("kind") == "local_sensitivity":
+                    point = source.get("source_point_index")
+                    study_title = "Sensitivity study" + (
+                        f" · point {point}" if isinstance(point, int) else ""
+                    )
+                elif source.get("kind") == "adaptive_boundary_batch":
+                    variable = source.get("variable")
+                    batch = source.get("batch_index")
+                    study_title = "Boundary" + (
+                        f" · {variable}" if isinstance(variable, str) else ""
+                    ) + (f" · batch {batch + 1}" if isinstance(batch, int) else "")
             jobs.append(
                 {
                     "experiment_id": experiment_id,

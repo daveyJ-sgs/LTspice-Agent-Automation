@@ -107,6 +107,28 @@ class SystemBuilderHistoryTests(unittest.TestCase):
         self.assertEqual(job["study_title"], "RC study")
         self.assertEqual(job["experiment_name"], "ac")
 
+    def test_history_names_sensitivity_and_boundary_studies(self) -> None:
+        experiment = self.write_job(status="completed")
+        manifest_path = experiment / "experiment_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["definition"]["point_plan"] = {
+            "source": {"kind": "local_sensitivity", "source_point_index": 3}
+        }
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        job = workspace_history(self.workspace)["jobs"][0]
+
+        self.assertEqual(job["study_title"], "Sensitivity study · point 3")
+
+        manifest["definition"]["point_plan"] = {
+            "source": {"kind": "adaptive_boundary_batch", "variable": "R1", "batch_index": 0}
+        }
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        job = workspace_history(self.workspace)["jobs"][0]
+
+        self.assertEqual(job["study_title"], "Boundary · R1 · batch 1")
+
     def test_history_is_bounded_and_skips_invalid_manifests(self) -> None:
         self.write_job()
         invalid = self.runs / "mcp-experiment-20260827-201101-123456"

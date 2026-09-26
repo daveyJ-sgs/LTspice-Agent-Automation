@@ -793,22 +793,14 @@
           </div>
           <button id="boundary-close" class="compact-button" type="button">Close</button>
         </div>
-        <p class="editor-note">Bisects one variable between a sampled point that passes a check and one that fails it, so you get the value the requirement actually turns over at rather than a yield percentage.</p>
+        <p class="editor-note">Bisects one variable between a sampled point that passes a check and one that fails it, so you get the value the requirement actually turns over at rather than a yield percentage. The two points must differ in that variable alone, which a sweep or corner axis produces and a Monte Carlo run almost never does.</p>
         <div class="compare-controls">
-          <label class="field-caption">Passing point
-            <input id="boundary-first" type="number" min="0" step="1" value="0">
+          <label class="field-caption">Bracket
+            <select id="boundary-candidate" disabled></select>
           </label>
-          <label class="field-caption">Failing point
-            <input id="boundary-second" type="number" min="0" step="1" value="1">
-          </label>
-          <label class="field-caption">Check id
-            <input id="boundary-check" type="text" spellcheck="false" placeholder="analog_bandwidth:0">
-          </label>
-          <label class="field-caption">Variable
-            <input id="boundary-variable" type="text" spellcheck="false" placeholder="CAA1">
-          </label>
-          <button id="boundary-define" class="secondary-button" type="button">Bracket boundary</button>
+          <button id="boundary-define" class="secondary-button" type="button" disabled>Bracket boundary</button>
         </div>
+        <p id="boundary-candidates-note" class="muted-copy" hidden></p>
         <div id="boundary-errors" class="inline-errors" aria-live="polite" hidden></div>
         <div id="boundary-state" hidden>
           <div id="boundary-metrics" class="metric-grid"></div>

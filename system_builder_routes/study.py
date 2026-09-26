@@ -156,6 +156,25 @@ def create_study_router(
             }
         )
 
+    @router.get("/api/boundary/candidates/{experiment_id}")
+    def boundary_candidates(request: Request, experiment_id: str) -> Response:
+        """The brackets a finished run can seed, with readable check names.
+
+        Check ids are content hashes nobody can type, so the panel offers
+        these instead of asking for one.
+        """
+        denied = authorize_read(request)
+        if denied is not None:
+            return denied
+        try:
+            return JSONResponse(
+                adaptive_boundary.list_boundary_candidates(
+                    workspace / "runs", experiment_id
+                )
+            )
+        except (FileNotFoundError, KeyError, OSError, TypeError, ValueError) as exc:
+            return json_error(409, "boundary_candidates_failed", str(exc))
+
     @router.post("/api/boundary/define")
     async def define_boundary(request: Request) -> Response:
         """Bracket a pass/fail boundary between two opposite sampled points.

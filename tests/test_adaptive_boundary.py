@@ -353,6 +353,46 @@ class AdaptiveBoundaryTests(unittest.TestCase):
                         "X",
                     )
 
+    def test_candidates_are_exactly_the_brackets_define_accepts(self) -> None:
+        source_manifest, source_results = self.source()
+        source_results["points"].append(self.point(2, "2", 2))
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            runs = Path(temporary_directory) / "runs"
+            runs.mkdir()
+            with patch.object(
+                adaptive_boundary.experiment_index,
+                "load_completed_experiment",
+                return_value=(runs / "source", source_manifest, source_results, {}),
+            ):
+                listed = adaptive_boundary.list_boundary_candidates(
+                    runs, "mcp-experiment-source"
+                )
+                # Points 1 and 2 both pass, so only 0 pairs with each of them.
+                self.assertEqual(listed["total_candidates"], 2)
+                first = listed["candidates"][0]
+                self.assertEqual(first["check_id"], self.check_id())
+                self.assertEqual(first["variable"], "X")
+                self.assertEqual(first["check"], "response · margin >= 0 dB")
+                self.assertEqual(
+                    (first["passing_point"], first["failing_point"]), (1, 0)
+                )
+                adaptive_boundary.define_adaptive_boundary_study(
+                    runs,
+                    "mcp-experiment-source",
+                    first["passing_point"],
+                    first["failing_point"],
+                    first["check_id"],
+                    first["variable"],
+                )
+
+                source_results["points"][1]["parameters"]["FIXED"] = "changed"
+                source_results["points"][2]["parameters"]["FIXED"] = "changed"
+                listed = adaptive_boundary.list_boundary_candidates(
+                    runs, "mcp-experiment-source"
+                )
+                self.assertEqual(listed["candidates"], [])
+                self.assertEqual(listed["evaluated_points"], 3)
+
     def test_manifest_symlink_is_rejected(self) -> None:
         source_manifest, source_results = self.source()
         with tempfile.TemporaryDirectory() as temporary_directory:

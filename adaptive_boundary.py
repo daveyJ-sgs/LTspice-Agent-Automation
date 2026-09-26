@@ -35,6 +35,10 @@ class AdaptiveBoundaryStudyResult(TypedDict):
     max_samples: int
     batch_count: int
     current_width: float
+    low_input: float
+    high_input: float
+    low_passed: bool
+    boundary_estimate: float
     input_tolerance: float
     stop_reason: str | None
     active_experiment_id: str | None
@@ -173,6 +177,22 @@ def _endpoint(
     }
 
 
+def _zero_margin_input(low: dict[str, object], high: dict[str, object]) -> float:
+    """Where the margin crosses zero between the bracket ends, linearly.
+
+    The ends straddle the check by construction, so their margins have
+    opposite signs; the answer always lies inside the bracket.
+    """
+    low_input = float(_decimal(low["input"], "low input"))
+    high_input = float(_decimal(high["input"], "high input"))
+    low_margin = float(low["margin"])  # type: ignore[arg-type]
+    high_margin = float(high["margin"])  # type: ignore[arg-type]
+    if low_margin == high_margin:
+        return (low_input + high_input) / 2
+    fraction = -low_margin / (high_margin - low_margin)
+    return low_input + min(1.0, max(0.0, fraction)) * (high_input - low_input)
+
+
 def _snapshot(manifest: dict[str, object], path: Path) -> AdaptiveBoundaryStudyResult:
     definition = manifest["definition"]
     assert isinstance(definition, dict)
@@ -197,6 +217,10 @@ def _snapshot(manifest: dict[str, object], path: Path) -> AdaptiveBoundaryStudyR
             _decimal(high["input"], "high input")
             - _decimal(low["input"], "low input")
         ),
+        "low_input": float(_decimal(low["input"], "low input")),
+        "high_input": float(_decimal(high["input"], "high input")),
+        "low_passed": bool(low["passed"]),
+        "boundary_estimate": _zero_margin_input(low, high),
         "input_tolerance": float(definition["input_tolerance"]),
         "stop_reason": manifest.get("stop_reason"),
         "active_experiment_id": active_id,
@@ -236,6 +260,115 @@ def _load_manifest(runs_dir: Path, adaptive_id: str) -> tuple[Path, dict[str, ob
     if adaptive_id != f"adaptive-study-{digest[:16]}":
         raise ValueError("adaptive definition does not match its content address")
     return path, manifest
+
+
+MAX_BOUNDARY_CANDIDATES = 50
+
+
+def _point_checks(point: dict[str, object]) -> dict[str, tuple[str, bool]]:
+    """Each requirement a point carries, as check id -> (label, passed).
+
+    A check that appears more than once cannot be bracketed (the engine
+    requires exactly one match), so duplicates are left out.
+    """
+    seen: dict[str, tuple[str, bool]] = {}
+    repeated: set[str] = set()
+    for analysis_entry in point.get("analyses", []):
+        if not isinstance(analysis_entry, dict):
+            continue
+        analysis = analysis_entry.get("analysis")
+        if not isinstance(analysis, dict):
+            continue
+        analysis_name = str(analysis_entry["name"])
+        for result in analysis.get("results", []):
+            threshold = result["threshold"]
+            identity = worst_case_analysis._identity(
+                analysis_name,
+                str(result["metric"]),
+                str(threshold["operator"]),
+                float(threshold["target"]),
+                str(result["unit"]),
+                dict(result.get("parameters", {})),
+            )
+            if identity in seen:
+                repeated.add(identity)
+            unit = str(result["unit"])
+            label = (
+                f"{analysis_name} · {result['metric']} {threshold['operator']} "
+                f"{threshold['target']}{f' {unit}' if unit else ''}"
+            )
+            seen[identity] = (label, bool(result["passed"]))
+    return {key: value for key, value in seen.items() if key not in repeated}
+
+
+def list_boundary_candidates(
+    runs_dir: Path, source_experiment_id: str
+) -> dict[str, object]:
+    """List every bracket define_adaptive_boundary_study would accept.
+
+    A bracket is two points with electrical evidence that differ in exactly
+    one variable and land on opposite sides of one check -- which a sweep or
+    a corner axis produces, and a Monte Carlo run almost never does.
+    """
+    _, _, results, _ = experiment_index.load_completed_experiment(
+        runs_dir, source_experiment_id
+    )
+    points = results["points"]
+    assert isinstance(points, list)
+    usable: dict[int, tuple[dict[str, object], dict[str, tuple[str, bool]]]] = {}
+    for point in points:
+        if not isinstance(point, dict) or statistical_results._classification(
+            point
+        ) not in {"electrical_pass", "electrical_failure"}:
+            continue
+        usable[int(point["index"])] = (dict(point["parameters"]), _point_checks(point))
+    candidates: list[dict[str, object]] = []
+    total = 0
+    indexes = sorted(usable)
+    for position, first in enumerate(indexes):
+        first_parameters, first_checks = usable[first]
+        for second in indexes[position + 1 :]:
+            second_parameters, second_checks = usable[second]
+            differing = [
+                name
+                for name in sorted(set(first_parameters) | set(second_parameters))
+                if first_parameters.get(name) != second_parameters.get(name)
+            ]
+            if len(differing) != 1:
+                continue
+            variable = differing[0]
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", variable) is None:
+                continue
+            try:
+                if _decimal(first_parameters.get(variable), variable) == _decimal(
+                    second_parameters.get(variable), variable
+                ):
+                    continue
+            except ValueError:
+                continue
+            for check_id, (label, first_passed) in first_checks.items():
+                other = second_checks.get(check_id)
+                if other is None or other[1] == first_passed:
+                    continue
+                total += 1
+                if len(candidates) >= MAX_BOUNDARY_CANDIDATES:
+                    continue
+                passing, failing = (first, second) if first_passed else (second, first)
+                candidates.append(
+                    {
+                        "check_id": check_id,
+                        "check": label,
+                        "variable": variable,
+                        "passing_point": passing,
+                        "failing_point": failing,
+                    }
+                )
+    return {
+        "source_experiment_id": source_experiment_id,
+        "evaluated_points": len(usable),
+        "candidates": candidates,
+        "total_candidates": total,
+    }
 
 
 def define_adaptive_boundary_study(

@@ -318,6 +318,7 @@ class SystemBuilderTests(unittest.TestCase):
         expected = {
             ("DELETE", "/api/projects/{slug}"),
             ("GET", "/"),
+            ("GET", "/api/boundary/candidates/{experiment_id}"),
             ("GET", "/api/boundary/{adaptive_id}"),
             ("GET", "/api/examples/mixed-signal-daq"),
             ("GET", "/api/examples/mixed-signal-daq-optimization"),

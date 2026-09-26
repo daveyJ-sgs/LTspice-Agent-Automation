@@ -2426,6 +2426,49 @@ function openBoundary(experimentId) {
   const panel = byId("boundary-panel");
   panel.hidden = false;
   panel.scrollIntoView({behavior: "smooth", block: "nearest"});
+  loadBoundaryCandidates(experimentId);
+}
+
+// Check ids are content hashes, so the panel offers the brackets the run can
+// actually seed -- or says why there are none -- instead of asking for one.
+let boundaryCandidates = [];
+
+async function loadBoundaryCandidates(experimentId) {
+  const select = byId("boundary-candidate");
+  const note = byId("boundary-candidates-note");
+  const button = byId("boundary-define");
+  boundaryCandidates = [];
+  select.replaceChildren();
+  select.disabled = true;
+  button.disabled = true;
+  note.textContent = "Looking for brackets…";
+  note.hidden = false;
+  try {
+    const response = await fetch(`/api/boundary/candidates/${encodeURIComponent(experimentId)}`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error?.message || "This run's points could not be read");
+    if (boundarySource !== experimentId) return;
+    boundaryCandidates = result.candidates || [];
+    if (!boundaryCandidates.length) {
+      note.textContent = `None of the ${result.evaluated_points} evaluated points pair up: a bracket needs two points that differ in one variable only and fall on opposite sides of a check. Sweep that variable, or add it as a corner axis, and bracket from that run.`;
+      return;
+    }
+    select.replaceChildren(...boundaryCandidates.map((candidate, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = `${candidate.check} · ${candidate.variable} · point ${candidate.passing_point} passes, ${candidate.failing_point} fails`;
+      return option;
+    }));
+    select.disabled = false;
+    button.disabled = false;
+    note.textContent = result.total_candidates > boundaryCandidates.length
+      ? `Showing ${boundaryCandidates.length} of ${result.total_candidates} brackets.`
+      : "";
+    note.hidden = !note.textContent;
+  } catch (error) {
+    note.hidden = true;
+    boundaryError(error.message);
+  }
 }
 
 function boundaryError(message) {
@@ -2435,7 +2478,8 @@ function boundaryError(message) {
 }
 
 async function defineBoundary() {
-  if (!boundarySource) return;
+  const candidate = boundaryCandidates[Number(byId("boundary-candidate").value)];
+  if (!boundarySource || !candidate) return;
   const button = byId("boundary-define");
   button.disabled = true;
   boundaryError("");
@@ -2448,10 +2492,10 @@ async function defineBoundary() {
       },
       body: JSON.stringify({
         source_experiment_id: boundarySource,
-        first_point_index: Number(byId("boundary-first").value),
-        second_point_index: Number(byId("boundary-second").value),
-        check_id: byId("boundary-check").value.trim(),
-        variable: byId("boundary-variable").value.trim(),
+        first_point_index: candidate.passing_point,
+        second_point_index: candidate.failing_point,
+        check_id: candidate.check_id,
+        variable: candidate.variable,
       }),
     });
     const result = await response.json();
@@ -2507,7 +2551,10 @@ function renderBoundary(study) {
     ["Status", study.status],
     ["Samples", `${study.sample_count} / ${study.max_samples}`],
     ["Batches", study.batch_count],
-    ["Bracket width", `${Number(study.current_width).toPrecision(4)} ${study.unit || ""}`.trim()],
+    ["Turns over at", `≈ ${formatSi(Number(study.boundary_estimate), boundaryUnit(study.unit))}`],
+    [study.low_passed ? "Passes up to" : "Fails up to", formatSi(Number(study.low_input), boundaryUnit(study.unit))],
+    [study.low_passed ? "Fails from" : "Passes from", formatSi(Number(study.high_input), boundaryUnit(study.unit))],
+    ["Bracket width", formatSi(Number(study.current_width), boundaryUnit(study.unit))],
     ["Tolerance", Number(study.input_tolerance).toPrecision(3)],
     ["Variable", study.variable],
   ].map(([label, value]) => {
@@ -2525,6 +2572,13 @@ function renderBoundary(study) {
   byId("boundary-advance").disabled = finished;
   byId("boundary-status").textContent = study.error
     || (finished ? `Converged · ${study.stop_reason}` : `Study ${study.adaptive_id}`);
+}
+
+// Recipes spell units out ("ohm", "F"); the panel reads them as symbols.
+function boundaryUnit(unit) {
+  const symbols = {ohm: "Ω", ohms: "Ω", farad: "F", henry: "H", volt: "V", amp: "A", ampere: "A", hertz: "Hz", second: "s"};
+  const text = String(unit || "");
+  return symbols[text.toLowerCase()] ?? text;
 }
 
 function boundaryButton(experimentId) {
@@ -2630,6 +2684,21 @@ async function loadSensitivityAnalysis(experimentId, {quiet = false} = {}) {
     renderTornado();
   } catch (error) {
     if (!quiet) sensitivityError(error.message);
+  }
+}
+
+// The tornado for a study started here is read once its job settles; nothing
+// else would load it, and the panel would keep saying "running".
+function settleSensitivityJob() {
+  if (!sensitivitySource || sensitivityAnalysis) return;
+  const job = trackedJobs.get(sensitivitySource);
+  if (!job || job.name !== "sensitivity" || isActiveJob(job)) return;
+  if (job.status === "completed") {
+    byId("sensitivity-meta").textContent = "";
+    loadSensitivityAnalysis(sensitivitySource);
+  } else {
+    byId("sensitivity-meta").textContent = "";
+    sensitivityError(`Sensitivity study ${sensitivitySource} ${job.status}${job.error ? `: ${job.error}` : "."}`);
   }
 }
 
@@ -3338,6 +3407,7 @@ async function pollTrackedJobs() {
     jobPollError = "";
   }
   renderTrackedJobs();
+  settleSensitivityJob();
   if (!failure) await loadHistory(false);
   renderHistoryJobPollProblem();
   if (![...trackedJobs.values()].some(isActiveJob)) return;
@@ -3408,8 +3478,11 @@ function renderHistory(result) {
     bottom.append(details);
     if (job.report_url) bottom.append(reportLink(job.report_url));
     if (!jobAllErrored(job)) bottom.append(waveformButton(job.experiment_id));
-    if (job.status === "completed" && job.statistical && !jobAllErrored(job)) {
-      bottom.append(sensitivityButton(job.experiment_id), boundaryButton(job.experiment_id));
+    if (job.status === "completed" && !jobAllErrored(job)) {
+      // Sensitivity perturbs a sampled point; a boundary brackets any two
+      // points that differ in one variable, which sweeps produce best.
+      if (job.statistical) bottom.append(sensitivityButton(job.experiment_id));
+      bottom.append(boundaryButton(job.experiment_id));
     }
     if (["queued", "running", "cancelling"].includes(job.status)) {
       bottom.append(jobActionButton("Cancel", async () => {

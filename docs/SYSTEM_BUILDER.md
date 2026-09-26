@@ -227,7 +227,13 @@ Three engines that were previously MCP-only are now driven from the browser:
   moves, widest swing first. It answers which component actually matters.
 - **Boundary** bisects one variable between a sampled point that passes a check
   and one that fails it, advancing a batch at a time, to find the value a
-  requirement turns over at rather than a yield percentage.
+  requirement turns over at rather than a yield percentage. The panel lists
+  the brackets the run can seed -- two points that differ in that variable
+  alone and land on opposite sides of a check -- so nothing has to be typed.
+  Sweeps, corner axes and sensitivity studies produce such pairs; a Monte
+  Carlo run almost never does, and the panel says so. Each step reports the
+  bracket ends and the value where the margin crosses zero, interpolated
+  between them.
 - **Robust selection** compares several feasible Pareto finalists under the
   same manufacturing model, instead of qualifying only the winner.
 
