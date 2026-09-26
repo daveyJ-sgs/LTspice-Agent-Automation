@@ -184,11 +184,27 @@ identity and report narrative" block.
 ## Waveforms, comparison, and history
 
 Every finished job offers **Waveforms**, which plots the `.raw` captures the run
-already wrote: a capture picker, per-trace toggles, selectable resolution, and
-a CSV export at full resolution. A transient axis is drawn linearly and a
-frequency axis in decades; AC captures are complex, so the viewer plots
-magnitude and says so -- exact gain and phase remain the requirement engine's
-job. Nothing in the viewer launches LTspice or writes an artifact.
+already wrote: a capture picker, per-trace toggles, selectable resolution, a
+vertical-scale control, and a CSV export at full resolution. A transient axis
+is drawn linearly and a frequency axis in decades. Nothing in the viewer
+launches LTspice or writes an artifact.
+
+Traces are grouped and scaled by the unit LTspice records for each vector in
+the RAW header. Volts and amperes never share one vertical scale -- a
+milliamp trace drawn against a 3.3 V range is a flat line on the baseline, so
+each family gets its own axis, drawn left and right. A capture holding a third
+family says which one it could not fit rather than flattening it silently.
+
+A capture also opens on one readable family rather than on every node it
+holds: voltages where there are any, otherwise the most populous unit, capped
+at six traces. **All** and **None** override that.
+
+AC captures are complex, so the viewer plots magnitude, and opens in dB on the
+log frequency axis -- a Bode plot. Linear magnitude stays one click away, and
+exact gain and phase remain the requirement engine's job. A trace that is
+identically zero is negative infinity dB, and the viewer says so instead of
+drawing nothing. A single-sample capture, such as an operating point, is drawn
+as markers rather than as a line through one point.
 
 **Simulate once** on the netlist editor runs one deck through LTspice without
 the define/preview/freeze/acknowledge sequence, for checking that a deck runs

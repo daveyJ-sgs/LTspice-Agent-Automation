@@ -366,11 +366,17 @@ td:first-child { color: var(--text); font-weight: 600; }
 .waveform-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 18px; margin: 14px 0; }
 .waveform-controls select { min-width: 150px; }
 .waveform-traces { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.waveform-trace-picker { display: flex; flex-direction: column; gap: 4px; }
+.waveform-trace-actions { display: flex; gap: 10px; }
+.trace-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.trace-group-unit { font: 500 10px "IBM Plex Mono", monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--subtle); }
+.waveform-note { margin: 8px 0 0; }
+.waveform-op-table td:not(:first-child), .waveform-op-table th:not(:first-child) { font-family: "IBM Plex Mono", monospace; text-align: right; white-space: nowrap; }
 .trace-toggle { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font: 500 11.5px "IBM Plex Mono", monospace; cursor: pointer; }
 .trace-toggle input { width: 14px; height: 14px; accent-color: var(--accent); margin: 0; }
 .trace-swatch { width: 13px; height: 3px; border-radius: 2px; flex: 0 0 auto; }
 .waveform-plot { margin-top: 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); padding: 10px; overflow-x: auto; }
-.waveform-svg { display: block; width: 100%; height: auto; min-width: 460px; }
+.waveform-svg { display: block; width: 100%; height: auto; min-width: 460px; min-height: 280px; }
 .waveform-svg .plot-grid { stroke: var(--border); stroke-width: 1; }
 .waveform-svg .plot-tick { fill: var(--subtle); font: 400 10px "IBM Plex Mono", monospace; }
 .waveform-meta { margin: 9px 0 0; font-size: 12px; font-family: "IBM Plex Mono", monospace; }

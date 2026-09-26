@@ -58,6 +58,25 @@ def list_run_captures(runs: Path, experiment_id: str) -> dict[str, object]:
     return {"experiment_id": experiment_id, "captures": captures, "truncated": False}
 
 
+# LTspice names each vector's quantity in the RAW header. The viewer needs
+# the unit so that volts and amperes are never scaled onto one shared axis --
+# a milliamp trace drawn against a 3.3 V axis is a flat line on the baseline.
+_TRACE_UNITS = {
+    "voltage": "V",
+    "current": "A",
+    "device_current": "A",
+    "subckt_current": "A",
+    "power": "W",
+    "time": "s",
+    "frequency": "Hz",
+}
+
+
+def trace_unit(kind: str) -> str:
+    """Map a RAW variable type onto its SI unit, or "" when unrecognised."""
+    return _TRACE_UNITS.get(kind.strip().casefold(), "")
+
+
 def _downsampled_indices(total: int, maximum: int) -> list[int]:
     if total <= maximum:
         return list(range(total))
@@ -86,7 +105,13 @@ def read_capture(
     data = raw_parser.parse_raw(raw_path)
 
     axis_name = data.variables[0]
-    wanted = variables or [name for name in data.variables if name != axis_name]
+    # An operating point (.op, or a stepped .op) has no sweep: LTspice writes
+    # the first node where time or frequency would be. Every vector is then a
+    # value to read, including that first one, and nothing is an axis.
+    operating_point = trace_unit(data.types.get(axis_name, "")) not in ("", "s", "Hz")
+    wanted = variables or [
+        name for name in data.variables if operating_point or name != axis_name
+    ]
     unknown = sorted(set(wanted) - set(data.variables))
     if unknown:
         raise ValueError(f"unknown vector(s): {', '.join(unknown)}")
@@ -101,22 +126,31 @@ def read_capture(
         name: [magnitude(data.values[name][index]) for index in indices]
         for name in wanted
     }
-    axis = [
-        float(value.real if isinstance(value, complex) else value)
-        for value in (data.values[axis_name][index] for index in indices)
-    ]
+    axis = (
+        [float(index) for index in indices]
+        if operating_point
+        else [
+            float(value.real if isinstance(value, complex) else value)
+            for value in (data.values[axis_name][index] for index in indices)
+        ]
+    )
     return {
         "path": relative_path,
         "filename": raw_path.name,
         "flags": data.flags,
         "complex": complex_data,
-        "axis_variable": axis_name,
+        "operating_point": operating_point,
+        "axis_variable": None if operating_point else axis_name,
         # An AC capture's vectors are complex; the viewer plots magnitude, and
         # the requirement engine remains the place exact gain and phase are
         # measured.
-        "axis_unit": "Hz" if axis_name.casefold() == "frequency" else "s",
+        "axis_unit": ""
+        if operating_point
+        else trace_unit(data.types.get(axis_name, ""))
+        or ("Hz" if axis_name.casefold() == "frequency" else "s"),
         "signal_kind": "magnitude" if complex_data else "value",
         "variables": data.variables,
+        "units": {name: trace_unit(data.types.get(name, "")) for name in wanted},
         "step_count": data.step_count,
         "total_points": data.points,
         "returned_points": len(indices),

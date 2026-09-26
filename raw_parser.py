@@ -7,6 +7,7 @@ import csv
 import re
 import struct
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
 
 from ltspice_text import text_encoding
@@ -21,6 +22,9 @@ class RawData:
     values: dict[str, list[float | complex]]
     step_count: int = 1
     points_per_step: int | None = None
+    # The third column of each Variables line -- "voltage", "device_current",
+    # "time" and so on. LTspice always writes it; a hand-made RAW may not.
+    types: dict[str, str] = dataclass_field(default_factory=dict)
 
     @property
     def points(self) -> int:
@@ -100,6 +104,7 @@ def parse_raw(path: Path) -> RawData:
         raise ValueError("RAW variable and point counts must be positive")
 
     variables: list[str] = []
+    variable_types: dict[str, str] = {}
     in_variables = False
     for line in lines:
         if line == "Variables:":
@@ -111,6 +116,8 @@ def parse_raw(path: Path) -> RawData:
                 if int(parts[0]) != len(variables):
                     raise ValueError("RAW variable indexes must be consecutive from zero")
                 variables.append(parts[1])
+                if len(parts) >= 3:
+                    variable_types[parts[1]] = parts[2].strip()
     if len(variables) != variable_count:
         raise ValueError(
             f"Expected {variable_count} variables, found {len(variables)} in {path}"
@@ -152,7 +159,7 @@ def parse_raw(path: Path) -> RawData:
                 values[name].append(ascii_value(parts[-1]))
                 cursor += 1
         step_count, points_per_step = (point_count, 1) if point_steps else _step_shape(values[variables[0]])
-        return RawData(flags=flags, variables=variables, values=values, step_count=step_count, points_per_step=points_per_step)
+        return RawData(flags=flags, variables=variables, values=values, step_count=step_count, points_per_step=points_per_step, types=variable_types)
 
     is_complex = "complex" in flags.lower()
     fast_access = "fastaccess" in flags.lower()
@@ -197,7 +204,7 @@ def parse_raw(path: Path) -> RawData:
         values[variables[0]] = [abs(value) for value in values[variables[0]]]
 
     step_count, points_per_step = (point_count, 1) if point_steps else _step_shape(values[variables[0]])
-    return RawData(flags=flags, variables=variables, values=values, step_count=step_count, points_per_step=points_per_step)
+    return RawData(flags=flags, variables=variables, values=values, step_count=step_count, points_per_step=points_per_step, types=variable_types)
 
 
 # Rows decoded per struct.iter_unpack chunk; bounds the transient row tuples
