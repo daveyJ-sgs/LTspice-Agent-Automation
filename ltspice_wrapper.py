@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -714,6 +715,22 @@ def _publish_cache_entry(
             shutil.rmtree(temporary_entry)
 
 
+_PARAMETER_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_PARAMETER_VALUE = re.compile(r"[^\s{}=;]+")
+
+
+def _parameter_directives(parameters: Mapping[str, str]) -> list[str]:
+    """Render ``.param`` lines, refusing anything that could alter the deck."""
+    lines: list[str] = []
+    for name, value in parameters.items():
+        if not isinstance(name, str) or not _PARAMETER_NAME.fullmatch(name):
+            raise ValueError(f"invalid parameter name: {name!r}")
+        if not isinstance(value, str) or not _PARAMETER_VALUE.fullmatch(value):
+            raise ValueError(f"invalid value for parameter {name}: {value!r}")
+        lines.append(f".param {name}={value}")
+    return lines
+
+
 def run_netlist(
     netlist_path: Path,
     output_dir: Path | None = None,
@@ -723,12 +740,16 @@ def run_netlist(
     cache_dir: Path | None = None,
     disable_compression: bool = False,
     cancel_event: _CancelSignal | None = None,
+    parameters: Mapping[str, str] | None = None,
 ) -> Path:
     """Run one netlist and return the directory containing LTspice outputs.
 
     When ``cancel_event`` is set while LTspice is running, the simulator
     process tree is stopped and :class:`SimulationCancelled` is raised.
+    ``parameters`` are declared as ``.param`` lines ahead of the deck, so a
+    study template's ``{NAME}`` placeholders simulate at those values.
     """
+    parameter_lines = _parameter_directives(parameters or {})
     if not isinstance(reuse_cache, bool):
         raise ValueError("reuse_cache must be a boolean")
     if not isinstance(disable_compression, bool):
@@ -751,12 +772,13 @@ def run_netlist(
 
     run_netlist_path = output_dir / netlist_path.name
     _stage_netlist(netlist_path, run_netlist_path)
-    if disable_compression:
+    if disable_compression or parameter_lines:
         text = run_netlist_path.read_text(encoding="utf-8")
         # LTspice keeps the first option value. Put the override after the title,
         # ahead of deck options and includes that could set plotwinsize.
         title, _, body = text.partition("\n")
-        text = title + "\n.options plotwinsize=0\n" + body
+        preamble = [".options plotwinsize=0"] if disable_compression else []
+        text = title + "\n" + "".join(f"{line}\n" for line in preamble + parameter_lines) + body
         run_netlist_path.write_text(text, encoding="utf-8", newline="\n")
     manifest_path = output_dir / "run_manifest.json"
     started_at = datetime.now().astimezone()
@@ -772,6 +794,7 @@ def run_netlist(
         "source_netlist": str(netlist_path),
         "run_netlist": str(run_netlist_path),
         "netlist_sha256": hashlib.sha256(netlist_path.read_bytes()).hexdigest(),
+        "parameters": dict(parameters or {}),
         "ltspice": str(LTSPICE),
         "simulator": _simulator_metadata(str(LTSPICE)),
         "runtime": _runtime_metadata(),

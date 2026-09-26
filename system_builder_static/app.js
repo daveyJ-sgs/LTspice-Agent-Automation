@@ -589,6 +589,21 @@ function acSweepRange(netlistText) {
   return {spacing, points: spiceNumber(fields[0]), start, stop};
 }
 
+// Simulate once runs a study template at its nominal point: each variable's
+// {NAME} placeholder takes the nominal the editor holds, in base units.
+function nominalParameters() {
+  const parameters = {};
+  for (const variable of (recipe?.plan?.variables || [])) {
+    if (!variable.name) continue;
+    const nominal = variable.nominal;
+    if ((typeof nominal === "number" && Number.isFinite(nominal))
+      || (typeof nominal === "string" && nominal.trim())) {
+      parameters[variable.name] = nominal;
+    }
+  }
+  return parameters;
+}
+
 function formatHertz(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return String(value ?? "—");
@@ -783,7 +798,7 @@ function buildNetlistEditor(experiment) {
           "Content-Type": "application/json",
           "X-LTspice-System-Builder": "1",
         },
-        body: JSON.stringify({netlist_path: path}),
+        body: JSON.stringify({netlist_path: path, parameters: nominalParameters()}),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error?.message || "Simulation failed");
@@ -2012,7 +2027,9 @@ async function openWaveforms(experimentId) {
   select.replaceChildren(...waveformCaptures.map((capture) => {
     const option = document.createElement("option");
     option.value = capture.path;
-    option.textContent = `point ${capture.point_index} · ${capture.filename}`;
+    option.textContent = capture.point_index === null
+      ? capture.filename
+      : `point ${capture.point_index} · ${capture.filename}`;
     return option;
   }));
   select.value = waveformCaptures[0].path;

@@ -152,6 +152,65 @@ class SystemBuilderTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 400)
                 self.assertIn("timeout_seconds", response.json()["error"]["message"])
 
+    def test_quick_run_names_template_placeholders_it_has_no_value_for(self) -> None:
+        self._open()
+        response = self.client.post(
+            "/api/netlist/run",
+            json={"netlist_path": "examples/instrumentation_amp_starter/instrumentation_amp_3opamp.cir"},
+            headers=self._headers(),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        error = response.json()["error"]
+        self.assertEqual(error["code"], "quick_run_unresolved")
+        self.assertIn("{RG_VAL}", error["message"])
+
+    def test_quick_run_simulates_a_template_at_the_given_nominals(self) -> None:
+        self._open()
+        calls: list[dict[str, object]] = []
+
+        def fake_run(netlist_path: Path, **kwargs: object) -> Path:
+            calls.append(kwargs)
+            output_dir = kwargs["output_dir"]
+            assert isinstance(output_dir, Path)
+            output_dir.mkdir(parents=True)
+            return output_dir
+
+        with (
+            tempfile.TemporaryDirectory() as runs,
+            patch.object(ltspice_wrapper, "run_netlist", side_effect=fake_run),
+        ):
+            workspace = Path(runs)
+            deck = workspace / "rc.cir"
+            deck.write_text("* rc\nR1 in out {R1_VAL}\nC1 out 0 {c1_val}\n.end\n", encoding="utf-8")
+            client = TestClient(
+                system_builder.create_app(workspace, testing=True),
+                base_url="http://testserver",
+            )
+            client.get("/")
+            response = client.post(
+                "/api/netlist/run",
+                json={"netlist_path": "rc.cir", "parameters": {"R1_VAL": 1000, "C1_VAL": 1.59e-07}},
+                headers=self._headers(),
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(calls[0]["parameters"], {"R1_VAL": "1000", "C1_VAL": "1.59e-07"})
+
+    def test_quick_run_accepts_placeholders_the_deck_declares_itself(self) -> None:
+        self._open()
+        with patch.object(
+            ltspice_wrapper, "run_netlist", side_effect=RuntimeError("no LTspice here")
+        ):
+            response = self.client.post(
+                "/api/netlist/run",
+                json={"netlist_path": "examples/step_rc.cir"},
+                headers=self._headers(),
+            )
+
+        # Past the placeholder check and into the (patched) simulator.
+        self.assertEqual(response.json()["error"]["code"], "quick_run_failed")
+
     def test_comparison_refuses_a_run_against_itself(self) -> None:
         self._open()
         response = self.client.post(

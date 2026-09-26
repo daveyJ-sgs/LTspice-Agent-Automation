@@ -397,6 +397,40 @@ class AutomationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "disable_compression"):
                 run_netlist(source, disable_compression="yes")
 
+    def test_parameters_are_declared_after_the_title_of_the_staged_deck(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            executable = root / "LTspice.exe"
+            executable.write_bytes(b"simulator")
+            source = root / "input.cir"
+            source.write_text("* title\nR1 in out {R1_VAL}\n.end\n", encoding="utf-8")
+
+            def simulate(command, **kwargs):
+                text = Path(command[-1]).read_text(encoding="utf-8")
+                self.assertTrue(text.startswith("* title\n.param R1_VAL=1000\nR1 in out {R1_VAL}\n"))
+                Path(command[-1]).with_suffix(".log").write_text("", encoding="utf-8")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with patch.object(ltspice_wrapper, "LTSPICE", executable), patch.object(
+                ltspice_wrapper, "_run_simulator", side_effect=simulate
+            ):
+                run_netlist(source, root / "out", parameters={"R1_VAL": "1000"})
+            manifest = json.loads((root / "out" / "run_manifest.json").read_text())
+            self.assertEqual(manifest["parameters"], {"R1_VAL": "1000"})
+            self.assertEqual(source.read_text(encoding="utf-8"), "* title\nR1 in out {R1_VAL}\n.end\n")
+
+    def test_parameters_cannot_inject_netlist_lines(self) -> None:
+        for name, value in (
+            ("R1", "1k\n.include /etc/passwd"),
+            ("R1", "1 k"),
+            ("R1", "{x}"),
+            ("R1", ""),
+            ("1R", "1k"),
+            ("R-1", "1k"),
+        ):
+            with self.subTest(name=name, value=value), self.assertRaises(ValueError):
+                ltspice_wrapper._parameter_directives({name: value})
+
     def test_simulation_cache_reuses_verified_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

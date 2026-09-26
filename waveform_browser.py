@@ -24,15 +24,41 @@ MAX_LISTED_CAPTURES = 512
 MAX_VIEWER_POINTS = 4000
 
 
+def _raw_files(directory: Path) -> list[Path]:
+    # The sweep first: an operating point is a table, and the viewer opens
+    # on the first capture it is given.
+    return sorted(
+        (
+            raw_path
+            for raw_path in directory.glob("*.raw")
+            if raw_path.is_file() and not raw_path.is_symlink()
+        ),
+        key=lambda raw_path: (raw_path.name.casefold().endswith(".op.raw"), raw_path.name),
+    )
+
+
 def list_run_captures(runs: Path, experiment_id: str) -> dict[str, object]:
-    """List the .raw captures one finished experiment wrote, newest attempt first."""
+    """List the .raw captures one run wrote.
+
+    An experiment's live under point-NNNN/attempt-NNNN; a single run, such as
+    Simulate once, writes them beside its netlist.
+    """
     if EXPERIMENT_ID.fullmatch(experiment_id) is None:
         raise ValueError("experiment id is invalid")
     experiment_dir = runs / experiment_id
     if not experiment_dir.is_dir() or experiment_dir.is_symlink():
         raise ValueError("experiment directory is missing")
 
-    captures: list[dict[str, object]] = []
+    captures: list[dict[str, object]] = [
+        {
+            "point_index": None,
+            "attempt": None,
+            "filename": raw_path.name,
+            "path": raw_path.relative_to(runs).as_posix(),
+            "size_bytes": raw_path.stat().st_size,
+        }
+        for raw_path in _raw_files(experiment_dir)[:MAX_LISTED_CAPTURES]
+    ]
     for point_dir in sorted(experiment_dir.glob("point-[0-9][0-9][0-9][0-9]")):
         point_match = POINT_DIRECTORY.fullmatch(point_dir.name)
         if point_match is None or point_dir.is_symlink():
@@ -41,9 +67,7 @@ def list_run_captures(runs: Path, experiment_id: str) -> dict[str, object]:
             attempt_match = ATTEMPT_DIRECTORY.fullmatch(attempt_dir.name)
             if attempt_match is None or attempt_dir.is_symlink():
                 continue
-            for raw_path in sorted(attempt_dir.glob("*.raw")):
-                if raw_path.is_symlink() or not raw_path.is_file():
-                    continue
+            for raw_path in _raw_files(attempt_dir):
                 captures.append(
                     {
                         "point_index": int(point_match.group(1)),

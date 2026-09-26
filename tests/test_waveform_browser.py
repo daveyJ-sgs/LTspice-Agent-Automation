@@ -68,6 +68,21 @@ class WaveformBrowserTests(unittest.TestCase):
             capture["path"], "demo-run/point-0000/attempt-0000/circuit.raw"
         )
 
+    def test_a_single_run_lists_the_captures_beside_its_netlist(self) -> None:
+        run = self.runs / "quick-run"
+        for name in ("deck.op.raw", "deck.raw"):
+            write_raw(
+                run / name,
+                [("time", "time"), ("V(out)", "voltage")],
+                {"time": [0.0, 1.0], "V(out)": [0.0, 1.0]},
+            )
+
+        captures = waveform_browser.list_run_captures(self.runs, "quick-run")["captures"]
+
+        self.assertEqual([capture["filename"] for capture in captures], ["deck.raw", "deck.op.raw"])
+        self.assertIsNone(captures[0]["point_index"])
+        self.assertEqual(captures[0]["path"], "quick-run/deck.raw")
+
     def test_a_missing_experiment_is_refused(self) -> None:
         with self.assertRaisesRegex(ValueError, "experiment directory is missing"):
             waveform_browser.list_run_captures(self.runs, "no-such-run")

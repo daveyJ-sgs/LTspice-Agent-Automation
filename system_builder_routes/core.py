@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,6 +17,7 @@ import ltspice_wrapper
 import optimization_recipe
 import waveform_browser
 import waveform_metrics
+from ltspice_text import decode_text
 from study_recipe import load_study_recipe, resolve_netlist_path
 from system_builder_history import evidence_file, workspace_history
 
@@ -247,6 +249,49 @@ def create_core_router(
             netlist_path = resolve_netlist_path(workspace, payload.get("netlist_path"))
         except ValueError as exc:
             return json_error(400, "invalid_quick_run", str(exc))
+        # A study template's {NAME} placeholders simulate at the values given
+        # here -- the editor sends each variable's nominal.
+        raw_parameters = payload.get("parameters", {})
+        if not isinstance(raw_parameters, dict):
+            return json_error(400, "invalid_quick_run", "parameters must be an object")
+        parameters: dict[str, str] = {}
+        for name, value in raw_parameters.items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                parameters[name] = format(value, ".12g")
+            elif isinstance(value, str):
+                parameters[name] = value.strip()
+            else:
+                return json_error(
+                    400, "invalid_quick_run", f"parameter {name} must be a number"
+                )
+        try:
+            template = decode_text(netlist_path.read_bytes())
+        except (OSError, ValueError) as exc:
+            return json_error(400, "invalid_quick_run", str(exc))
+        declared = {
+            match.casefold()
+            for match in re.findall(
+                r"^\s*\.param\s+([A-Za-z_][A-Za-z0-9_]*)", template, re.I | re.M
+            )
+        }
+        missing = sorted(
+            {
+                name
+                for name in re.findall(r"\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}", template)
+                if name.casefold() not in declared
+                and name.casefold() not in {key.casefold() for key in parameters}
+            }
+        )
+        if missing:
+            return json_error(
+                400,
+                "quick_run_unresolved",
+                "This netlist is a study template: "
+                + ", ".join(f"{{{name}}}" for name in missing)
+                + " need a value. Add "
+                + ("it" if len(missing) == 1 else "them")
+                + " as variables so Simulate once can use the nominal.",
+            )
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
         output_dir = workspace / "runs" / f"quick-{stamp}"
         try:
@@ -255,6 +300,7 @@ def create_core_router(
                 output_dir=output_dir,
                 timeout_seconds=timeout,
                 disable_compression=True,
+                parameters=parameters,
             )
         except (OSError, RuntimeError, ValueError) as exc:
             return json_error(409, "quick_run_failed", str(exc))
