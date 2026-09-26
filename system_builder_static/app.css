@@ -505,6 +505,9 @@ td:first-child { color: var(--text); font-weight: 600; }
 .history-list { display: grid; gap: 9px; margin-top: 16px; }
 .history-item { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 13px; }
 .history-item-top, .history-item-bottom { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+/* A finished run carries up to five actions; at phone width they wrap rather than widen the page. */
+.history-item-bottom { flex-wrap: wrap; gap: 8px 12px; }
+.history-item-top > div { min-width: 0; }
 .history-item strong, .history-item small { display: block; }
 .history-item small, .history-item-bottom { color: var(--muted); font-size: 11.5px; margin-top: 3px; }
 .history-item code { display: block; color: var(--subtle); font: 400 10px "IBM Plex Mono", monospace; margin-top: 8px; overflow-wrap: anywhere; }
@@ -699,3 +702,5 @@ td:first-child { color: var(--text); font-weight: 600; }
 .target-field input { min-width: 0; }
 .target-unit { color: var(--muted); font: 600 11px "IBM Plex Mono", monospace; white-space: nowrap; }
 .target-note { display: block; }
+#ltspice-path { overflow-wrap: anywhere; }
+.ltspice-settings-heading > div { min-width: 0; }
