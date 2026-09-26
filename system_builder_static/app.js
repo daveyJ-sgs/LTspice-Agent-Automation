@@ -212,12 +212,18 @@ function scaledFieldInput(baseValue, factor, path) {
   return fieldInput(displayValue(baseValue, factor), path);
 }
 
+// A plain number is in the displayed unit (2.2 with kΩ selected is 2200); a
+// SPICE-suffixed one (2.2k) already carries its scale and is taken as is.
+function scaledInputValue(text, factor) {
+  if (String(text).trim() === "") return "";
+  const plain = Number(text);
+  if (Number.isFinite(plain)) return Number((plain * factor).toPrecision(15));
+  return numericValue(String(text));
+}
+
 function setScaledRecipeField(input, object, key, factor) {
   input.addEventListener("input", () => {
-    const parsed = numericValue(input.value);
-    object[key] = typeof parsed === "number"
-      ? Number((parsed * factor).toPrecision(15))
-      : parsed;
+    object[key] = scaledInputValue(input.value, factor);
     schedulePreview();
   });
 }

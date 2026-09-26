@@ -76,14 +76,16 @@ def _requirement_measures(
 ) -> bool:
     """Whether a study requirement reports ``metric`` at ``wanted`` arguments.
 
-    An argument the requirement leaves out takes the engine default, so only
-    an explicit, different value rules it out.
+    The engine matches an argument only when the result carries it, and a
+    requirement that leaves one out (no analysis window, say) may report no
+    such key -- so a missing argument counts as not measured. A constraint is
+    then measured on its own terms; an objective is refused with its name.
     """
     if requirement.get("metric") != metric:
         return False
     for key, value in wanted.items():
         if key not in requirement:
-            continue
+            return False
         actual = requirement[key]
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             try:

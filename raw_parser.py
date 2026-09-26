@@ -25,6 +25,9 @@ class RawData:
     # The third column of each Variables line -- "voltage", "device_current",
     # "time" and so on. LTspice always writes it; a hand-made RAW may not.
     types: dict[str, str] = dataclass_field(default_factory=dict)
+    # "Transient Analysis", "AC Analysis", "Operating Point", "DC transfer
+    # characteristic" -- what kind of run wrote the file.
+    plotname: str = ""
 
     @property
     def points(self) -> int:
@@ -94,9 +97,13 @@ def parse_raw(path: Path) -> RawData:
         raise ValueError(f"Missing {prefix} header in {path}")
 
     flags = header_value("Flags")
+    plotname = next(
+        (line.split(":", 1)[1].strip() for line in lines if line.startswith("Plotname:")),
+        "",
+    )
     point_steps = (
         "stepped" in flags.lower().split()
-        and any(line.strip().casefold() == "plotname: operating point" for line in lines)
+        and plotname.casefold() == "operating point"
     )
     variable_count = int(header_value("No. Variables"))
     point_count = int(header_value("No. Points"))
@@ -159,7 +166,7 @@ def parse_raw(path: Path) -> RawData:
                 values[name].append(ascii_value(parts[-1]))
                 cursor += 1
         step_count, points_per_step = (point_count, 1) if point_steps else _step_shape(values[variables[0]])
-        return RawData(flags=flags, variables=variables, values=values, step_count=step_count, points_per_step=points_per_step, types=variable_types)
+        return RawData(flags=flags, variables=variables, values=values, step_count=step_count, points_per_step=points_per_step, types=variable_types, plotname=plotname)
 
     is_complex = "complex" in flags.lower()
     fast_access = "fastaccess" in flags.lower()
@@ -204,7 +211,7 @@ def parse_raw(path: Path) -> RawData:
         values[variables[0]] = [abs(value) for value in values[variables[0]]]
 
     step_count, points_per_step = (point_count, 1) if point_steps else _step_shape(values[variables[0]])
-    return RawData(flags=flags, variables=variables, values=values, step_count=step_count, points_per_step=points_per_step, types=variable_types)
+    return RawData(flags=flags, variables=variables, values=values, step_count=step_count, points_per_step=points_per_step, types=variable_types, plotname=plotname)
 
 
 # Rows decoded per struct.iter_unpack chunk; bounds the transient row tuples

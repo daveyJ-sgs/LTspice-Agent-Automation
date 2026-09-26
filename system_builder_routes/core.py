@@ -24,6 +24,36 @@ from system_builder_history import evidence_file, workspace_history
 from .common import Authorization, JsonBodyReader, json_error
 
 
+def _declared_parameters(netlist: str) -> set[str]:
+    """Every name a deck gives a value itself, casefolded.
+
+    Covers each assignment on a .param line (and its + continuations) and the
+    variable a .step sweeps, with or without the ``param`` keyword.
+    """
+    declared: set[str] = set()
+    logical: list[str] = []
+    for line in netlist.splitlines():
+        if line.lstrip().startswith("+") and logical:
+            logical[-1] += " " + line.lstrip()[1:]
+        else:
+            logical.append(line)
+    for line in logical:
+        stripped = line.strip()
+        if re.match(r"\.param\b", stripped, re.I):
+            declared.update(
+                name.casefold()
+                for name in re.findall(r"([A-Za-z_][A-Za-z0-9_]*)\s*=", stripped[6:])
+            )
+        step = re.match(
+            r"\.step\s+(?:(?:lin|oct|dec)\s+)?(?:param\s+)?([A-Za-z_][A-Za-z0-9_]*)",
+            stripped,
+            re.I,
+        )
+        if step:
+            declared.add(step.group(1).casefold())
+    return declared
+
+
 def create_core_router(
     *,
     workspace: Path,
@@ -268,13 +298,11 @@ def create_core_router(
             template = decode_text(netlist_path.read_bytes())
         except (OSError, ValueError) as exc:
             return json_error(400, "invalid_quick_run", str(exc))
-        declared = {
-            match.casefold()
-            for match in re.findall(
-                r"^\s*\.param\s+([A-Za-z_][A-Za-z0-9_]*)", template, re.I | re.M
-            )
-        }
-        missing = sorted(
+        declared: set[str] | None = _declared_parameters(template)
+        # An included file can declare anything; only LTspice can tell then.
+        if re.search(r"^\s*\.(?:inc|include|lib)\b", template, re.I | re.M):
+            declared = None
+        missing = [] if declared is None else sorted(
             {
                 name
                 for name in re.findall(r"\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}", template)

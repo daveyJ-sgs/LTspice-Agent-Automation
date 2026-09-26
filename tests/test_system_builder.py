@@ -153,17 +153,24 @@ class SystemBuilderTests(unittest.TestCase):
                 self.assertIn("timeout_seconds", response.json()["error"]["message"])
 
     def test_quick_run_names_template_placeholders_it_has_no_value_for(self) -> None:
-        self._open()
-        response = self.client.post(
-            "/api/netlist/run",
-            json={"netlist_path": "examples/instrumentation_amp_starter/instrumentation_amp_3opamp.cir"},
-            headers=self._headers(),
-        )
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            ltspice_wrapper, "run_netlist", side_effect=AssertionError("must not run")
+        ):
+            root = Path(tmp)
+            (root / "deck.cir").write_text(
+                "* t\n.param RA=1k\nR1 a b {RA}\nR2 b 0 {RG_VAL}\n.end\n", encoding="utf-8"
+            )
+            client = TestClient(system_builder.create_app(root, testing=True), base_url="http://testserver")
+            client.get("/")
+            response = client.post(
+                "/api/netlist/run", json={"netlist_path": "deck.cir"}, headers=self._headers()
+            )
 
         self.assertEqual(response.status_code, 400)
         error = response.json()["error"]
         self.assertEqual(error["code"], "quick_run_unresolved")
         self.assertIn("{RG_VAL}", error["message"])
+        self.assertNotIn("{RA}", error["message"])
 
     def test_quick_run_simulates_a_template_at_the_given_nominals(self) -> None:
         self._open()
@@ -196,6 +203,35 @@ class SystemBuilderTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(calls[0]["parameters"], {"R1_VAL": "1000", "C1_VAL": "1.59e-07"})
+
+    def test_declared_parameters_cover_every_param_and_step_form(self) -> None:
+        from system_builder_routes import core
+
+        deck = (
+            "* title\n.param A=1 B={A*2}\n+ C=3\n.PARAM d = 4\n"
+            ".step param E 1 3 1\n.step dec F 1 100 5\n.step G list 1 2\n"
+        )
+
+        self.assertEqual(
+            core._declared_parameters(deck), {"a", "b", "c", "d", "e", "f", "g"}
+        )
+
+    def test_quick_run_defers_to_ltspice_when_the_deck_includes_files(self) -> None:
+        self._open()
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            ltspice_wrapper, "run_netlist", side_effect=RuntimeError("no LTspice here")
+        ):
+            root = Path(tmp)
+            (root / "deck.cir").write_text(
+                "* t\n.include params.inc\nR1 a 0 {RX}\n.end\n", encoding="utf-8"
+            )
+            client = TestClient(system_builder.create_app(root, testing=True), base_url="http://testserver")
+            client.get("/")
+            response = client.post(
+                "/api/netlist/run", json={"netlist_path": "deck.cir"}, headers=self._headers()
+            )
+
+        self.assertEqual(response.json()["error"]["code"], "quick_run_failed")
 
     def test_quick_run_accepts_placeholders_the_deck_declares_itself(self) -> None:
         self._open()
@@ -562,6 +598,14 @@ class SystemBuilderTests(unittest.TestCase):
             requirements[1],
             {"metric": "ac_gain_db", "operator": "<=", "target": -20, "frequency_value": 1e7},
         )
+        # A requirement without the constraint's window does not measure it.
+        windowed = {"constraints": [
+            {"experiment": "ac", "analysis": "response", "metric": "ac_gain_db",
+             "operator": ">=", "target": -1,
+             "metric_parameters": {"frequency_value": 10, "window_start": 1e-3}},
+        ]}
+        system_builder._measure_constraints(windowed, experiments)
+        self.assertEqual(len(experiments["ac"]["waveform_analyses"][0]["requirements"]), 3)
         # The study's own analysis objects are left as they were.
         self.assertEqual(len(study_analyses[0]["requirements"]), 1)
         self.assertNotEqual(original, json.dumps(experiments, sort_keys=True))

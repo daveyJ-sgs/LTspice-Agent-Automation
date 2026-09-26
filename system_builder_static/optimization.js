@@ -109,8 +109,9 @@ function shown(value, factor) {
 }
 
 function stored(value, factor) {
-  const parsed = optNumber(value);
-  return typeof parsed === "number" ? Number((parsed * factor).toPrecision(15)) : parsed;
+  // Shared with the study editor: plain numbers are in the displayed unit,
+  // SPICE-suffixed ones (4.7k) are already absolute.
+  return scaledInputValue(value, factor);
 }
 
 function scaledInput(value, factor, label, setter) {

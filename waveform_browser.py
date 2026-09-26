@@ -131,8 +131,10 @@ def read_capture(
     axis_name = data.variables[0]
     # An operating point (.op, or a stepped .op) has no sweep: LTspice writes
     # the first node where time or frequency would be. Every vector is then a
-    # value to read, including that first one, and nothing is an axis.
-    operating_point = trace_unit(data.types.get(axis_name, "")) not in ("", "s", "Hz")
+    # value to read, including that first one, and nothing is an axis. A .dc
+    # sweep also has a voltage axis but is a real sweep, so the plot name
+    # decides, not the axis type.
+    operating_point = data.plotname.casefold() == "operating point"
     wanted = variables or [
         name for name in data.variables if operating_point or name != axis_name
     ]

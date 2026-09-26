@@ -14,12 +14,13 @@ def write_raw(
     columns: dict[str, list[float]],
     *,
     flags: str = "real forward",
+    plotname: str = "Transient Analysis",
 ) -> None:
     points = len(columns[variables[0][0]])
     header = [
         "Title: * fixture",
         "Date: Sun Sep 14 12:00:00 2026",
-        "Plotname: Transient Analysis",
+        f"Plotname: {plotname}",
         f"Flags: {flags}",
         f"No. Variables: {len(variables)}",
         f"No. Points: {points}",
@@ -225,6 +226,7 @@ class TraceUnitTests(unittest.TestCase):
             capture,
             [("V(vp)", "voltage"), ("V(out)", "voltage"), ("I(R1)", "device_current")],
             {"V(vp)": [15.0], "V(out)": [1.25], "I(R1)": [2e-3]},
+            plotname="Operating Point",
         )
 
         result = waveform_browser.read_capture(
@@ -236,6 +238,24 @@ class TraceUnitTests(unittest.TestCase):
         self.assertEqual(list(result["series"]), ["V(vp)", "V(out)", "I(R1)"])
         self.assertEqual(result["series"]["V(vp)"], [15.0])
         self.assertEqual(result["units"]["I(R1)"], "A")
+
+    def test_a_dc_sweep_is_plotted_against_its_swept_source(self) -> None:
+        capture = self.runs / "dc-run" / "point-0000" / "attempt-0000" / "c.raw"
+        write_raw(
+            capture,
+            [("v1", "voltage"), ("V(out)", "voltage")],
+            {"v1": [0.0, 1.0, 2.0], "V(out)": [0.0, 0.5, 1.0]},
+            plotname="DC transfer characteristic",
+        )
+
+        result = waveform_browser.read_capture(
+            self.runs, "dc-run/point-0000/attempt-0000/c.raw"
+        )
+
+        self.assertFalse(result["operating_point"])
+        self.assertEqual(result["axis_variable"], "v1")
+        self.assertEqual(result["axis"], [0.0, 1.0, 2.0])
+        self.assertEqual(list(result["series"]), ["V(out)"])
 
     def test_a_transient_capture_is_not_an_operating_point(self) -> None:
         capture = self.runs / "tran-run" / "point-0000" / "attempt-0000" / "c.raw"
