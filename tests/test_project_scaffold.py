@@ -148,10 +148,33 @@ class ProjectScaffoldTests(unittest.TestCase):
                 "instrumentation-amp-starter/instrumentation_amp_3opamp.asc",
             )
 
+            # The optimization + qualification starter: an .ltopt.json linking
+            # to its own .ltstudy.json, both path-confined to this one project
+            # folder so it loads the same way from any workspace.
+            daq_dir = root / "mixed-signal-daq-starter"
+            self.assertTrue((daq_dir / "mixed_signal_daq.ltopt.json").is_file())
+            self.assertTrue((daq_dir / "mixed_signal_daq.ltstudy.json").is_file())
+            self.assertTrue((daq_dir / "mixed_signal_daq_ac.cir").is_file())
+            self.assertTrue((daq_dir / "mixed_signal_daq_transient.cir").is_file())
+            daq_opt_recipe = json.loads((daq_dir / "mixed_signal_daq.ltopt.json").read_text())
+            self.assertEqual(daq_opt_recipe["kind"], "optimization")
+            self.assertEqual(
+                daq_opt_recipe["execution"]["study_recipe_path"],
+                "mixed-signal-daq-starter/mixed_signal_daq.ltstudy.json",
+            )
+            daq_study_recipe = json.loads((daq_dir / "mixed_signal_daq.ltstudy.json").read_text())
+            self.assertEqual(
+                {experiment["netlist_path"] for experiment in daq_study_recipe["experiments"]},
+                {
+                    "mixed-signal-daq-starter/mixed_signal_daq_ac.cir",
+                    "mixed-signal-daq-starter/mixed_signal_daq_transient.cir",
+                },
+            )
+
             projects = project_scaffold.list_projects(root)
             self.assertEqual(
                 {p["slug"] for p in projects},
-                {"rc-lowpass-starter", "instrumentation-amp-starter"},
+                {"rc-lowpass-starter", "instrumentation-amp-starter", "mixed-signal-daq-starter"},
             )
 
     def test_seed_starter_projects_never_overwrites_an_existing_one(self) -> None:

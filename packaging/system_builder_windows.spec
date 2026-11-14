@@ -17,6 +17,10 @@ data_files = [
         "examples/instrumentation_amp_starter",
     ),
     (
+        project_root / "examples/mixed_signal_daq_starter",
+        "examples/mixed_signal_daq_starter",
+    ),
+    (
         project_root / "docs/images/mixed-signal-daq-schematic.png",
         "docs/images",
     ),

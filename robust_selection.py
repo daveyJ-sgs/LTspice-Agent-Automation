@@ -817,17 +817,23 @@ def build_robust_selection_result(
     if selected is not None:
         selected["selected"] = True
     selected_label = None if selected is None else str(selected["label"])
+    selected_yield = None if selected is None else selected["worst_corner_yield"]
+    yield_clause = (
+        ""
+        if selected_yield is None
+        else f" Worst-corner joint yield: {selected_yield * 100:.2f}%."
+    )
     explanation = (
         "No finalist had complete paired AC and transient evidence."
         if selected is None
         else (
-            f"{selected_label} completed paired AC and transient tolerance "
-            "qualification at every named corner."
+            f"{selected_label} ran paired AC and transient tolerance "
+            f"qualification at every named corner.{yield_clause}"
         )
         if len(records) == 1
         else (
             f"{selected_label} was selected by worst named-corner joint yield; "
-            "the frozen nominal source rank resolves exact statistical ties."
+            f"the frozen nominal source rank resolves exact statistical ties.{yield_clause}"
         )
     )
     identity = {
@@ -1046,7 +1052,19 @@ def _html_document(result: dict[str, object]) -> bytes:
             + " · ".join(links)
             + "</li>"
         )
-    status = "PASS" if result["selected_finalist"] is not None else "NO SELECTION"
+    selected_record = next(
+        (f for f in result["finalists"] if f["label"] == result["selected_finalist"]),  # type: ignore[index]
+        None,
+    )
+    selected_yield = None if selected_record is None else selected_record["worst_corner_yield"]
+    if result["selected_finalist"] is None:
+        status = "NO SELECTION"
+    elif selected_yield is None:
+        status = "SELECTED (yield unavailable)"
+    elif selected_yield >= 1.0:
+        status = "PASS"
+    else:
+        status = f"SELECTED — {selected_yield * 100:.2f}% yield, not a full pass"
     schematic_path = Path(__file__).resolve().parent / "docs/images/mixed-signal-daq-schematic.png"
     schematic = ""
     if schematic_path.is_file() and not schematic_path.is_symlink():
