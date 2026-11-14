@@ -38,6 +38,7 @@ _EXAMPLES_ROOT = Path(__file__).resolve().parent / "examples"
 STARTER_PROJECTS = {
     "rc-lowpass-starter": _EXAMPLES_ROOT / "rc_lowpass_starter",
     "instrumentation-amp-starter": _EXAMPLES_ROOT / "instrumentation_amp_starter",
+    "mixed-signal-daq-starter": _EXAMPLES_ROOT / "mixed_signal_daq_starter",
 }
 
 _SLUG_DISALLOWED = re.compile(r"[^a-z0-9]+")

@@ -445,17 +445,26 @@ def create_app(
             if not candidate.is_file() and recipe_path == EXAMPLE_RECIPE.relative_to(PROJECT_ROOT).as_posix():
                 candidate = EXAMPLE_RECIPE
             if not candidate.is_relative_to(workspace) and candidate != EXAMPLE_RECIPE:
-                raise ValueError("study_recipe_path must remain inside the workspace")
+                raise ValueError(
+                    f"study_recipe_path {recipe_path!r} must remain inside the workspace"
+                )
             if candidate.is_symlink():
-                raise ValueError("study_recipe_path must remain inside the workspace")
-            execution_recipe = load_study_recipe(candidate)
-            definitions = load_recipe_experiments(
-                execution_recipe,
-                PROJECT_ROOT if candidate == EXAMPLE_RECIPE else workspace,
-            )
+                raise ValueError(
+                    f"study_recipe_path {recipe_path!r} must remain inside the workspace"
+                )
+            try:
+                execution_recipe = load_study_recipe(candidate)
+                definitions = load_recipe_experiments(
+                    execution_recipe,
+                    PROJECT_ROOT if candidate == EXAMPLE_RECIPE else workspace,
+                )
+            except (FileNotFoundError, OSError, ValueError) as exc:
+                raise ValueError(f"study_recipe_path {recipe_path!r}: {exc}") from exc
             settings = execution_recipe.get("execution", {})
             if not isinstance(settings, dict):
-                raise ValueError("study recipe execution settings are invalid")
+                raise ValueError(
+                    f"study_recipe_path {recipe_path!r}: study recipe execution settings are invalid"
+                )
         else:
             raw_definitions = execution.get("experiments")
             if not isinstance(raw_definitions, list) or not raw_definitions:

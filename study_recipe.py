@@ -57,6 +57,21 @@ def _error(path: str, code: str, message: str) -> dict[str, str]:
     return {"path": path, "code": code, "message": message}
 
 
+def _describe_preview_errors(preview: dict[str, object]) -> str:
+    """Render a preview's own errors so callers don't collapse them to a
+    single generic message -- a caller several frames away from the actual
+    bad field (e.g. an optimization recipe loading its linked study) still
+    needs to know *which* path and *why*."""
+    errors = preview.get("errors")
+    if not isinstance(errors, list) or not errors:
+        return "study recipe is not valid"
+    return "study recipe is not valid: " + "; ".join(
+        f"{item.get('path')}: {item.get('message')}"
+        for item in errors
+        if isinstance(item, dict)
+    )
+
+
 _canonical_json = artifacts.canonical_json
 
 
@@ -607,7 +622,7 @@ def publish_study_recipe_plan(
     """Revalidate and publish exactly the plan identified by Preview."""
     preview = preview_study_recipe(recipe, workspace_root)
     if not preview.get("valid"):
-        raise ValueError("study recipe is not valid")
+        raise ValueError(_describe_preview_errors(preview))
     preview_recipe = preview["recipe"]
     preview_plan = preview["plan"]
     assert isinstance(preview_recipe, dict)
@@ -644,7 +659,7 @@ def load_recipe_experiments(
     """Return validated experiment definitions with confined netlist text."""
     preview = preview_study_recipe(recipe, workspace_root)
     if not preview.get("valid"):
-        raise ValueError("study recipe is not valid")
+        raise ValueError(_describe_preview_errors(preview))
     assert isinstance(recipe, dict)
     experiments = recipe["experiments"]
     assert isinstance(experiments, list)

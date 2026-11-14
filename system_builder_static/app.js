@@ -4102,7 +4102,7 @@ function renderProjects(projects) {
           confirmTimer = window.setTimeout(() => {
             deleteButton.classList.remove("confirming");
             deleteButton.textContent = "Delete";
-          }, 4000);
+          }, 6000);
           return;
         }
         window.clearTimeout(confirmTimer);
